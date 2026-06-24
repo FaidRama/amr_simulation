@@ -1,0 +1,13 @@
+scan_to_scan_filter_chain:
+  ros__parameters:
+    filter1:
+      name: filter_sasis_robot
+      type: laser_filters/LaserScanBoxFilter
+      params:
+        box_frame: 'base_link'  # Menggunakan pusat robot sebagai acuan potong
+        min_x: -0.30            # Jarak aman ke belakang hidung robot
+        max_x:  0.30            # Jarak aman ke depan
+        min_y: -0.30            # Jarak aman ke kanan
+        max_y:  0.30            # Jarak aman ke kiri
+        min_z: -0.50            # Batas bawah tanah
+        max_z:  0.50            # Batas atas kepala robot

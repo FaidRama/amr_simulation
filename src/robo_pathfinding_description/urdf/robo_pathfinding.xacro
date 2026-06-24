@@ -1,0 +1,154 @@
+<?xml version="1.0" ?>
+<robot name="robo_pathfinding" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+<xacro:include filename="$(find robo_pathfinding_description)/urdf/materials.xacro" />
+<xacro:include filename="$(find robo_pathfinding_description)/urdf/robo_pathfinding.trans" />
+<xacro:include filename="$(find robo_pathfinding_description)/urdf/robo_pathfinding.gazebo" />
+<link name="base_link">
+  <inertial>
+    <origin xyz="-0.0005904137171287146 -0.0006363364236436363 0.22494517974525913" rpy="0 0 0"/>
+    <mass value="25.930757364368493"/>
+    <inertia ixx="0.789752" iyy="0.815434" izz="0.778285" ixy="-0.000676" iyz="-0.000152" ixz="0.000874"/>
+  </inertial>
+  <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find robo_pathfinding_description)/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find robo_pathfinding_description)/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="right_wheel_1">
+  <inertial>
+    <origin xyz="-4.109503543101717e-08 0.015434569471468346 8.025839944719726e-08" rpy="0 0 0"/>
+    <mass value="0.7587807360410279"/>
+    <inertia ixx="0.000471" iyy="0.000848" izz="0.000471" ixy="0.0" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.0004 -0.219143 -0.051401" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find robo_pathfinding_description)/meshes/right_wheel_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.0 0.0 0.0" rpy="1.5708 0 0"/>
+    <geometry>
+      <cylinder radius="0.04569" length="0.03"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="left_wheel_1">
+  <inertial>
+    <origin xyz="-7.524557149030502e-08 -0.015434238679753465 1.147094458864295e-07" rpy="0 0 0"/>
+    <mass value="0.7587807360410276"/>
+    <inertia ixx="0.000471" iyy="0.000848" izz="0.000471" ixy="-0.0" iyz="-0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.0 0.221897 -0.051401" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find robo_pathfinding_description)/meshes/left_wheel_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.0 0.0 0.0" rpy="1.5708 0 0"/>
+    <geometry>
+      <cylinder radius="0.04569" length="0.03"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="lidar_link_1">
+  <inertial>
+    <origin xyz="0.16987271446092378 -0.4603471678818125 0.13623639119487277" rpy="0 0 0"/>
+    <mass value="0.14165595417779858"/>
+    <inertia ixx="5.7e-05" iyy="8.9e-05" izz="0.000109" ixy="-0.0" iyz="1e-06" ixz="-1.2e-05"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.1775 -0.454404 -0.154404" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find robo_pathfinding_description)/meshes/lidar_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.1775 -0.454404 -0.154404" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find robo_pathfinding_description)/meshes/lidar_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+
+<link name="camera_link_1">
+  <inertial>
+    <origin xyz="0.006690808947223986 2.5957552714385825e-06 -0.007259521551848169" rpy="0 0 0"/>
+    <mass value="0.013740723692193035"/>
+    <inertia ixx="1e-06" iyy="1e-06" izz="1e-06" ixy="-0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.2 0.000387 -0.352791" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find robo_pathfinding_description)/meshes/camera_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.2 0.000387 -0.352791" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find robo_pathfinding_description)/meshes/camera_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="laser_frame"/>
+
+<joint name="laser_joint" type="fixed">
+  <parent link="lidar_link_1"/>
+  <child link="laser_frame"/>
+  <origin xyz="0.1775 -0.454404 0.15" rpy="0 0 0"/>
+</joint>
+
+<joint name="Revolute 8" type="continuous">
+  <origin xyz="-0.0004 0.219143 0.051401" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="right_wheel_1"/>
+  <axis xyz="-0.0 1.0 0.0"/>
+</joint>
+
+<joint name="Revolute 9" type="continuous">
+  <origin xyz="0.0 -0.221897 0.051401" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="left_wheel_1"/>
+  <axis xyz="0.0 1.0 -0.0"/>
+</joint>
+
+<joint name="Rigid 10" type="fixed">
+  <origin xyz="-0.1775 0.454404 0.154404" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="lidar_link_1"/>
+</joint>
+
+<joint name="Rigid 11" type="fixed">
+  <origin xyz="0.2 -0.000387 0.352791" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="camera_link_1"/>
+</joint>
+
+<link name="camera_optical_frame"/>
+
+<joint name="camera_optical_joint" type="fixed">
+  <parent link="camera_link_1"/>
+  <child link="camera_optical_frame"/>
+  <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708"/> </joint>
+
+</robot>
