@@ -17,9 +17,9 @@ def generate_launch_description():
     
     # 1. Tentukan alamat rumah hasil curian
     rumah_world_path = os.path.join(
-        get_package_share_directory('turtlebot3_gazebo'),
+        pkg_amr_simulation,
         'worlds',
-        'turtlebot3_house.world'
+        'peta_dc.world'
     )
 
     # Parser XACRO ke URDF otomatis

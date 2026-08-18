@@ -1,0 +1,89 @@
+ Ah, saya paham sekarang! Sepertinya kamu menggunakan WSL (Windows Subsystem for Linux) atau Ubuntu versi Server/Headless yang tidak    
+  menginstall Web Browser (seperti Chrome/Firefox) di dalamnya.                                                                          
+                                                                                                                                         
+  Dan mengenai localhost:9090, tebakanmu logis, tapi fungsinya sedikit berbeda. Biar saya luruskan arsitekturnya:                        
+                                                                                                                                         
+  1. rosbridge_server (Port 9090): Ini BUKAN web server untuk membuka halaman web (HTML/CSS). Ini khusus jalur komunikasi WebSocket      
+  (jalan tak terlihat) tempat jalannya data robot. Makanya pas kamu buka di browser muncul tulisan "Can 'Upgrade' only to WebSocket".    
+  2. Aplikasi Dashboard (HTML/JS): File-file HTML/CSS yang tadi kita buat butuh "Web Server" sendiri supaya bisa dibuka.                 
+                                                                                                                                         
+  Karena kamu membuka ini dari komputer/laptop Windows-mu (host), kita akan menggunakan Python bawaan Linux untuk menyalakan Web Server  
+  sementaranya.                                                                                                                          
+                                                                                                                                         
+  ### Cara Menjalankan yang Benar:                                                                                                       
+                                                                                                                                         
+  Ikuti langkah ini berurutan (butuh 3 terminal yang berbeda):                                                                           
+                                                                                                                                         
+  Terminal 1: Jalankan Robot Simulasi                                                                                                    
+                                                                                                                                         
+    cd ~/amr_ws                                                                                                                          
+    source install/setup.bash                                                                                                            
+    ros2 launch amr_simulation bringup.launch.py nav:=True                                                                               
+                                                                                                                                         
+  Terminal 2: Jalankan ROS Bridge (Port 9090)                                                                                            
+                                                                                                                                         
+    source /opt/ros/humble/setup.bash
+    ros2 launch rosbridge_server rosbridge_websocket_launch.xml
+  
+  Terminal 3: Jalankan Web Server untuk Dashboard (Port 8000)
+  Di terminal ini, kita akan membuat server lokal supaya file HTML bisa diakses oleh Windows-mu.
+  
+    cd ~/amr_ws/dashboard
+    python3 -m http.server 8000
+    ──────
+  ### Cara Membuka di Layar / Touchscreen:
+  
+  1. Buka browser (Chrome, Edge, Firefox, dll) di Windows-mu (bukan di Linux/WSL).
+  2. Ketikkan alamat ini di address bar browser:
+  👉 http://localhost:8000
+  3. Aplikasi Web Dashboard-nya akan terbuka secara instan!
+  
+  Info Ekstra:
+  Kalau kamu mau membukanya di layar HP atau Tablet touchscreen (yang terkoneksi ke WiFi yang sama dengan laptopmu), kamu tinggal        
+  mengganti tulisan localhost dengan IP Laptopmu.
+  Misalnya IP laptopmu 192.168.1.10, maka di HP tinggal buka browser lalu ketik: http://192.168.1.10:8000.
+  
+  Coba buka http://localhost:8000 di Windows kamu sekarang, seharusnya tampilannya akan terlihat sangat modern! Beritahu saya kalau
+  koneksi lampu hijaunya berhasil menyala.
+
+
+
+
+"Cheat Sheet" (Catatan Ringkas) langkah-langkah yang harus selalu dilakukan dari awal sampai peta muncul:
+### Tahap 1: Colok & Lempar USB (Di Windows)                                                                                           
+                                                                                                                                         
+  Setiap kali Lidar baru dicolok ke laptop, Windows akan menangkapnya duluan. Kamu harus lempar lagi ke Linux.                           
+                                                                                                                                         
+  1. Colokkan kabel Lidar.                                                                                                               
+  2. Buka PowerShell (Admin).                                                                                                            
+  3. Cek Lidar-nya nyangkut di BUSID nomor berapa (kalau colok di port USB yang sama, biasanya angkanya sama, misal 2-4):                
+    usbipd list                                                                                                                          
+                                                                                                                                         
+  4. Lempar ke WSL:                                                                                                                      
+    usbipd attach --wsl --busid <ANGKA_BUSID_KAMU>                                                                                       
+                                                                                                                                         
+                                                                                                                                         
+  ### Tahap 2: Siapkan Lidar di Linux (Di Ubuntu/WSL)                                                                                    
+                                                                                                                                         
+  Setelah dilempar dari Windows, masuk ke terminal Ubuntu.                                                                               
+                                                                                                                                         
+  1. Pastikan driver USB Linux-nya bangun (masukkan password Ubuntu jika diminta):                                                       
+    sudo modprobe cp210x                                                                                                                 
+                                                                                                                                         
+  2. Berikan izin akses (ini wajib dilakukan tiap kali Lidar dicolok ulang):                                                             
+    sudo chmod 666 /dev/ttyUSB0                                                                                                          
+                                                                                                                                         
+                                                                                                                                         
+  ### Tahap 3: Mulai Mapping! (Di Ubuntu/WSL)                                                                                            
+                                                                                                                                         
+  1. Buka workspace kamu:                                                                                                                
+    cd ~/amr_ws                                                                                                                          
+    source install/setup.bash                                                                                                            
+                                                                                                                                         
+  2. Nyalakan sistemnya:                                                                                                                 
+    ros2 launch amr_simulation real_mapping.launch.py                                                                                    
+                                                                                                                                         
+                                                                                                                                         
+  Selesai!                                                                                                                               
+  Supaya tidak lupa, kamu bisa copy atau screenshot urutan di atas. Ini adalah makanan sehari-hari bagi para roboticist yang menggunakan 
+  kombinasi ROS 2 dan WSL!                                             

@@ -11,7 +11,7 @@ def generate_launch_description():
     pkg_nav2 = get_package_share_directory('nav2_bringup')
 
     # 2. Tunjuk lokasi sertifikat rumah, otak parameter, dan config rviz
-    map_file = os.path.join(pkg_amr, 'maps', 'peta_rumah.yaml')
+    map_file = os.path.join(pkg_amr, 'maps', 'peta_dc.yaml')
     params_file = os.path.join(pkg_amr, 'config', 'nav2_params.yaml')
     rviz_config_dir = os.path.join(pkg_amr, 'rviz', 'slam_config.rviz')
 

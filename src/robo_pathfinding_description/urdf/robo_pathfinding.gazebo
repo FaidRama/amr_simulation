@@ -18,7 +18,7 @@
     <sensor type="camera" name="human_awareness_camera">
       <always_on>1</always_on>
       <update_rate>10.0</update_rate>
-      <visualize>true</visualize>
+      <visualize>false</visualize>
       <pose>0.2 -0.000387 0.352791 0 0 0</pose> 
       <camera name="head">
         <horizontal_fov>1.3962634</horizontal_fov>
@@ -52,19 +52,22 @@
 
 <gazebo reference="right_wheel_1">
   <material>${body_color}</material>
-  <mu1>200.0</mu1>
-  <mu2>200.0</mu2>
-  <kp>1000000.0</kp>
-  <kd>100.0</kd>
+  <!-- DEGRADED FRICTION AND STIFFNESS -->
+  <mu1>0.8</mu1>          <!-- Forward friction -->
+  <mu2>0.5</mu2>          <!-- Lateral friction (allows slight drifting/slip) -->
+  <kp>100000.0</kp>       <!-- Reduced contact stiffness (squish) -->
+  <kd>100.0</kd>          <!-- Contact damping -->
+  <minDepth>0.001</minDepth> <!-- Adds micro-compliance before force is applied -->
   <self_collide>false</self_collide>
 </gazebo>
 
 <gazebo reference="left_wheel_1">
   <material>${body_color}</material>
-  <mu1>200.0</mu1>
-  <mu2>200.0</mu2>
-  <kp>1000000.0</kp>
+  <mu1>0.8</mu1>
+  <mu2>0.5</mu2>
+  <kp>100000.0</kp>
   <kd>100.0</kd>
+  <minDepth>0.001</minDepth>
   <self_collide>false</self_collide>
 </gazebo>
 
@@ -102,7 +105,7 @@
       <noise>
         <type>gaussian</type>
         <mean>0.0</mean>
-        <stddev>0.01</stddev>
+        <stddev>0.015</stddev>
       </noise>
       </ray>
     
@@ -140,8 +143,8 @@
     <wheel_separation>0.45</wheel_separation>
     <wheel_diameter>0.15</wheel_diameter>
 
-    <max_wheel_torque>100</max_wheel_torque>
-    <max_wheel_acceleration>1.0</max_wheel_acceleration>
+    <max_wheel_torque>25</max_wheel_torque>
+    <max_wheel_acceleration>2.0</max_wheel_acceleration>
 
     <publish_odom>true</publish_odom>
     <publish_odom_tf>true</publish_odom_tf>
