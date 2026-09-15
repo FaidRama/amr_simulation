@@ -1,0 +1,147 @@
+<?xml version="1.0" ?>
+<robot name="Delivery_AMR" xmlns:xacro="http://www.ros.org/wiki/xacro" >
+
+<xacro:property name="body_color" value="Gazebo/Silver" />
+
+
+
+<gazebo reference="base_link">
+  <material>${body_color}</material>
+  <mu1>0.2</mu1>
+  <mu2>0.2</mu2>
+  <self_collide>true</self_collide>
+  <gravity>true</gravity>
+</gazebo>
+
+<gazebo reference="camera_link_1">
+  <material>${body_color}</material>
+  <mu1>0.2</mu1>
+  <mu2>0.2</mu2>
+  <self_collide>true</self_collide>
+</gazebo>
+
+<gazebo reference="lidar_link_1">
+  <material>${body_color}</material>
+  <mu1>0.2</mu1>
+  <mu2>0.2</mu2>
+  <self_collide>true</self_collide>
+</gazebo>
+
+<gazebo reference="front_caster_1">
+  <material>${body_color}</material>
+  <mu1>0.0</mu1>
+  <mu2>0.0</mu2>
+  <self_collide>true</self_collide>
+</gazebo>
+
+<gazebo reference="back_caster_1">
+  <material>${body_color}</material>
+  <mu1>0.0</mu1>
+  <mu2>0.0</mu2>
+  <self_collide>true</self_collide>
+</gazebo>
+
+<gazebo reference="right_wheel_1">
+  <material>${body_color}</material>
+  <mu1>1.5</mu1>
+  <mu2>1.5</mu2>
+  <kp>10000000.0</kp>
+  <kd>100.0</kd>
+  <self_collide>true</self_collide>
+</gazebo>
+
+<gazebo reference="left_wheel_1">
+  <material>${body_color}</material>
+  <mu1>1.5</mu1>
+  <mu2>1.5</mu2>
+  <kp>10000000.0</kp>
+  <kd>100.0</kd>
+  <self_collide>true</self_collide>
+</gazebo>
+
+<gazebo reference="base_footprint">
+  <turnGravityOff>false</turnGravityOff>
+</gazebo>
+<!-- 1. PLUGIN PENGGERAK RODA (DIFF DRIVE) -->
+<gazebo>
+  <plugin name="diff_drive" filename="libgazebo_ros_diff_drive.so">
+    <ros>
+      <namespace>/</namespace>
+      <remapping>cmd_vel:=cmd_vel</remapping>
+      <remapping>odom:=odom</remapping>
+    </ros>
+    <left_joint>Revolute 6</left_joint>
+    <right_joint>Revolute 5</right_joint>
+    <wheel_separation>0.442</wheel_separation>
+    <wheel_diameter>0.133</wheel_diameter>
+    <max_wheel_torque>20</max_wheel_torque>
+    <max_wheel_acceleration>5.0</max_wheel_acceleration>
+    <publish_odom>true</publish_odom>
+    <publish_odom_tf>true</publish_odom_tf>
+    <publish_wheel_tf>true</publish_wheel_tf>
+    <odometry_frame>odom</odometry_frame>
+    <robot_base_frame>base_footprint</robot_base_frame>
+  </plugin>
+</gazebo>
+<!-- 2. PLUGIN SENSOR LIDAR -->
+<gazebo reference="laser_frame">
+  <sensor name="lidar" type="ray">
+    <always_on>true</always_on>
+    <visualize>true</visualize>
+    <update_rate>10</update_rate>
+    <ray>
+      <scan>
+        <horizontal>
+          <samples>360</samples>
+          <resolution>1.000000</resolution>
+          <min_angle>0.000000</min_angle>
+          <max_angle>6.28319</max_angle>
+        </horizontal>
+      </scan>
+      <range>
+        <min>0.150000</min>
+        <max>12.0</max>
+        <resolution>0.015000</resolution>
+      </range>
+    </ray>
+    <plugin name="scan" filename="libgazebo_ros_ray_sensor.so">
+      <ros>
+        <remapping>~/out:=scan</remapping>
+        <qos>
+          <topic name="scan">
+            <publisher>
+              <reliability>reliable</reliability>
+            </publisher>
+          </topic>
+        </qos>
+      </ros>
+      <output_type>sensor_msgs/LaserScan</output_type>
+      <frame_name>laser_frame</frame_name>
+    </plugin>
+  </sensor>
+</gazebo>
+<!-- 3. PLUGIN KAMERA -->
+<gazebo reference="camera_sensor_link">
+  <sensor name="camera_sensor" type="camera">
+    <pose>0 0 0 0 0 0</pose>
+    <visualize>true</visualize>
+    <update_rate>30.0</update_rate>
+    <camera>
+      <horizontal_fov>1.089</horizontal_fov>
+      <image>
+        <format>R8G8B8</format>
+        <width>640</width>
+        <height>480</height>
+      </image>
+      <clip>
+        <near>0.05</near>
+        <far>8.0</far>
+      </clip>
+    </camera>
+    <plugin name="camera_controller" filename="libgazebo_ros_camera.so">
+      <frame_name>camera_sensor_link</frame_name>
+    </plugin>
+  </sensor>
+</gazebo>
+
+</robot>

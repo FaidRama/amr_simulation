@@ -1,0 +1,215 @@
+<?xml version="1.0" ?>
+<robot name="Delivery_AMR" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+<xacro:include filename="$(find Delivery_AMR_description)/urdf/materials.xacro" />
+<xacro:include filename="$(find Delivery_AMR_description)/urdf/Delivery_AMR.trans" />
+<xacro:include filename="$(find Delivery_AMR_description)/urdf/Delivery_AMR.gazebo" />
+<link name="base_link">
+  <inertial>
+    <origin xyz="-0.01967676726979135 -0.023422975229163562 0.2794094009670926" rpy="0 0 0"/>
+    <mass value="59.4671496370775"/>
+    <inertia ixx="1.679844" iyy="1.618843" izz="1.519819" ixy="-0.007156" iyz="0.011635" ixz="0.216532"/>
+  </inertial>
+  <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find Delivery_AMR_description)/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find Delivery_AMR_description)/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="camera_link_1">
+  <inertial>
+    <origin xyz="-0.20794283408158887 -0.030465835663023765 0.04146279121032548" rpy="0 0 0"/>
+    <mass value="0.26884092997159614"/>
+    <inertia ixx="0.000177" iyy="0.000142" izz="0.000134" ixy="-0.0" iyz="-1e-06" ixz="-3.7e-05"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.39202 -0.005512 -0.320726" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find Delivery_AMR_description)/meshes/camera_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.39202 -0.005512 -0.320726" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find Delivery_AMR_description)/meshes/camera_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="lidar_link_1">
+  <inertial>
+    <origin xyz="-0.2104852567763647 -0.031154604330996167 0.05897555333368376" rpy="0 0 0"/>
+    <mass value="0.14165595417779858"/>
+    <inertia ixx="5.7e-05" iyy="8.9e-05" izz="0.000109" ixy="-0.0" iyz="1e-06" ixz="-1.2e-05"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.19702 -0.005512 -0.241228" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find Delivery_AMR_description)/meshes/lidar_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.19702 -0.005512 -0.241228" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find Delivery_AMR_description)/meshes/lidar_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="front_caster_1">
+  <inertial>
+    <origin xyz="-0.03431123491915483 -2.6655464068631174e-07 -0.040385915763490744" rpy="0 0 0"/>
+    <mass value="1.8260560500786551"/>
+    <inertia ixx="0.001686" iyy="0.002418" izz="0.00198" ixy="-0.0" iyz="-0.0" ixz="-0.000772"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.186662 0.025086 -0.093573" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find Delivery_AMR_description)/meshes/front_caster_1.stl" scale="0.001 0.001   0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.0 0.0 -0.06" rpy="0 0 0"/>
+    <geometry>
+      <sphere radius="0.025086"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="back_caster_1">
+  <inertial>
+    <origin xyz="-0.03431123491913532 -2.665545824689919e-07 -0.040385915763494075" rpy="0 0 0"/>
+    <mass value="1.8260560500786551"/>
+    <inertia ixx="0.001686" iyy="0.002418" izz="0.00198" ixy="-0.0" iyz="-0.0" ixz="-0.000772"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.193338 0.025086 -0.093573" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find Delivery_AMR_description)/meshes/back_caster_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.0 0.0 -0.06" rpy="0 0 0"/>
+    <geometry>
+      <sphere radius="0.025086"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="right_wheel_1">
+  <inertial>
+    <origin xyz="2.8762713827866493e-08 -0.020637769984045623 3.171167901466765e-07" rpy="0 0 0"/>
+    <mass value="2.6215076298549613"/>
+    <inertia ixx="0.002857" iyy="0.005366" izz="0.002857" ixy="-0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.003338 0.246086 -0.071354" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find Delivery_AMR_description)/meshes/right_wheel_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.003338 0.246086 -0.071354" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find Delivery_AMR_description)/meshes/right_wheel_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="left_wheel_1">
+  <inertial>
+    <origin xyz="2.876271333173558e-08 0.020637230015948055 3.1711657630384416e-07" rpy="0 0 0"/>
+    <mass value="2.6215076298549613"/>
+    <inertia ixx="0.002857" iyy="0.005366" izz="0.002857" ixy="-0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.003338 -0.195914 -0.071354" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find Delivery_AMR_description)/meshes/left_wheel_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.003338 -0.195914 -0.071354" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file://$(find Delivery_AMR_description)/meshes/left_wheel_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<joint name="Rigid 1" type="fixed">
+  <origin xyz="0.39202 0.005512 0.320726" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="camera_link_1"/>
+</joint>
+
+<joint name="Rigid 2" type="fixed">
+  <origin xyz="0.19702 0.005512 0.241228" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="lidar_link_1"/>
+</joint>
+
+<joint name="Rigid 3" type="fixed">
+  <origin xyz="0.186662 -0.025086 0.093573" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="front_caster_1"/>
+</joint>
+
+<joint name="Rigid 4" type="fixed">
+  <origin xyz="-0.193338 -0.025086 0.093573" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="back_caster_1"/>
+</joint>
+
+<joint name="Revolute 5" type="continuous">
+  <origin xyz="-0.003338 -0.246086 0.071354" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="right_wheel_1"/>
+  <axis xyz="0.0 -1.0 0.0"/>
+</joint>
+
+<joint name="Revolute 6" type="continuous">
+  <origin xyz="-0.003338 0.195914 0.071354" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="left_wheel_1"/>
+  <axis xyz="0.0 -1.0 0.0"/>
+</joint>
+
+<!-- BASE FOOTPRINT (Agar robot tidak tenggelam di lantai Gazebo) -->
+<link name="base_footprint"/>
+<joint name="base_footprint_joint" type="fixed">
+  <origin xyz="0 0 0" rpy="0 0 0" />
+  <parent link="base_footprint" />
+  <child link="base_link" />
+</joint>
+<!-- DUMMY LINK KAMERA -->
+<link name="camera_sensor_link"/>
+<joint name="camera_sensor_joint" type="fixed">
+  <!-- Ubah Pitch di sini jika ingin layarnya mendongak seperti sebelumnya -->
+  <origin xyz="-0.18202 -0.029126 0.056738861534351113" rpy="0 0 0"/> 
+  <parent link="camera_link_1"/>
+  <child link="camera_sensor_link"/>
+</joint>
+<!-- DUMMY LINK LIDAR -->
+<link name="laser_frame"/>
+<joint name="laser_joint" type="fixed">
+  <origin xyz="-0.19702 -0.02412 0.0661241" rpy="0 0 0"/> 
+  <parent link="lidar_link_1"/>
+  <child link="laser_frame"/>
+</joint>
+
+</robot>
