@@ -7,8 +7,8 @@ from launch_ros.actions import Node
 from launch.substitutions import Command
 
 def generate_launch_description():
-    pkg_name = 'robo_pathfinding_description'
-    xacro_file = 'robo_pathfinding.xacro'
+    pkg_name = 'Delivery_AMR_description'
+    xacro_file = 'Delivery_AMR.xacro'
     xacro_path = os.path.join(get_package_share_directory(pkg_name), 'urdf', xacro_file)
 
     # 1. Cari lokasi folder package amr_simulation milikmu yang sudah di-build
@@ -29,7 +29,7 @@ def generate_launch_description():
         package='robot_state_publisher',
         executable='robot_state_publisher',
         output='screen',
-        parameters=[{'robot_description': robot_desc}]
+        parameters=[{'robot_description': robot_desc, 'use_sim_time': True}]
     )
 
     pkg_gazebo_ros = get_package_share_directory('gazebo_ros')
@@ -54,7 +54,7 @@ def generate_launch_description():
     spawn_entity = Node(
         package='gazebo_ros',
         executable='spawn_entity.py',
-        arguments=['-topic', 'robot_description', '-entity', 'robo_pathfinding',
+        arguments=['-topic', 'robot_description', '-entity', 'Delivery_AMR',
                    '-z', '0.5',
                    '-R', '0.0',
                    '-P', '0.0',
