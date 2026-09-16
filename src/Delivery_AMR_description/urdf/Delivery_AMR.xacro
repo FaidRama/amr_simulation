@@ -179,14 +179,14 @@
   <origin xyz="-0.003338 -0.246086 0.071354" rpy="0 0 0"/>
   <parent link="base_link"/>
   <child link="right_wheel_1"/>
-  <axis xyz="0.0 -1.0 0.0"/>
+  <axis xyz="0.0 1.0 0.0"/>
 </joint>
 
 <joint name="Revolute 6" type="continuous">
   <origin xyz="-0.003338 0.195914 0.071354" rpy="0 0 0"/>
   <parent link="base_link"/>
   <child link="left_wheel_1"/>
-  <axis xyz="0.0 -1.0 0.0"/>
+  <axis xyz="0.0 1.0 0.0"/>
 </joint>
 
 <!-- BASE FOOTPRINT (Agar robot tidak tenggelam di lantai Gazebo) -->
