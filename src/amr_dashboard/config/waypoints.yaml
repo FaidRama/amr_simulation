@@ -1,71 +1,50 @@
-# ============================================================
-# KONFIGURASI TITIK-TITIK PREDEFINED AMR DELIVERY
-# Titik-titik ini muncul sebagai pilihan cepat di dashboard
-# Koordinat (x, y) sesuai dengan frame 'map' di ROS2
-# ============================================================
-
-# Posisi home/standby AMR
 home_position:
   x: 0.0
   y: 0.0
   yaw: 0.0
-
-# Titik-titik predefined untuk pickup harian
-# Sesuaikan koordinat dengan peta warehouse kamu
 predefined_points:
-  # === AREA PICKUP (Rak Penyimpanan) ===
-  - name: "Rak A1"
-    x: 2.0
-    y: 1.5
-    type: "pickup"
-    description: "Rak penyimpanan area A baris 1"
-
-  - name: "Rak A2"
-    x: 4.0
-    y: 1.5
-    type: "pickup"
-    description: "Rak penyimpanan area A baris 2"
-
-  - name: "Rak B1"
-    x: 2.0
-    y: -1.5
-    type: "pickup"
-    description: "Rak penyimpanan area B baris 1"
-
-  - name: "Rak B2"
-    x: 4.0
-    y: -1.5
-    type: "pickup"
-    description: "Rak penyimpanan area B baris 2"
-
-  # === AREA DELIVERY (Tujuan) ===
-  - name: "Meja Packing"
-    x: 7.0
-    y: 0.0
-    type: "delivery"
-    description: "Area packing barang"
-
-  - name: "Area Loading"
-    x: 8.0
-    y: 2.0
-    type: "delivery"
-    description: "Area loading ke kendaraan"
-
-  - name: "Meja QC"
-    x: 6.0
-    y: -2.0
-    type: "delivery"
-    description: "Meja Quality Control"
-
-  - name: "Pintu Keluar"
-    x: 9.0
-    y: 0.0
-    type: "delivery"
-    description: "Pintu keluar gudang"
-
-# Pengaturan default
+- description: Rak penyimpanan area A baris 1
+  name: Rak A1
+  type: pickup
+  x: 2.0
+  y: 1.5
+- description: Rak penyimpanan area A baris 2
+  name: Rak A2
+  type: pickup
+  x: 4.0
+  y: 1.5
+- description: Rak penyimpanan area B baris 1
+  name: Rak B1
+  type: pickup
+  x: 2.0
+  y: -1.5
+- description: Rak penyimpanan area B baris 2
+  name: Rak B2
+  type: pickup
+  x: 4.0
+  y: -1.5
+- description: Area packing barang
+  name: Meja Packing
+  type: delivery
+  x: 7.0
+  y: 0.0
+- description: Area loading ke kendaraan
+  name: Area Loading
+  type: delivery
+  x: 8.0
+  y: 2.0
+- description: Meja Quality Control
+  name: Meja QC
+  type: delivery
+  x: 6.0
+  y: -2.0
+- description: Pintu keluar gudang
+  name: Pintu Keluar
+  type: delivery
+  x: 9.0
+  y: 0.0
 settings:
-  max_linear_speed: 0.7    # m/s (sesuai nav2_params max_vel_x)
-  max_angular_speed: 0.9   # rad/s (sesuai nav2_params max_vel_theta)
-  waypoint_pause_duration: 3  # detik tunggu di setiap waypoint
-  auto_return_home: true   # otomatis kembali ke home setelah semua task selesai
+  auto_return_home: true
+  max_angular_speed: 0.9
+  max_linear_speed: 0.9
+  waypoint_pause_duration: 3

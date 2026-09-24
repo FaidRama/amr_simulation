@@ -169,7 +169,11 @@ function initJoystick() {
         draw();
     }
 
-    function sendVelocity() {
+    let lastSentLinear = null;
+    let lastSentAngular = null;
+    let lastSentTime = 0;
+
+    function sendVelocity(force = false) {
         const normalX = (knobX - center) / maxRadius;
         const normalY = (center - knobY) / maxRadius;
 
@@ -178,6 +182,16 @@ function initJoystick() {
 
         const linear = Math.round(normalY * maxLinear * 100) / 100;
         const angular = Math.round(-normalX * maxAngular * 100) / 100;
+
+        const now = Date.now();
+        // Jangan kirim request HTTP berulang jika nilai velocity sama, kecuali force=true atau sudah 250ms
+        if (!force && linear === lastSentLinear && angular === lastSentAngular && (now - lastSentTime < 250)) {
+            return;
+        }
+
+        lastSentLinear = linear;
+        lastSentAngular = angular;
+        lastSentTime = now;
 
         apiPost('/api/cmd_vel', { linear, angular });
     }
@@ -188,9 +202,9 @@ function initJoystick() {
         const pos = getRelativePos(e);
         updateKnob(pos.x, pos.y);
 
-        // Start sending velocity at 10Hz
         if (joystickSendTimer) clearInterval(joystickSendTimer);
-        joystickSendTimer = setInterval(sendVelocity, 100);
+        sendVelocity(true);
+        joystickSendTimer = setInterval(() => sendVelocity(false), 120);
     }
 
     function moveTouch(e) {
@@ -212,8 +226,11 @@ function initJoystick() {
             joystickSendTimer = null;
         }
 
-        // Send zero velocity
-        apiPost('/api/cmd_vel', { linear: 0, angular: 0 });
+        // Send zero velocity immediately
+        sendVelocity(true);
+
+        lastSentLinear = 0;
+        lastSentAngular = 0;
 
         const velLinEl = document.getElementById('vel-linear');
         const velAngEl = document.getElementById('vel-angular');

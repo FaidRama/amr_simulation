@@ -204,6 +204,7 @@ class DashboardNode(Node):
         # === CAMERA SUBSCRIBER ===
         if HAS_CAMERA:
             self.bridge = CvBridge()
+            self.last_cam_time = 0
             self.cam_sub = self.create_subscription(
                 Image, '/camera/image_raw', self.on_camera, 10)
             self.cam_sub_sensor = self.create_subscription(
@@ -249,15 +250,19 @@ class DashboardNode(Node):
     
     def on_camera(self, msg):
         """Callback kamera — convert ke JPEG untuk streaming."""
+        now = time.time()
+        if now - self.last_cam_time < 0.03:  # Throttle ~30 FPS
+            return
+        self.last_cam_time = now
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-            # Resize untuk performa (max 640px lebar)
+            # Resize untuk performa tinggi (max 480px lebar)
             h, w = frame.shape[:2]
-            if w > 640:
-                scale = 640.0 / w
-                frame = cv2.resize(frame, (640, int(h * scale)))
-            # Encode ke JPEG
-            _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if w > 480:
+                scale = 480.0 / w
+                frame = cv2.resize(frame, (480, int(h * scale)))
+            # Encode ke JPEG (quality 60 untuk bandwidth ringan & 30 FPS mulus)
+            _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
             with self.lock:
                 self.latest_frame = jpeg.tobytes()
         except Exception as e:
@@ -399,7 +404,7 @@ def api_delivery_control():
     data = request.get_json()
     command = data.get('command', '')
     
-    if command not in ('cancel', 'pause', 'resume', 'skip'):
+    if command not in ('cancel', 'pause', 'resume', 'skip', 'confirm_pickup', 'confirm_delivery'):
         return jsonify({'error': f'Perintah tidak valid: {command}'}), 400
     
     ros_node.send_control(command)
@@ -570,7 +575,7 @@ def api_camera_stream():
                 placeholder = get_placeholder_frame()
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + placeholder + b'\r\n')
-            time.sleep(0.066)  # ~15 FPS
+            time.sleep(0.033)  # ~30 FPS mulus
     
     return Response(generate(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')

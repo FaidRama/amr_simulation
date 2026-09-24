@@ -484,16 +484,81 @@ function updateMissionUI() {
         progress.style.width = `${pct}%`;
 
         const phaseLabels = {
-            navigating_pickup: 'Menuju pickup',
-            at_pickup: 'Mengambil barang',
-            navigating_delivery: 'Mengantar barang',
-            at_delivery: 'Menyerahkan barang',
-            idle: 'Selesai'
+            navigating_pickup: '🚗 Menuju titik pickup...',
+            at_pickup: '📍 Tiba di pickup',
+            waiting_pickup: '📦 Menunggu barang dimuat',
+            navigating_delivery: '🚗 Mengantar barang...',
+            at_delivery: '📍 Tiba di delivery',
+            waiting_delivery: '📬 Menunggu barang diambil',
+            idle: '✅ Selesai'
         };
         progressText.textContent = `Task ${(d.current_task_index || 0) + 1}/${d.total_tasks} — ${phaseLabels[d.current_phase] || d.current_phase}`;
     }
 
+    // === TOMBOL KONFIRMASI ===
+    let confirmSection = document.getElementById('confirm-action-section');
+    const isWaiting = d.current_phase === 'waiting_pickup' || d.current_phase === 'waiting_delivery';
+
+    if (isWaiting && d.status === 'running') {
+        if (!confirmSection) {
+            // Buat section konfirmasi
+            confirmSection = document.createElement('div');
+            confirmSection.id = 'confirm-action-section';
+            confirmSection.className = 'page-section';
+            // Cari tempat untuk insert — setelah mission-control-section
+            const missionCtrl = document.getElementById('mission-control-section');
+            if (missionCtrl && missionCtrl.parentElement) {
+                missionCtrl.parentElement.insertBefore(confirmSection, missionCtrl.nextSibling);
+            }
+        }
+
+        if (d.current_phase === 'waiting_pickup') {
+            const taskIdx = d.current_task_index || 0;
+            const taskInfo = d.tasks && d.tasks[taskIdx] ? d.tasks[taskIdx] : null;
+            const pickupName = taskInfo ? taskInfo.pickup.name : 'Pickup';
+            confirmSection.innerHTML = `
+                <div class="confirm-card confirm-pickup">
+                    <div class="confirm-icon">📦</div>
+                    <div class="confirm-title">Tiba di ${pickupName}</div>
+                    <div class="confirm-desc">Robot sudah sampai di titik pickup. Tekan tombol di bawah setelah barang dimuat ke robot.</div>
+                    <button class="btn btn-confirm btn-confirm-pickup" onclick="confirmAction('confirm_pickup')">
+                        ✓ Barang Sudah Dimuat
+                    </button>
+                </div>
+            `;
+        } else {
+            const taskIdx = d.current_task_index || 0;
+            const taskInfo = d.tasks && d.tasks[taskIdx] ? d.tasks[taskIdx] : null;
+            const deliveryName = taskInfo ? taskInfo.delivery.name : 'Delivery';
+            confirmSection.innerHTML = `
+                <div class="confirm-card confirm-delivery">
+                    <div class="confirm-icon">📬</div>
+                    <div class="confirm-title">Tiba di ${deliveryName}</div>
+                    <div class="confirm-desc">Robot sudah sampai di titik delivery. Tekan tombol di bawah setelah barang diambil.</div>
+                    <button class="btn btn-confirm btn-confirm-delivery" onclick="confirmAction('confirm_delivery')">
+                        ✓ Barang Sudah Diambil
+                    </button>
+                </div>
+            `;
+        }
+    } else if (confirmSection) {
+        confirmSection.remove();
+    }
+
     updateMissionControlVisibility();
+}
+
+async function confirmAction(command) {
+    const result = await apiPost('/api/delivery/control', { command });
+    if (result && result.success) {
+        const label = command === 'confirm_pickup' ? 'Pickup dikonfirmasi! Robot lanjut mengantar.' : 'Delivery dikonfirmasi! Task selesai.';
+        showToast(label, 'success');
+        // Hapus section konfirmasi
+        const sec = document.getElementById('confirm-action-section');
+        if (sec) sec.remove();
+    } else {
+        showToast('Gagal mengirim konfirmasi', 'error');
+    }
 }
 
 function startDeliveryPolling() {
@@ -721,11 +786,16 @@ function renderJoystick() {
 
     div.innerHTML = `
         <div class="page-section">
-            <div class="section-title">Kamera</div>
-            <div class="camera-frame" style="max-height:180px; overflow:hidden;">
-                <img src="/api/camera/stream" alt="Kamera"
-                     style="width:100%; object-fit:cover;"
-                     onerror="this.parentElement.innerHTML='<div class=\\'flex-center\\' style=\\'height:120px;color:var(--text-muted);font-size:0.8rem;\\'>📷 Kamera offline</div>'">
+            <div class="section-title">Kamera Feed</div>
+            <div class="camera-frame">
+                <img src="/api/camera/stream" alt="Kamera AMR"
+                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                <div class="camera-overlay">
+                    <div class="camera-badge"><span class="rec-dot"></span>LIVE</div>
+                </div>
+                <div class="flex-center" style="display:none; min-height:160px; color:var(--text-muted); font-size:0.8rem; flex-direction:column; gap:6px;">
+                    <span style="font-size:1.5rem;">📷</span> Kamera tidak tersedia
+                </div>
             </div>
         </div>
 

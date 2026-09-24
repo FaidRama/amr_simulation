@@ -46,6 +46,7 @@ class WaypointManager(Node):
         self.mission = None          # Misi aktif saat ini
         self.is_paused = False       # Flag pause
         self.is_cancelled = False    # Flag cancel
+        self.confirm_received = False  # Flag konfirmasi pickup/delivery
         self.current_goal_handle = None
         self.mission_lock = threading.Lock()
         
@@ -77,13 +78,14 @@ class WaypointManager(Node):
                 'tasks': tasks,
                 'status': 'running',
                 'current_task_index': 0,
-                'current_phase': 'idle',  # idle, navigating_pickup, at_pickup, navigating_delivery, at_delivery
+                'current_phase': 'idle',  # idle, navigating_pickup, at_pickup, waiting_pickup, navigating_delivery, at_delivery, waiting_delivery
                 'start_time': time.time(),
                 'completed_tasks': 0,
                 'total_tasks': len(tasks)
             }
             self.is_paused = False
             self.is_cancelled = False
+            self.confirm_received = False
             
             self.get_logger().info(f'MISI BARU DITERIMA: {len(tasks)} task')
             for i, t in enumerate(tasks):
@@ -99,13 +101,14 @@ class WaypointManager(Node):
             self.get_logger().error(f'JSON decode error: {e}')
     
     def on_control_received(self, msg):
-        """Menerima perintah kontrol: cancel, pause, resume."""
+        """Menerima perintah kontrol: cancel, pause, resume, skip, confirm_pickup, confirm_delivery."""
         command = msg.data.strip().lower()
         
         if command == 'cancel':
             self.get_logger().info('PERINTAH CANCEL DITERIMA')
             self.is_cancelled = True
             self.is_paused = False
+            self.confirm_received = True  # Lepaskan wait loop juga
             if self.current_goal_handle:
                 self.current_goal_handle.cancel_goal_async()
             self.emergency_stop()
@@ -123,8 +126,17 @@ class WaypointManager(Node):
             
         elif command == 'skip':
             self.get_logger().info('PERINTAH SKIP TASK DITERIMA')
+            self.confirm_received = True  # Lepaskan wait loop
             if self.current_goal_handle:
                 self.current_goal_handle.cancel_goal_async()
+        
+        elif command == 'confirm_pickup':
+            self.get_logger().info('✓ KONFIRMASI PICKUP: Barang sudah dimuat!')
+            self.confirm_received = True
+        
+        elif command == 'confirm_delivery':
+            self.get_logger().info('✓ KONFIRMASI DELIVERY: Barang sudah diambil!')
+            self.confirm_received = True
     
     def emergency_stop(self):
         """Kirim cmd_vel zero untuk stop AMR."""
@@ -176,11 +188,21 @@ class WaypointManager(Node):
                 task['status'] = 'failed'
                 continue
             
-            # Sampai di pickup — tunggu sebentar (simulasi pengambilan barang)
-            self.mission['current_phase'] = 'at_pickup'
+            # Sampai di pickup — tunggu konfirmasi dari operator
+            self.mission['current_phase'] = 'waiting_pickup'
+            self.confirm_received = False
             self.get_logger().info(
-                f'SAMPAI di pickup [{pickup["name"]}]. Menunggu pengambilan barang...')
-            time.sleep(3.0)  # Pause 3 detik di titik pickup
+                f'SAMPAI di pickup [{pickup["name"]}]. '
+                f'Menunggu konfirmasi dari operator (tombol di dashboard)...')
+            
+            # Tunggu operator tekan tombol "Barang Sudah Dimuat"
+            while not self.confirm_received and not self.is_cancelled:
+                time.sleep(0.3)
+            
+            if self.is_cancelled:
+                break
+            
+            self.get_logger().info(f'Konfirmasi diterima! Lanjut mengantar ke [{delivery["name"]}]')
             
             # Tunggu jika di-pause
             while self.is_paused and not self.is_cancelled:
@@ -206,11 +228,21 @@ class WaypointManager(Node):
                 task['status'] = 'failed'
                 continue
             
-            # Sampai di delivery — tunggu sebentar (simulasi penyerahan barang)
-            self.mission['current_phase'] = 'at_delivery'
+            # Sampai di delivery — tunggu konfirmasi dari operator
+            self.mission['current_phase'] = 'waiting_delivery'
+            self.confirm_received = False
             self.get_logger().info(
-                f'SAMPAI di delivery [{delivery["name"]}]. Menyerahkan barang...')
-            time.sleep(3.0)
+                f'SAMPAI di delivery [{delivery["name"]}]. '
+                f'Menunggu konfirmasi dari operator (tombol di dashboard)...')
+            
+            # Tunggu operator tekan tombol "Barang Sudah Diambil"
+            while not self.confirm_received and not self.is_cancelled:
+                time.sleep(0.3)
+            
+            if self.is_cancelled:
+                break
+            
+            self.get_logger().info(f'Konfirmasi delivery diterima!')
             
             task['status'] = 'completed'
             self.mission['completed_tasks'] = i + 1
