@@ -1,0 +1,122 @@
+# =============================================================================
+# FILE KONFIGURASI PARAMETER KHUSUS UJI COBA GLOBAL PLANNER (A*)
+# Robot: Delivery_AMR
+# ROS 2 Distribution: Foxy / Humble
+# =============================================================================
+# File ini dikhususkan agar kamu bisa bereksperimen dengan parameter A*
+# dan Global Costmap tanpa terganggu oleh pergerakan fisik robot (controller).
+# =============================================================================
+
+map_server:
+  ros__parameters:
+    use_sim_time: False
+    yaml_filename: ""
+
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 20.0
+    use_sim_time: False
+    planner_plugins: ["GridBased"]
+
+    # -------------------------------------------------------------------------
+    # 1. PLUGIN PLANNER UTAMA (NavfnPlanner - Algoritma A* & Dijkstra)
+    # -------------------------------------------------------------------------
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+
+      # [PARAMETER 1: ALGORITMA]
+      # true  : Menggunakan Algoritma A* (Heuristic Euclidean). Pencarian terarah ke goal,
+      #         jauh lebih cepat dan hemat komputasi.
+      # false : Menggunakan Algoritma Dijkstra. Mengeksplorasi seluruh grid secara merata
+      #         (bisa dicoba untuk membandingkan kecepatan waktu komputasi A* vs Dijkstra).
+      use_astar: true
+
+      # [PARAMETER 2: TOLERANSI GOAL (meter)]
+      # Toleransi jarak maksimum dari titik goal yang dipilih.
+      # Jika titik goal yang kamu klik di RViz berada tepat di dalam tembok/rintangan,
+      # planner akan mencari titik bebas terdekat dalam radius toleransi ini.
+      # Semakin besar nilainya, planner semakin fleksibel menemukan titik pengganti.
+      tolerance: 0.5
+
+      # [PARAMETER 3: PENELUSURAN AREA TIDAK DIKETAHUI]
+      # true  : Mengizinkan A* membuat jalur melewati area abu-abu (unknown space).
+      # false : A* HANYA boleh lewat area putih (free space yang sudah pasti aman).
+      allow_unknown: true
+
+    # -------------------------------------------------------------------------
+    # ALTERNATIF: SmacPlanner2D (A* Modern dengan Cost Penalty & Path Smoothing)
+    # Jika suatu saat ingin membandingkan Navfn dengan SmacPlanner2D,
+    # ganti baris plugin di atas menjadi:
+    #   plugin: "smac_planner/SmacPlanner2D"
+    #   tolerance: 0.5
+    #   allow_unknown: true
+    #   cost_penalty: 2.0             # Bobot penalti untuk area dekat rintangan
+    #   smooth_path: true             # Otomatis menghaluskan belokan rute A*
+    #   motion_model_for_search: "MOORE" # 8-connected grid (bisa diagonal 8 arah)
+    # -------------------------------------------------------------------------
+
+planner_server_rclcpp_node:
+  ros__parameters:
+    use_sim_time: False
+
+# =============================================================================
+# GLOBAL COSTMAP
+# Costmap adalah representasi biaya rintangan yang digunakan A* untuk mencari
+# rute optimal. Parameter di bawah ini SANGAT menentukan bentuk rute A*.
+# =============================================================================
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: map
+      robot_base_frame: base_footprint
+      use_sim_time: False
+
+      # [PARAMETER 4: UKURAN FISIK ROBOT (meter)]
+      # Jari-jari lingkaran pengaman robot Delivery_AMR.
+      # Titik yang berada dalam jarak ini dari rintangan akan dianggap TERLARANG (Lethal Obstacle).
+      robot_radius: 0.28
+      resolution: 0.05
+      track_unknown_space: true
+
+      # Layer yang aktif pada global costmap saat uji coba A*
+      plugins: ["static_layer", "inflation_layer"]
+
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+
+      # -----------------------------------------------------------------------
+      # LAYER INFLASI (Sangat Berpengaruh pada Jalur A*)
+      # -----------------------------------------------------------------------
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+
+        # [PARAMETER 5: RADIUS INFLASI (meter)]
+        # Seberapa jauh efek bayangan rintangan menyebar keluar dari dinding.
+        # Harus lebih besar dari robot_radius.
+        # - Jika terlalu kecil: A* akan lewat sangat dekat dengan ujung sudut/tembok.
+        # - Jika terlalu besar: A* mungkin tidak bisa lewat lorong sempit karena costnya tinggi.
+        inflation_radius: 0.55
+
+        # [PARAMETER 6: COST SCALING FACTOR]
+        # Menentukan seberapa cepat penurunan biaya rintangan dari dinding ke tengah ruangan.
+        # Rumus Nav2: cost = exp(-cost_scaling_factor * (jarak - robot_radius))
+        # - Nilai TINGGI (misal 10.0 s/d 15.0):
+        #   Biaya turun sangat cepat. Area aman di tengah menjadi seragam murah.
+        #   A* akan memilih rute terpendek lurus, bahkan jika agak dekat ke dinding.
+        # - Nilai RENDAH (misal 2.0 s/d 4.0):
+        #   Biaya di sekitar dinding tetap terasa sampai jauh.
+        #   A* akan "takut" pada rintangan dan selalu berusaha berada di tengah-tengah lorong/ruangan.
+        cost_scaling_factor: 10.0
+
+      always_send_full_costmap: True
+
+  global_costmap_client:
+    ros__parameters:
+      use_sim_time: False
+
+  global_costmap_rclcpp_node:
+    ros__parameters:
+      use_sim_time: False
