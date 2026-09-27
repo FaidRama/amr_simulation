@@ -107,7 +107,7 @@ function navigateTo(page) {
         backBtn.classList.remove('hidden');
         const titles = {
             delivery: 'Kontrol Delivery',
-            monitoring: 'Monitoring',
+            monitoring: 'Pusat Pemantauan',
             camera: 'View Kamera',
             history: 'Riwayat Delivery',
             joystick: 'Manual Control',
@@ -115,6 +115,14 @@ function navigateTo(page) {
         };
         titleEl.textContent = titles[page] || page;
     }
+
+    // Update active state in sidebar and mobile nav
+    document.querySelectorAll('#app-sidebar .nav-item').forEach(item => {
+        item.classList.toggle('active', item.dataset.page === page);
+    });
+    document.querySelectorAll('#mobile-nav .mobile-nav-item').forEach(item => {
+        item.classList.toggle('active', item.dataset.page === page);
+    });
 
     // Stop previous polling
     if (APP.statusPollTimer) {
@@ -815,66 +823,259 @@ window.dismissArrivalModal = dismissArrivalModal;
 window.hideArrivalModal = hideArrivalModal;
 window.handleDeliveryStatusUpdate = handleDeliveryStatusUpdate;
 
-// ====================== PAGE: MONITORING ======================
+// ====================== PAGE: MONITORING (COCKPIT) ======================
 function renderMonitoring() {
     const div = document.createElement('div');
     div.className = 'page-enter';
 
     div.innerHTML = `
-        <div class="page-section">
-            <div class="section-title">Peta Real-time</div>
-            <div class="map-container" id="monitor-map-container">
-                <canvas id="monitor-map-canvas"></canvas>
-                <div class="map-legend">
-                    <span class="legend-robot">Robot</span>
-                </div>
+        <div class="cockpit-header">
+            <div>
+                <h1 class="cockpit-header-title">Pusat Pemantauan Sistem</h1>
+                <p class="cockpit-header-subtitle">Monitoring visual, telemetri kecepatan, dan misi AMR secara real-time</p>
+            </div>
+            <div style="display:flex; align-items:center; gap:10px;">
+                <span class="status-badge" id="cockpit-status-badge">STANDBY</span>
             </div>
         </div>
 
-        <div class="page-section">
-            <div class="section-title">Status AMR</div>
-            <div class="text-center mb-12">
-                <span class="status-badge" id="mon-status-badge">IDLE</span>
-            </div>
-            <div class="progress-bar mb-8">
-                <div class="progress-fill" id="mon-progress" style="width:0%"></div>
-            </div>
-            <p class="text-center text-muted" style="font-size:0.72rem;" id="mon-progress-text"></p>
-        </div>
+        <div class="cockpit-grid">
+            <!-- LEFT COLUMN: VIEWPORT & LOWER ROW -->
+            <div style="display:flex; flex-direction:column; gap:18px;">
+                <!-- Card 1: Visual Monitoring (Hero Widget) -->
+                <div class="cockpit-card viewport-card">
+                    <div class="cockpit-card-header">
+                        <div class="cockpit-card-title">
+                            ${getIcon('camera', 18)} Visual Pemantauan
+                        </div>
+                        <div class="viewport-tabs">
+                            <button class="viewport-tab-btn active" data-mode="camera" onclick="switchViewportMode('camera')">
+                                ${getIcon('camera', 14)} Kamera Live
+                            </button>
+                            <button class="viewport-tab-btn" data-mode="map" onclick="switchViewportMode('map')">
+                                ${getIcon('map', 14)} Peta 2D
+                            </button>
+                            <button class="viewport-tab-btn" data-mode="dual" onclick="switchViewportMode('dual')">
+                                ${getIcon('layers', 14)} Dual Split
+                            </button>
+                        </div>
+                    </div>
 
-        <div class="page-section">
-            <div class="section-title">Data Sensor</div>
-            <div class="monitor-grid">
-                <div class="monitor-card">
-                    <div class="mon-label">Posisi X</div>
-                    <div class="mon-value mon-accent" id="mon-x">0.000</div>
+                    <!-- Viewport Container -->
+                    <div class="viewport-display" id="cockpit-viewport">
+                        <!-- View 1: Camera Live -->
+                        <div class="viewport-view active" id="view-camera">
+                            <img id="cockpit-cam-img" class="cockpit-cam-img" src="/api/camera/stream" alt="Live Kamera"
+                                 onerror="this.style.display='none'; document.getElementById('cockpit-cam-offline').style.display='flex';">
+                            <div id="cockpit-cam-offline" class="flex-center" style="display:none; width:100%; height:100%; color:var(--text-muted); font-size:0.85rem; flex-direction:column; gap:8px;">
+                                ${getIcon('camera', 36)}
+                                Kamera tidak tersedia
+                            </div>
+                            <div class="viewport-hud">
+                                <div class="viewport-hud-left">
+                                    <span class="hud-badge hud-badge-rec"><span class="rec-dot"></span>LIVE</span>
+                                    <span class="hud-badge hud-badge-human" id="hud-human-badge">AI: Aman</span>
+                                </div>
+                            </div>
+                            <div class="viewport-tools">
+                                <button class="tool-btn" onclick="captureScreenshot()" title="Ambil Screenshot">${getIcon('camera', 16)}</button>
+                            </div>
+                        </div>
+
+                        <!-- View 2: 2D Map -->
+                        <div class="viewport-view" id="view-map">
+                            <div class="map-container" style="width:100%; height:100%; position:relative;">
+                                <canvas id="monitor-map-canvas"></canvas>
+                                <div class="map-legend">
+                                    <span class="legend-robot">Robot</span>
+                                </div>
+                            </div>
+                            <div class="viewport-tools">
+                                <button class="tool-btn" onclick="resetMapCenter()" title="Pusatkan ke Robot">${getIcon('navigation', 16)}</button>
+                            </div>
+                        </div>
+
+                        <!-- View 3: Dual Split (Kamera + Map side by side) -->
+                        <div class="viewport-split" id="view-split">
+                            <div class="viewport-split-pane">
+                                <img id="split-cam-img" class="cockpit-cam-img" src="/api/camera/stream" alt="Live Kamera">
+                                <div class="viewport-hud">
+                                    <span class="hud-badge hud-badge-rec"><span class="rec-dot"></span>LIVE</span>
+                                </div>
+                            </div>
+                            <div class="viewport-split-pane">
+                                <div class="map-container" style="width:100%; height:100%; position:relative;">
+                                    <canvas id="split-map-canvas"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <div class="monitor-card">
-                    <div class="mon-label">Posisi Y</div>
-                    <div class="mon-value mon-accent" id="mon-y">0.000</div>
+
+                <!-- Lower Row: Telemetry Chart & Quick Dispatch -->
+                <div class="cockpit-lower-grid">
+                    <!-- Card 3: Telemetri Kecepatan -->
+                    <div class="cockpit-card">
+                        <div class="cockpit-card-header">
+                            <div class="cockpit-card-title">
+                                ${getIcon('activity', 18)} Grafik Kecepatan
+                            </div>
+                            <span style="font-size:0.68rem; color:var(--text-muted);">Real-time</span>
+                        </div>
+                        <div class="telemetry-chart-container">
+                            <canvas id="speed-history-canvas"></canvas>
+                        </div>
+                        <div class="telemetry-meta">
+                            <div>Rata-rata: <b id="tele-avg-speed">0.00 m/s</b></div>
+                            <div>Odometer: <b id="tele-odometer">0.0 m</b></div>
+                            <div>Misi: <b id="tele-elapsed">0s</b></div>
+                        </div>
+                    </div>
+
+                    <!-- Card 4: Quick Dispatch Titik Meja -->
+                    <div class="cockpit-card">
+                        <div class="cockpit-card-header">
+                            <div class="cockpit-card-title">
+                                ${getIcon('delivery_point', 18)} Quick Dispatch Meja
+                            </div>
+                            <span style="font-size:0.68rem; color:var(--accent);">1-Click Target</span>
+                        </div>
+                        <div class="quick-dispatch-grid" id="cockpit-dispatch-grid">
+                            <!-- Di-render oleh JavaScript -->
+                        </div>
+                    </div>
                 </div>
-                <div class="monitor-card">
-                    <div class="mon-label">Orientasi</div>
-                    <div class="mon-value mon-warning" id="mon-yaw">0.0°</div>
+            </div>
+
+            <!-- RIGHT COLUMN: SPEEDOMETER, MISSION STATUS, SAFETY -->
+            <div style="display:flex; flex-direction:column; gap:18px;">
+                <!-- Card 2: Kecepatan & Pose Robot (Menggantikan Temperature) -->
+                <div class="cockpit-card gauge-card">
+                    <div class="cockpit-card-header" style="width:100%;">
+                        <div class="cockpit-card-title">
+                            ${getIcon('gauge', 18)} Kecepatan & Pose
+                        </div>
+                        <span style="font-size:0.68rem; color:var(--text-muted);" id="speed-limit-tag">Maks 0.5 m/s</span>
+                    </div>
+
+                    <!-- Speedometer Arc Gauge -->
+                    <div class="speed-gauge-wrap">
+                        <svg class="speed-gauge-svg" viewBox="0 0 220 140">
+                            <defs>
+                                <linearGradient id="cockpit-gauge-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                                    <stop offset="0%" stop-color="#00d4ff"/>
+                                    <stop offset="65%" stop-color="#00ff88"/>
+                                    <stop offset="100%" stop-color="#ffaa00"/>
+                                </linearGradient>
+                            </defs>
+                            <path d="M 25 115 A 85 85 0 0 1 195 115" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="12" stroke-linecap="round"/>
+                            <path id="cockpit-gauge-path" d="M 25 115 A 85 85 0 0 1 195 115" fill="none" stroke="url(#cockpit-gauge-grad)" stroke-width="12" stroke-linecap="round"
+                                  stroke-dasharray="267" stroke-dashoffset="267" style="transition: stroke-dashoffset 0.25s ease;"/>
+                        </svg>
+                        <div class="gauge-readout">
+                            <div class="gauge-val" id="cockpit-speed-val">0.00</div>
+                            <div class="gauge-subtext">Kecepatan Linear (m/s)</div>
+                            <div class="angular-pill" id="cockpit-angular-val">
+                                ${getIcon('gauge', 12)} 0.00 rad/s
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Coordinates Grid -->
+                    <div class="cockpit-pose-grid">
+                        <div class="pose-cell">
+                            <div class="pose-cell-label">Posisi X</div>
+                            <div class="pose-cell-val pose-cell-accent" id="mon-x">0.000</div>
+                        </div>
+                        <div class="pose-cell">
+                            <div class="pose-cell-label">Posisi Y</div>
+                            <div class="pose-cell-val pose-cell-accent" id="mon-y">0.000</div>
+                        </div>
+                        <div class="pose-cell">
+                            <div class="pose-cell-label">Orientasi</div>
+                            <div class="pose-cell-val pose-cell-warning" id="mon-yaw">0.0°</div>
+                        </div>
+                    </div>
+
+                    <!-- Distance status -->
+                    <div class="distance-bar">
+                        <div class="dist-item">Ke Target: <span id="mon-dist-target">—</span></div>
+                        <div class="dist-item">Ke Home: <span id="mon-dist-home">—</span></div>
+                    </div>
                 </div>
-                <div class="monitor-card">
-                    <div class="mon-label">Human Status</div>
-                    <div class="mon-value mon-success" id="mon-human">—</div>
+
+                <!-- Card 5: Misi Aktif & Kontrol Cepat -->
+                <div class="cockpit-card">
+                    <div class="cockpit-card-header">
+                        <div class="cockpit-card-title">
+                            ${getIcon('delivery', 18)} Misi Pengiriman
+                        </div>
+                        <span class="status-badge" id="cockpit-mission-badge">IDLE</span>
+                    </div>
+                    <div class="mission-mini-card">
+                        <div class="mission-phase-badge" id="cockpit-phase-badge">
+                            <span>Fase Saat Ini:</span>
+                            <b id="cockpit-phase-text">Standby</b>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="cockpit-progress-fill" style="width:0%"></div>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; font-size:0.7rem; color:var(--text-muted);">
+                            <span id="cockpit-task-counter">Antrean: 0 Task</span>
+                            <span id="cockpit-target-info">—</span>
+                        </div>
+
+                        <!-- Tombol Konfirmasi Kedatangan Cepat di Cockpit -->
+                        <div id="cockpit-confirm-btn-wrap" class="hidden" style="margin-top:6px;">
+                            <button id="cockpit-confirm-btn" class="btn btn-confirm btn-block" onclick="onCockpitConfirmArrival()">
+                                ${getIcon('check', 18)} Konfirmasi Kedatangan
+                            </button>
+                        </div>
+
+                        <!-- Quick Mission Controls -->
+                        <div class="cockpit-ctrl-row">
+                            <button class="btn btn-warning" onclick="controlMission('pause')">${getIcon('pause', 14)} Pause</button>
+                            <button class="btn btn-primary" onclick="controlMission('resume')">${getIcon('play', 14)} Resume</button>
+                            <button class="btn btn-danger" onclick="controlMission('cancel')">${getIcon('x', 14)} Batal</button>
+                        </div>
+                    </div>
                 </div>
-                <div class="monitor-card">
-                    <div class="mon-label">Fase</div>
-                    <div class="mon-value" id="mon-phase" style="font-size:0.8rem; color:var(--text-primary);">Idle</div>
-                </div>
-                <div class="monitor-card">
-                    <div class="mon-label">Waktu Misi</div>
-                    <div class="mon-value mon-accent" id="mon-elapsed">0s</div>
+
+                <!-- Card 6: Sistem Keamanan & AI Vision -->
+                <div class="cockpit-card">
+                    <div class="cockpit-card-header">
+                        <div class="cockpit-card-title">
+                            ${getIcon('shield', 18)} Keamanan & Sensor
+                        </div>
+                        <span style="font-size:0.68rem; color:var(--success);">Proteksi Aktif</span>
+                    </div>
+                    <div class="nodes-grid">
+                        <div class="node-item">
+                            <span class="node-name">AI Vision</span>
+                            <span class="node-status" id="cockpit-human-status" style="color:var(--success);">Aman</span>
+                        </div>
+                        <div class="node-item">
+                            <span class="node-name">Sensor LiDAR</span>
+                            <span class="node-status node-status-ok" id="cockpit-lidar-status">Aman</span>
+                        </div>
+                        <div class="node-item">
+                            <span class="node-name">Nav2 Stack</span>
+                            <span class="node-status node-status-ok">Active</span>
+                        </div>
+                        <div class="node-item">
+                            <span class="node-name">E-Stop System</span>
+                            <span class="node-status" style="color:var(--accent);">Ready</span>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     `;
 
     setTimeout(() => {
-        initMonitorMap();
+        if (typeof initCockpit === 'function') {
+            initCockpit();
+        }
         startMonitoringPolling();
     }, 50);
 
@@ -1341,8 +1542,56 @@ async function globalStatusPoll() {
     }
 }
 
+// ====================== NAV ICONS & LIVE CLOCK ======================
+function populateNavIcons() {
+    if (typeof getIcon !== 'function') return;
+
+    // Sidebar icons
+    const sidebarMap = {
+        's-icon-home': 'home',
+        's-icon-monitoring': 'activity',
+        's-icon-delivery': 'package',
+        's-icon-camera': 'video',
+        's-icon-history': 'clock',
+        's-icon-joystick': 'compass',
+        's-icon-settings': 'settings'
+    };
+    Object.entries(sidebarMap).forEach(([id, icon]) => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = getIcon(icon, 20);
+    });
+
+    // Mobile nav icons
+    const mobileMap = {
+        'm-icon-home': 'home',
+        'm-icon-monitoring': 'activity',
+        'm-icon-delivery': 'package',
+        'm-icon-camera': 'video',
+        'm-icon-joystick': 'compass'
+    };
+    Object.entries(mobileMap).forEach(([id, icon]) => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = getIcon(icon, 20);
+    });
+}
+
+function startLiveClock() {
+    const clockEl = document.getElementById('live-clock');
+    if (!clockEl) return;
+    const update = () => {
+        const now = new Date();
+        clockEl.textContent = now.toTimeString().split(' ')[0];
+    };
+    update();
+    setInterval(update, 1000);
+}
+
 // ====================== INIT ======================
 async function init() {
+    // Populate navigation icons and start real-time header clock
+    populateNavIcons();
+    startLiveClock();
+
     // Load saved points
     const pointsData = await apiGet('/api/saved_points');
     if (pointsData) {

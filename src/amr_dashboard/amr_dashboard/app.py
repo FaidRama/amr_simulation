@@ -23,7 +23,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
-from nav_msgs.msg import OccupancyGrid
+from nav_msgs.msg import OccupancyGrid, Odometry
 import numpy as np
 
 from flask import Flask, render_template, jsonify, request, Response, send_file
@@ -177,6 +177,7 @@ class DashboardNode(Node):
         self.human_status = 'NO_HUMAN'
         self.latest_frame = None  # JPEG bytes terakhir dari kamera
         self.cmd_vel_current = {'linear': 0.0, 'angular': 0.0}
+        self.odom_speed = {'linear': 0.0, 'angular': 0.0}
         self.last_status_time = 0.0  # Waktu terakhir status diterima
         self._history_saved_ids = set()  # Track misi yang sudah disimpan ke history
         
@@ -195,6 +196,12 @@ class DashboardNode(Node):
         # Status human awareness
         self.human_sub = self.create_subscription(
             String, '/human_status', self.on_human_status, 10)
+
+        # Monitor kecepatan cmd_vel & odometry
+        self.cmd_vel_listen_sub = self.create_subscription(
+            Twist, '/cmd_vel', self.on_cmd_vel_listen, 10)
+        self.odom_sub = self.create_subscription(
+            Odometry, '/odom', self.on_odom, 10)
         
         # === PUBLISHERS ===
         # Task delivery ke waypoint_manager
@@ -232,6 +239,24 @@ class DashboardNode(Node):
                 'x': round(p.position.x, 3),
                 'y': round(p.position.y, 3),
                 'yaw': round(yaw, 3)
+            }
+
+    def on_cmd_vel_listen(self, msg):
+        """Callback monitor kecepatan perintah robot."""
+        with self.lock:
+            self.cmd_vel_current = {
+                'linear': round(msg.linear.x, 3),
+                'angular': round(msg.angular.z, 3)
+            }
+
+    def on_odom(self, msg):
+        """Callback monitor kecepatan aktual odometry robot."""
+        with self.lock:
+            lin = math.hypot(msg.twist.twist.linear.x, msg.twist.twist.linear.y)
+            ang = msg.twist.twist.angular.z
+            self.odom_speed = {
+                'linear': round(lin, 3),
+                'angular': round(ang, 3)
             }
     
     def on_delivery_status(self, msg):
@@ -363,11 +388,17 @@ def api_status():
         return jsonify({'error': 'ROS2 belum terhubung'}), 503
     
     with ros_node.lock:
+        odom = getattr(ros_node, 'odom_speed', {'linear': 0.0, 'angular': 0.0})
+        cmd = ros_node.cmd_vel_current
+        # Gunakan odom jika aktif bergerak, jika tidak gunakan cmd_vel
+        active_speed = odom if (abs(odom.get('linear', 0.0)) > 0.001 or abs(odom.get('angular', 0.0)) > 0.001) else cmd
         return jsonify({
             'pose': ros_node.robot_pose,
             'delivery': ros_node.delivery_status,
             'human_status': ros_node.human_status,
-            'cmd_vel': ros_node.cmd_vel_current,
+            'cmd_vel': cmd,
+            'odom_vel': odom,
+            'speed': active_speed,
             'connected': True,
             'timestamp': time.time()
         })

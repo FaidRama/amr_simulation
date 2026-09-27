@@ -3,46 +3,11 @@ home_position:
   y: 0.0
   yaw: 0.0
 predefined_points:
-- description: Rak penyimpanan area A baris 1
-  name: Rak A1
+- description: ''
+  name: Rak 1A
   type: pickup
-  x: 2.0
-  y: 1.5
-- description: Rak penyimpanan area A baris 2
-  name: Rak A2
-  type: pickup
-  x: 4.0
-  y: 1.5
-- description: Rak penyimpanan area B baris 1
-  name: Rak B1
-  type: pickup
-  x: 2.0
-  y: -1.5
-- description: Rak penyimpanan area B baris 2
-  name: Rak B2
-  type: pickup
-  x: 4.0
-  y: -1.5
-- description: Area packing barang
-  name: Meja Packing
-  type: delivery
-  x: 7.0
-  y: 0.0
-- description: Area loading ke kendaraan
-  name: Area Loading
-  type: delivery
-  x: 8.0
-  y: 2.0
-- description: Meja Quality Control
-  name: Meja QC
-  type: delivery
-  x: 6.0
-  y: -2.0
-- description: Pintu keluar gudang
-  name: Pintu Keluar
-  type: delivery
-  x: 9.0
-  y: 0.0
+  x: -6
+  y: 10
 settings:
   auto_return_home: true
   max_angular_speed: 0.9

@@ -11,20 +11,71 @@
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-    <!-- ============ TOP BAR (selalu visible) ============ -->
+    <!-- ============ APP SIDEBAR (Desktop) ============ -->
+    <aside id="app-sidebar">
+        <div class="sidebar-brand" onclick="navigateTo('home')">
+            <span class="sidebar-logo-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+            </span>
+        </div>
+        <nav class="sidebar-menu">
+            <button class="nav-item" data-page="home" onclick="navigateTo('home')" title="Home">
+                <span class="nav-icon" id="s-icon-home"></span>
+                <span class="nav-label">Home</span>
+            </button>
+            <button class="nav-item" data-page="monitoring" onclick="navigateTo('monitoring')" title="Pemantauan Cockpit">
+                <span class="nav-icon" id="s-icon-monitoring"></span>
+                <span class="nav-label">Monitoring</span>
+            </button>
+            <button class="nav-item" data-page="delivery" onclick="navigateTo('delivery')" title="Kontrol Delivery">
+                <span class="nav-icon" id="s-icon-delivery"></span>
+                <span class="nav-label">Delivery</span>
+            </button>
+            <button class="nav-item" data-page="camera" onclick="navigateTo('camera')" title="View Kamera">
+                <span class="nav-icon" id="s-icon-camera"></span>
+                <span class="nav-label">Kamera</span>
+            </button>
+            <button class="nav-item" data-page="history" onclick="navigateTo('history')" title="Riwayat Delivery">
+                <span class="nav-icon" id="s-icon-history"></span>
+                <span class="nav-label">Riwayat</span>
+            </button>
+            <button class="nav-item" data-page="joystick" onclick="navigateTo('joystick')" title="Manual Control">
+                <span class="nav-icon" id="s-icon-joystick"></span>
+                <span class="nav-label">Manual</span>
+            </button>
+            <button class="nav-item" data-page="settings" onclick="navigateTo('settings')" title="Pengaturan">
+                <span class="nav-icon" id="s-icon-settings"></span>
+                <span class="nav-label">Setting</span>
+            </button>
+        </nav>
+        <div class="sidebar-bottom">
+            <button class="sidebar-estop-btn" onclick="emergencyStop()" title="Emergency Stop">
+                <span>STOP</span>
+            </button>
+        </div>
+    </aside>
+
+    <!-- ============ TOP BAR ============ -->
     <header id="topbar">
         <button id="btn-back" class="topbar-btn hidden" onclick="navigateTo('home')">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
         </button>
         <div class="topbar-title">
             <div class="topbar-logo">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
             </div>
-            <span id="page-title">AMR Dashboard</span>
+            <div class="topbar-text-group">
+                <span id="page-title">AMR Dashboard</span>
+                <span class="topbar-subtext">Autonomous Mobile Robot System</span>
+            </div>
         </div>
-        <div id="connection-badge" class="badge badge-offline">
-            <span class="badge-dot"></span>
-            <span class="badge-text">Offline</span>
+        <div class="topbar-right">
+            <div id="live-clock" class="topbar-clock">--:--:--</div>
+            <div id="connection-badge" class="badge badge-offline">
+                <span class="badge-dot"></span>
+                <span class="badge-text">Offline</span>
+            </div>
+            <button class="topbar-estop-btn" onclick="emergencyStop()" title="Emergency Stop">E-STOP</button>
         </div>
     </header>
 
@@ -66,6 +117,30 @@
             <div class="arrival-modal-actions" id="arrival-modal-actions"></div>
         </div>
     </div>
+
+    <!-- ============ MOBILE BOTTOM NAV (Mobile Screens) ============ -->
+    <nav id="mobile-nav">
+        <button class="mobile-nav-item" data-page="home" onclick="navigateTo('home')">
+            <span class="mobile-nav-icon" id="m-icon-home"></span>
+            <span>Home</span>
+        </button>
+        <button class="mobile-nav-item" data-page="monitoring" onclick="navigateTo('monitoring')">
+            <span class="mobile-nav-icon" id="m-icon-monitoring"></span>
+            <span>Monitor</span>
+        </button>
+        <button class="mobile-nav-item" data-page="delivery" onclick="navigateTo('delivery')">
+            <span class="mobile-nav-icon" id="m-icon-delivery"></span>
+            <span>Delivery</span>
+        </button>
+        <button class="mobile-nav-item" data-page="camera" onclick="navigateTo('camera')">
+            <span class="mobile-nav-icon" id="m-icon-camera"></span>
+            <span>Kamera</span>
+        </button>
+        <button class="mobile-nav-item" data-page="joystick" onclick="navigateTo('joystick')">
+            <span class="mobile-nav-icon" id="m-icon-joystick"></span>
+            <span>Manual</span>
+        </button>
+    </nav>
 
     <!-- ============ JAVASCRIPT ============ -->
     <script src="/static/js/icons.js"></script>

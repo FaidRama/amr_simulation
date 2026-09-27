@@ -302,8 +302,8 @@ async function initDeliveryMap() {
 // ====================== MONITOR MAP ======================
 let monitorMapAnimFrame = null;
 
-async function initMonitorMap() {
-    const canvas = document.getElementById('monitor-map-canvas');
+async function initMonitorMap(canvasId = 'monitor-map-canvas') {
+    const canvas = document.getElementById(canvasId);
     if (!canvas) return;
 
     const ok = await loadMapData();
@@ -337,6 +337,10 @@ function startMonitoringPolling() {
 
         if (typeof handleDeliveryStatusUpdate === 'function') {
             handleDeliveryStatusUpdate(APP.delivery);
+        }
+
+        if (typeof updateCockpitData === 'function') {
+            updateCockpitData(data);
         }
 
         // Update monitoring UI
