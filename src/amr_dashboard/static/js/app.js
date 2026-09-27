@@ -150,9 +150,12 @@ function renderHome() {
     const phaseLabels = {
         idle: 'Siap',
         navigating_pickup: 'Menuju Pickup',
+        waiting_pickup: '📦 Menunggu Muat Barang',
         at_pickup: 'Di Pickup',
         navigating_delivery: 'Menuju Tujuan',
-        at_delivery: 'Di Tujuan'
+        waiting_delivery: '📬 Menunggu Ambil Barang',
+        at_delivery: 'Di Tujuan',
+        returning_home: '🏠 Kembali ke Titik Awal'
     };
 
     div.innerHTML = `
@@ -281,7 +284,7 @@ function renderDelivery() {
             </div>
         </div>
 
-        <div class="page-section" id="mission-control-section" class="hidden">
+        <div class="page-section hidden" id="mission-control-section">
             <div class="section-title">Kontrol Misi</div>
             <div class="panel">
                 <div class="text-center mb-8">
@@ -298,6 +301,8 @@ function renderDelivery() {
                 </div>
             </div>
         </div>
+
+        <div class="page-section hidden" id="confirm-action-section"></div>
     `;
 
     // Render setelah DOM ready
@@ -468,10 +473,14 @@ function updateMissionControlVisibility() {
     section.classList.toggle('hidden', !isActive);
 }
 
+// Track phase terakhir untuk deteksi perubahan fase
+let _lastNotifiedPhase = null;
+
 function updateMissionUI() {
     const badge = document.getElementById('mission-status-badge');
     const progress = document.getElementById('mission-progress');
     const progressText = document.getElementById('mission-progress-text');
+    const confirmSection = document.getElementById('confirm-action-section');
 
     if (!badge) return;
 
@@ -481,7 +490,7 @@ function updateMissionUI() {
 
     if (d.total_tasks > 0) {
         const pct = Math.round((d.completed_tasks / d.total_tasks) * 100);
-        progress.style.width = `${pct}%`;
+        if (progress) progress.style.width = `${pct}%`;
 
         const phaseLabels = {
             navigating_pickup: '🚗 Menuju titik pickup...',
@@ -490,62 +499,106 @@ function updateMissionUI() {
             navigating_delivery: '🚗 Mengantar barang...',
             at_delivery: '📍 Tiba di delivery',
             waiting_delivery: '📬 Menunggu barang diambil',
+            returning_home: '🏠 Kembali ke titik awal...',
             idle: '✅ Selesai'
         };
-        progressText.textContent = `Task ${(d.current_task_index || 0) + 1}/${d.total_tasks} — ${phaseLabels[d.current_phase] || d.current_phase}`;
+        if (progressText) {
+            progressText.textContent = `Task ${(d.current_task_index || 0) + 1}/${d.total_tasks} — ${phaseLabels[d.current_phase] || d.current_phase}`;
+        }
     }
 
     // === TOMBOL KONFIRMASI ===
-    let confirmSection = document.getElementById('confirm-action-section');
-    const isWaiting = d.current_phase === 'waiting_pickup' || d.current_phase === 'waiting_delivery';
+    const isWaiting = (d.current_phase === 'waiting_pickup' || d.current_phase === 'waiting_delivery');
 
     if (isWaiting && d.status === 'running') {
-        if (!confirmSection) {
-            // Buat section konfirmasi
-            confirmSection = document.createElement('div');
-            confirmSection.id = 'confirm-action-section';
-            confirmSection.className = 'page-section';
-            // Cari tempat untuk insert — setelah mission-control-section
-            const missionCtrl = document.getElementById('mission-control-section');
-            if (missionCtrl && missionCtrl.parentElement) {
-                missionCtrl.parentElement.insertBefore(confirmSection, missionCtrl.nextSibling);
-            }
+        // Notifikasi saat fase baru berubah ke waiting (hanya sekali per transisi)
+        if (_lastNotifiedPhase !== d.current_phase) {
+            _lastNotifiedPhase = d.current_phase;
+            notifyArrival(d.current_phase);
         }
 
+        const taskIdx = d.current_task_index || 0;
+        const taskInfo = d.tasks && d.tasks[taskIdx] ? d.tasks[taskIdx] : null;
+
         if (d.current_phase === 'waiting_pickup') {
-            const taskIdx = d.current_task_index || 0;
-            const taskInfo = d.tasks && d.tasks[taskIdx] ? d.tasks[taskIdx] : null;
             const pickupName = taskInfo ? taskInfo.pickup.name : 'Pickup';
-            confirmSection.innerHTML = `
-                <div class="confirm-card confirm-pickup">
-                    <div class="confirm-icon">📦</div>
-                    <div class="confirm-title">Tiba di ${pickupName}</div>
-                    <div class="confirm-desc">Robot sudah sampai di titik pickup. Tekan tombol di bawah setelah barang dimuat ke robot.</div>
-                    <button class="btn btn-confirm btn-confirm-pickup" onclick="confirmAction('confirm_pickup')">
-                        ✓ Barang Sudah Dimuat
-                    </button>
-                </div>
-            `;
+            if (confirmSection) {
+                confirmSection.classList.remove('hidden');
+                confirmSection.innerHTML = `
+                    <div class="confirm-card confirm-pickup">
+                        <div class="confirm-icon">📦</div>
+                        <div class="confirm-title">Robot Tiba di ${pickupName}!</div>
+                        <div class="confirm-desc">Robot sudah sampai di titik pickup. Tekan tombol di bawah setelah barang dimuat ke robot.</div>
+                        <button class="btn btn-confirm btn-confirm-pickup" onclick="confirmAction('confirm_pickup')">
+                            ✓ Barang Sudah Dimuat
+                        </button>
+                    </div>
+                `;
+            }
         } else {
-            const taskIdx = d.current_task_index || 0;
-            const taskInfo = d.tasks && d.tasks[taskIdx] ? d.tasks[taskIdx] : null;
             const deliveryName = taskInfo ? taskInfo.delivery.name : 'Delivery';
-            confirmSection.innerHTML = `
-                <div class="confirm-card confirm-delivery">
-                    <div class="confirm-icon">📬</div>
-                    <div class="confirm-title">Tiba di ${deliveryName}</div>
-                    <div class="confirm-desc">Robot sudah sampai di titik delivery. Tekan tombol di bawah setelah barang diambil.</div>
-                    <button class="btn btn-confirm btn-confirm-delivery" onclick="confirmAction('confirm_delivery')">
-                        ✓ Barang Sudah Diambil
-                    </button>
-                </div>
-            `;
+            if (confirmSection) {
+                confirmSection.classList.remove('hidden');
+                confirmSection.innerHTML = `
+                    <div class="confirm-card confirm-delivery">
+                        <div class="confirm-icon">📬</div>
+                        <div class="confirm-title">Robot Tiba di ${deliveryName}!</div>
+                        <div class="confirm-desc">Robot sudah sampai di titik delivery. Tekan tombol di bawah setelah barang diambil.</div>
+                        <button class="btn btn-confirm btn-confirm-delivery" onclick="confirmAction('confirm_delivery')">
+                            ✓ Barang Sudah Diambil
+                        </button>
+                    </div>
+                `;
+            }
         }
-    } else if (confirmSection) {
-        confirmSection.remove();
+    } else {
+        // Sembunyikan section konfirmasi
+        if (confirmSection) {
+            confirmSection.classList.add('hidden');
+            confirmSection.innerHTML = '';
+        }
+        // Reset notif tracker saat fase berubah dari waiting
+        if (!isWaiting) {
+            _lastNotifiedPhase = null;
+        }
     }
 
     updateMissionControlVisibility();
+}
+
+function notifyArrival(phase) {
+    // Getarkan HP (jika didukung)
+    if (navigator.vibrate) {
+        navigator.vibrate([200, 100, 200, 100, 200]);
+    }
+    // Mainkan suara notifikasi sederhana via Web Audio API
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value = phase === 'waiting_pickup' ? 880 : 660;
+        osc.type = 'sine';
+        gain.gain.value = 0.3;
+        osc.start();
+        osc.stop(ctx.currentTime + 0.3);
+        setTimeout(() => {
+            const osc2 = ctx.createOscillator();
+            osc2.connect(gain);
+            osc2.frequency.value = phase === 'waiting_pickup' ? 1100 : 880;
+            osc2.type = 'sine';
+            osc2.start();
+            osc2.stop(ctx.currentTime + 0.3);
+        }, 350);
+    } catch (e) {
+        // Audio API tidak tersedia, tidak masalah
+    }
+    // Toast notifikasi
+    const label = phase === 'waiting_pickup'
+        ? '🔔 Robot sudah sampai di pickup! Silakan muat barang.'
+        : '🔔 Robot sudah sampai di tujuan! Silakan ambil barang.';
+    showToast(label, 'success');
 }
 
 async function confirmAction(command) {
@@ -553,9 +606,12 @@ async function confirmAction(command) {
     if (result && result.success) {
         const label = command === 'confirm_pickup' ? 'Pickup dikonfirmasi! Robot lanjut mengantar.' : 'Delivery dikonfirmasi! Task selesai.';
         showToast(label, 'success');
-        // Hapus section konfirmasi
+        // Sembunyikan section konfirmasi
         const sec = document.getElementById('confirm-action-section');
-        if (sec) sec.remove();
+        if (sec) {
+            sec.classList.add('hidden');
+            sec.innerHTML = '';
+        }
     } else {
         showToast('Gagal mengirim konfirmasi', 'error');
     }
@@ -1067,8 +1123,11 @@ async function globalStatusPoll() {
             homeStatus.textContent = st;
 
             const phaseLabels = {
-                idle: 'Siap', navigating_pickup: 'Menuju Pickup', at_pickup: 'Di Pickup',
-                navigating_delivery: 'Menuju Tujuan', at_delivery: 'Di Tujuan'
+                idle: 'Siap', navigating_pickup: 'Menuju Pickup',
+                waiting_pickup: '📦 Menunggu Muat', at_pickup: 'Di Pickup',
+                navigating_delivery: 'Menuju Tujuan',
+                waiting_delivery: '📬 Menunggu Ambil', at_delivery: 'Di Tujuan',
+                returning_home: '🏠 Kembali ke Titik Awal'
             };
             const homePhase = document.getElementById('home-phase');
             if (homePhase) homePhase.textContent = phaseLabels[APP.delivery.current_phase] || APP.delivery.current_phase;

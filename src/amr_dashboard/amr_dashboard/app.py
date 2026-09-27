@@ -176,6 +176,8 @@ class DashboardNode(Node):
         self.human_status = 'NO_HUMAN'
         self.latest_frame = None  # JPEG bytes terakhir dari kamera
         self.cmd_vel_current = {'linear': 0.0, 'angular': 0.0}
+        self.last_status_time = 0.0  # Waktu terakhir status diterima
+        self._history_saved_ids = set()  # Track misi yang sudah disimpan ke history
         
         # === SUBSCRIBERS ===
         # Posisi AMR dari AMCL
@@ -210,6 +212,9 @@ class DashboardNode(Node):
             self.cam_sub_sensor = self.create_subscription(
                 Image, '/camera_sensor/image_raw', self.on_camera, 10)
         
+        # Timer untuk cek stale status (jika waypoint_manager mati)
+        self.stale_timer = self.create_timer(3.0, self.check_stale_status)
+        
         self.get_logger().info('Dashboard Server Node AKTIF')
     
     def on_pose(self, msg):
@@ -233,15 +238,30 @@ class DashboardNode(Node):
         try:
             data = json.loads(msg.data)
             with self.lock:
+                self.last_status_time = time.time()
                 if data.get('mission'):
                     self.delivery_status = data['mission']
-                    # Simpan ke history jika misi selesai
-                    if data['mission']['status'] in ('completed', 'cancelled'):
+                    # Simpan ke history jika misi selesai (hanya sekali per misi)
+                    mission_id = data['mission'].get('mission_id', '')
+                    if (data['mission']['status'] in ('completed', 'cancelled')
+                            and mission_id not in self._history_saved_ids):
+                        self._history_saved_ids.add(mission_id)
                         save_to_history(data['mission'])
                 else:
                     self.delivery_status = {'status': 'idle', 'current_phase': 'idle'}
         except json.JSONDecodeError:
             pass
+    
+    def check_stale_status(self):
+        """Cek apakah status delivery beku (waypoint_manager mungkin mati)."""
+        with self.lock:
+            if self.delivery_status.get('status') in ('running', 'paused'):
+                elapsed = time.time() - self.last_status_time
+                if self.last_status_time > 0 and elapsed > 5.0:
+                    self.get_logger().warn(
+                        f'Status delivery beku {elapsed:.0f}s — '
+                        f'waypoint_manager mungkin mati. Reset ke idle.')
+                    self.delivery_status = {'status': 'idle', 'current_phase': 'idle'}
     
     def on_human_status(self, msg):
         """Callback status human awareness."""
@@ -408,6 +428,8 @@ def api_delivery_control():
         return jsonify({'error': f'Perintah tidak valid: {command}'}), 400
     
     ros_node.send_control(command)
+    if command == 'cancel':
+        ros_node.send_cmd_vel(0.0, 0.0)
     return jsonify({'message': f'Perintah [{command}] terkirim', 'success': True})
 
 
