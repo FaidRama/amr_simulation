@@ -1091,6 +1091,219 @@ select.input-field {
     flex: 1;
 }
 
+/* === ARRIVAL CONFIRMATION MODAL (GLOBAL) === */
+#arrival-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(4, 7, 20, 0.78);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    animation: fadeInArrival 0.25s ease;
+}
+
+@keyframes fadeInArrival {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+#arrival-modal-box {
+    background: var(--bg-secondary);
+    border: 2px solid;
+    border-radius: var(--radius);
+    padding: 28px 22px 24px;
+    max-width: 420px;
+    width: 100%;
+    box-shadow: 0 16px 50px rgba(0, 0, 0, 0.7);
+    text-align: center;
+    animation: slideUpArrival 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideUpArrival {
+    from { transform: translateY(24px) scale(0.95); opacity: 0; }
+    to { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.arrival-box-pickup {
+    border-color: rgba(0, 212, 255, 0.45);
+    box-shadow: 0 0 50px rgba(0, 212, 255, 0.18) !important;
+}
+
+.arrival-box-delivery {
+    border-color: rgba(0, 230, 118, 0.45);
+    box-shadow: 0 0 50px rgba(0, 230, 118, 0.18) !important;
+}
+
+.arrival-modal-icon {
+    width: 68px;
+    height: 68px;
+    border-radius: 50%;
+    margin: 0 auto 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: arrivalPulse 2s infinite;
+}
+
+@keyframes arrivalPulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.06); }
+    100% { transform: scale(1); }
+}
+
+.arrival-box-pickup .arrival-modal-icon {
+    background: rgba(0, 212, 255, 0.12);
+    color: var(--accent);
+    border: 2px solid rgba(0, 212, 255, 0.35);
+}
+
+.arrival-box-delivery .arrival-modal-icon {
+    background: rgba(0, 230, 118, 0.12);
+    color: var(--success);
+    border: 2px solid rgba(0, 230, 118, 0.35);
+}
+
+.arrival-modal-title {
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+    letter-spacing: -0.01em;
+}
+
+.arrival-modal-desc {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-bottom: 22px;
+}
+
+.arrival-modal-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* === TOP FLOATING BANNER (GLOBAL NOTIFICATION) === */
+#global-mission-banner {
+    position: fixed;
+    top: 64px;
+    left: 14px;
+    right: 14px;
+    max-width: 520px;
+    margin: 0 auto;
+    z-index: 95;
+    background: rgba(12, 18, 41, 0.94);
+    border: 1.5px solid var(--accent);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4), 0 0 20px rgba(0, 212, 255, 0.2);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    animation: bannerSlideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+#global-mission-banner:active {
+    transform: scale(0.98);
+}
+
+@keyframes bannerSlideDown {
+    from { transform: translateY(-16px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+.banner-pickup {
+    border-color: var(--accent) !important;
+}
+
+.banner-delivery {
+    border-color: var(--success) !important;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4), 0 0 20px rgba(0, 230, 118, 0.2) !important;
+}
+
+.banner-content {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+}
+
+.banner-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.banner-pickup .banner-icon {
+    color: var(--accent);
+}
+
+.banner-delivery .banner-icon {
+    color: var(--success);
+}
+
+.banner-text-wrap {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.banner-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.banner-subtitle {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+}
+
+.banner-btn {
+    padding: 6px 12px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    border-radius: var(--radius-xs);
+    border: none;
+    cursor: pointer;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+    transition: var(--transition);
+}
+
+.banner-pickup .banner-btn {
+    background: linear-gradient(135deg, #00b4d8, #0096c7);
+    color: #fff;
+    box-shadow: 0 2px 10px rgba(0, 180, 216, 0.35);
+}
+
+.banner-delivery .banner-btn {
+    background: linear-gradient(135deg, #00e676, #00c853);
+    color: #000;
+    box-shadow: 0 2px 10px rgba(0, 230, 118, 0.35);
+}
+
 /* === EMERGENCY STOP === */
 .estop-btn {
     width: 80px;

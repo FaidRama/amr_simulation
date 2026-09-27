@@ -28,6 +28,18 @@
         </div>
     </header>
 
+    <!-- ============ GLOBAL MISSION FLOATING BANNER ============ -->
+    <div id="global-mission-banner" class="hidden" onclick="onBannerClick()">
+        <div class="banner-content">
+            <span class="banner-icon" id="banner-icon"></span>
+            <div class="banner-text-wrap">
+                <span class="banner-title" id="banner-title"></span>
+                <span class="banner-subtitle" id="banner-subtitle"></span>
+            </div>
+        </div>
+        <button class="banner-btn" id="banner-btn" onclick="event.stopPropagation(); onBannerBtnClick()">Konfirmasi</button>
+    </div>
+
     <!-- ============ MAIN CONTENT AREA ============ -->
     <main id="app-content">
         <!-- Konten di-render oleh JavaScript -->
@@ -37,11 +49,21 @@
     <div id="toast-container"></div>
 
     <!-- ============ MODAL DIALOG ============ -->
-    <div id="modal-overlay" class="hidden">
+    <div id="modal-overlay" class="hidden" onclick="closeModal(event)">
         <div id="modal-box">
             <h3 id="modal-title"></h3>
             <div id="modal-body"></div>
             <div id="modal-actions"></div>
+        </div>
+    </div>
+
+    <!-- ============ ARRIVAL CONFIRMATION MODAL ============ -->
+    <div id="arrival-modal-overlay" class="hidden" onclick="closeArrivalModalOnBackdrop(event)">
+        <div id="arrival-modal-box">
+            <div class="arrival-modal-icon" id="arrival-modal-icon"></div>
+            <h2 class="arrival-modal-title" id="arrival-modal-title"></h2>
+            <p class="arrival-modal-desc" id="arrival-modal-desc"></p>
+            <div class="arrival-modal-actions" id="arrival-modal-actions"></div>
         </div>
     </div>
 

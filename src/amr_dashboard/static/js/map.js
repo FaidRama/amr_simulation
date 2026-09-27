@@ -335,6 +335,10 @@ function startMonitoringPolling() {
         APP.delivery = data.delivery || APP.delivery;
         APP.humanStatus = data.human_status || 'NO_HUMAN';
 
+        if (typeof handleDeliveryStatusUpdate === 'function') {
+            handleDeliveryStatusUpdate(APP.delivery);
+        }
+
         // Update monitoring UI
         const monX = document.getElementById('mon-x');
         const monY = document.getElementById('mon-y');

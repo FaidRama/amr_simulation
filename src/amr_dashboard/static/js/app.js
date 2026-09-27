@@ -86,6 +86,12 @@ function hideModal() {
     document.getElementById('modal-overlay').classList.add('hidden');
 }
 
+function closeModal(event) {
+    if (event.target.id === 'modal-overlay') {
+        hideModal();
+    }
+}
+
 // ====================== NAVIGATION ======================
 function navigateTo(page) {
     APP.currentPage = page;
@@ -131,6 +137,11 @@ function navigateTo(page) {
         content.innerHTML = '';
         content.appendChild(renderers[page]());
         content.querySelector('.page-enter')?.classList.add('page-enter');
+    }
+
+    // Sinkronkan status kedatangan / banner / popup di halaman baru
+    if (typeof handleDeliveryStatusUpdate === 'function' && APP.delivery) {
+        handleDeliveryStatusUpdate(APP.delivery);
     }
 }
 
@@ -459,6 +470,11 @@ async function controlMission(command) {
     if (result && result.success) {
         const labels = { pause: 'Misi di-pause', resume: 'Misi dilanjutkan', cancel: 'Misi dibatalkan', skip: 'Task di-skip' };
         showToast(labels[command] || command, command === 'cancel' ? 'error' : 'info');
+        if (command === 'cancel') {
+            _modalDismissedForCurrentPhase = false;
+            hideArrivalModal();
+            hideGlobalMissionBanner();
+        }
     }
 }
 
@@ -469,14 +485,228 @@ function updateMissionControlVisibility() {
     section.classList.toggle('hidden', !isActive);
 }
 
-// Track phase terakhir untuk deteksi perubahan fase
+// Track phase & modal status untuk notifikasi kedatangan
 let _lastNotifiedPhase = null;
+let _modalDismissedForCurrentPhase = false;
+
+// ====================== GLOBAL DELIVERY & ARRIVAL HANDLER ======================
+function handleDeliveryStatusUpdate(d) {
+    if (!d) return;
+    APP.delivery = d;
+
+    const isWaiting = (d.current_phase === 'waiting_pickup' || d.current_phase === 'waiting_delivery') && d.status === 'running';
+
+    if (isWaiting) {
+        const isNewPhase = (_lastNotifiedPhase !== d.current_phase);
+        if (isNewPhase) {
+            _lastNotifiedPhase = d.current_phase;
+            _modalDismissedForCurrentPhase = false;
+            notifyArrival(d.current_phase);
+            // Jika berada di halaman lain (camera, monitoring, dsb), langsung munculkan modal pop-up konfirmasi
+            if (APP.currentPage !== 'delivery') {
+                showArrivalModal(d);
+            }
+        }
+
+        // Tampilkan floating banner di semua halaman selain halaman delivery
+        if (APP.currentPage !== 'delivery') {
+            updateGlobalMissionBanner(d);
+            if (!_modalDismissedForCurrentPhase) {
+                showArrivalModal(d);
+            }
+        } else {
+            // Di halaman delivery, sembunyikan modal/banner agar fokus ke card di halaman
+            hideGlobalMissionBanner();
+            hideArrivalModal();
+        }
+
+        // Update in-page card jika sedang di halaman delivery
+        if (APP.currentPage === 'delivery') {
+            updateInPageConfirmCard(d);
+        }
+    } else {
+        if (!isWaiting) {
+            _lastNotifiedPhase = null;
+            _modalDismissedForCurrentPhase = false;
+        }
+        hideArrivalModal();
+        hideGlobalMissionBanner();
+        if (APP.currentPage === 'delivery') {
+            const sec = document.getElementById('confirm-action-section');
+            if (sec) {
+                sec.classList.add('hidden');
+                sec.innerHTML = '';
+            }
+        }
+    }
+}
+
+function showArrivalModal(d) {
+    const overlay = document.getElementById('arrival-modal-overlay');
+    const box = document.getElementById('arrival-modal-box');
+    const iconEl = document.getElementById('arrival-modal-icon');
+    const titleEl = document.getElementById('arrival-modal-title');
+    const descEl = document.getElementById('arrival-modal-desc');
+    const actionsEl = document.getElementById('arrival-modal-actions');
+    if (!overlay || !box) return;
+
+    const isPickup = (d.current_phase === 'waiting_pickup');
+    const taskIdx = d.current_task_index || 0;
+    const taskInfo = d.tasks && d.tasks[taskIdx] ? d.tasks[taskIdx] : null;
+    const pointName = isPickup
+        ? (taskInfo && taskInfo.pickup ? taskInfo.pickup.name : 'Titik Pickup')
+        : (taskInfo && taskInfo.delivery ? taskInfo.delivery.name : 'Titik Tujuan');
+
+    box.className = isPickup ? 'arrival-box-pickup' : 'arrival-box-delivery';
+    if (iconEl) iconEl.innerHTML = isPickup ? getIcon('box', 36) : getIcon('checkCircle', 36);
+
+    if (titleEl) {
+        titleEl.textContent = isPickup
+            ? `Robot Tiba di Pickup: ${pointName}!`
+            : `Robot Tiba di Tujuan: ${pointName}!`;
+    }
+
+    if (descEl) {
+        descEl.textContent = isPickup
+            ? 'Robot sudah sampai di titik pickup dan siap dimuat. Silakan muat barang ke robot lalu tekan konfirmasi.'
+            : 'Robot sudah sampai di titik tujuan pengantaran. Silakan ambil barang dari robot lalu tekan konfirmasi.';
+    }
+
+    const cmd = isPickup ? 'confirm_pickup' : 'confirm_delivery';
+    const btnLabel = isPickup ? 'Barang Sudah Dimuat' : 'Barang Sudah Diambil';
+    const btnClass = isPickup ? 'btn-confirm-pickup' : 'btn-confirm-delivery';
+
+    if (actionsEl) {
+        actionsEl.innerHTML = `
+            <button class="btn btn-confirm ${btnClass}" onclick="confirmActionFromModal('${cmd}')">
+                ${getIcon('check', 20)} ${btnLabel}
+            </button>
+            <button class="btn btn-secondary" onclick="goToDeliveryPageFromModal()" style="display:flex; align-items:center; justify-content:center; gap:8px;">
+                ${getIcon('delivery', 18)} Buka Halaman Delivery
+            </button>
+            <button class="btn btn-outline" onclick="dismissArrivalModal()" style="display:flex; align-items:center; justify-content:center; gap:6px; font-size:0.8rem; opacity:0.8; padding:8px;">
+                ${getIcon('x', 14)} Tutup Dialog
+            </button>
+        `;
+    }
+
+    overlay.classList.remove('hidden');
+}
+
+function hideArrivalModal() {
+    const overlay = document.getElementById('arrival-modal-overlay');
+    if (overlay) overlay.classList.add('hidden');
+}
+
+function dismissArrivalModal() {
+    _modalDismissedForCurrentPhase = true;
+    hideArrivalModal();
+}
+
+function closeArrivalModalOnBackdrop(event) {
+    if (event.target.id === 'arrival-modal-overlay') {
+        dismissArrivalModal();
+    }
+}
+
+function updateGlobalMissionBanner(d) {
+    const banner = document.getElementById('global-mission-banner');
+    const iconEl = document.getElementById('banner-icon');
+    const titleEl = document.getElementById('banner-title');
+    const subtitleEl = document.getElementById('banner-subtitle');
+    const btnEl = document.getElementById('banner-btn');
+    if (!banner) return;
+
+    const isPickup = (d.current_phase === 'waiting_pickup');
+    const taskIdx = d.current_task_index || 0;
+    const taskInfo = d.tasks && d.tasks[taskIdx] ? d.tasks[taskIdx] : null;
+    const pointName = isPickup
+        ? (taskInfo && taskInfo.pickup ? taskInfo.pickup.name : 'Pickup')
+        : (taskInfo && taskInfo.delivery ? taskInfo.delivery.name : 'Delivery');
+
+    banner.className = isPickup ? 'banner-pickup' : 'banner-delivery';
+    if (iconEl) iconEl.innerHTML = isPickup ? getIcon('box', 22) : getIcon('checkCircle', 22);
+    if (titleEl) titleEl.textContent = `Tiba di ${pointName}!`;
+    if (subtitleEl) subtitleEl.textContent = isPickup ? 'Menunggu konfirmasi muat barang' : 'Menunggu konfirmasi ambil barang';
+    if (btnEl) {
+        btnEl.innerHTML = `${getIcon('check', 14)} ${isPickup ? 'Muat' : 'Ambil'}`;
+    }
+
+    banner.classList.remove('hidden');
+}
+
+function hideGlobalMissionBanner() {
+    const banner = document.getElementById('global-mission-banner');
+    if (banner) banner.classList.add('hidden');
+}
+
+function onBannerClick() {
+    if (APP.delivery && (APP.delivery.current_phase === 'waiting_pickup' || APP.delivery.current_phase === 'waiting_delivery')) {
+        _modalDismissedForCurrentPhase = false;
+        showArrivalModal(APP.delivery);
+    }
+}
+
+async function onBannerBtnClick() {
+    if (APP.delivery && APP.delivery.status === 'running') {
+        const cmd = APP.delivery.current_phase === 'waiting_pickup' ? 'confirm_pickup' : 'confirm_delivery';
+        await confirmActionFromModal(cmd);
+    }
+}
+
+async function confirmActionFromModal(command) {
+    hideArrivalModal();
+    hideGlobalMissionBanner();
+    _modalDismissedForCurrentPhase = false;
+    await confirmAction(command);
+}
+
+function goToDeliveryPageFromModal() {
+    hideArrivalModal();
+    navigateTo('delivery');
+}
+
+function updateInPageConfirmCard(d) {
+    const confirmSection = document.getElementById('confirm-action-section');
+    if (!confirmSection) return;
+
+    const isPickup = (d.current_phase === 'waiting_pickup');
+    const taskIdx = d.current_task_index || 0;
+    const taskInfo = d.tasks && d.tasks[taskIdx] ? d.tasks[taskIdx] : null;
+
+    if (isPickup) {
+        const pickupName = taskInfo && taskInfo.pickup ? taskInfo.pickup.name : 'Pickup';
+        confirmSection.classList.remove('hidden');
+        confirmSection.innerHTML = `
+            <div class="confirm-card confirm-pickup">
+                <div class="confirm-icon">${getIcon('box', 44)}</div>
+                <div class="confirm-title">Robot Tiba di ${pickupName}!</div>
+                <div class="confirm-desc">Robot sudah sampai di titik pickup. Tekan tombol di bawah setelah barang dimuat ke robot.</div>
+                <button class="btn btn-confirm btn-confirm-pickup" onclick="confirmAction('confirm_pickup')">
+                    ${getIcon('check', 20)} Barang Sudah Dimuat
+                </button>
+            </div>
+        `;
+    } else {
+        const deliveryName = taskInfo && taskInfo.delivery ? taskInfo.delivery.name : 'Delivery';
+        confirmSection.classList.remove('hidden');
+        confirmSection.innerHTML = `
+            <div class="confirm-card confirm-delivery">
+                <div class="confirm-icon">${getIcon('checkCircle', 44)}</div>
+                <div class="confirm-title">Robot Tiba di ${deliveryName}!</div>
+                <div class="confirm-desc">Robot sudah sampai di titik delivery. Tekan tombol di bawah setelah barang diambil.</div>
+                <button class="btn btn-confirm btn-confirm-delivery" onclick="confirmAction('confirm_delivery')">
+                    ${getIcon('check', 20)} Barang Sudah Diambil
+                </button>
+            </div>
+        `;
+    }
+}
 
 function updateMissionUI() {
     const badge = document.getElementById('mission-status-badge');
     const progress = document.getElementById('mission-progress');
     const progressText = document.getElementById('mission-progress-text');
-    const confirmSection = document.getElementById('confirm-action-section');
 
     if (!badge) return;
 
@@ -503,71 +733,14 @@ function updateMissionUI() {
         }
     }
 
-    // === TOMBOL KONFIRMASI ===
-    const isWaiting = (d.current_phase === 'waiting_pickup' || d.current_phase === 'waiting_delivery');
-
-    if (isWaiting && d.status === 'running') {
-        // Notifikasi saat fase baru berubah ke waiting (hanya sekali per transisi)
-        if (_lastNotifiedPhase !== d.current_phase) {
-            _lastNotifiedPhase = d.current_phase;
-            notifyArrival(d.current_phase);
-        }
-
-        const taskIdx = d.current_task_index || 0;
-        const taskInfo = d.tasks && d.tasks[taskIdx] ? d.tasks[taskIdx] : null;
-
-        if (d.current_phase === 'waiting_pickup') {
-            const pickupName = taskInfo ? taskInfo.pickup.name : 'Pickup';
-            if (confirmSection) {
-                confirmSection.classList.remove('hidden');
-                confirmSection.innerHTML = `
-                    <div class="confirm-card confirm-pickup">
-                        <div class="confirm-icon">${getIcon('box', 44)}</div>
-                        <div class="confirm-title">Robot Tiba di ${pickupName}!</div>
-                        <div class="confirm-desc">Robot sudah sampai di titik pickup. Tekan tombol di bawah setelah barang dimuat ke robot.</div>
-                        <button class="btn btn-confirm btn-confirm-pickup" onclick="confirmAction('confirm_pickup')">
-                            ${getIcon('check', 20)} Barang Sudah Dimuat
-                        </button>
-                    </div>
-                `;
-            }
-        } else {
-            const deliveryName = taskInfo ? taskInfo.delivery.name : 'Delivery';
-            if (confirmSection) {
-                confirmSection.classList.remove('hidden');
-                confirmSection.innerHTML = `
-                    <div class="confirm-card confirm-delivery">
-                        <div class="confirm-icon">${getIcon('checkCircle', 44)}</div>
-                        <div class="confirm-title">Robot Tiba di ${deliveryName}!</div>
-                        <div class="confirm-desc">Robot sudah sampai di titik delivery. Tekan tombol di bawah setelah barang diambil.</div>
-                        <button class="btn btn-confirm btn-confirm-delivery" onclick="confirmAction('confirm_delivery')">
-                            ${getIcon('check', 20)} Barang Sudah Diambil
-                        </button>
-                    </div>
-                `;
-            }
-        }
-    } else {
-        // Sembunyikan section konfirmasi
-        if (confirmSection) {
-            confirmSection.classList.add('hidden');
-            confirmSection.innerHTML = '';
-        }
-        // Reset notif tracker saat fase berubah dari waiting
-        if (!isWaiting) {
-            _lastNotifiedPhase = null;
-        }
-    }
-
+    handleDeliveryStatusUpdate(d);
     updateMissionControlVisibility();
 }
 
 function notifyArrival(phase) {
-    // Getarkan HP (jika didukung)
     if (navigator.vibrate) {
         navigator.vibrate([200, 100, 200, 100, 200]);
     }
-    // Mainkan suara notifikasi sederhana via Web Audio API
     try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
         const osc = ctx.createOscillator();
@@ -588,9 +761,8 @@ function notifyArrival(phase) {
             osc2.stop(ctx.currentTime + 0.3);
         }, 350);
     } catch (e) {
-        // Audio API tidak tersedia, tidak masalah
+        // Audio API tidak tersedia di browser tertentu
     }
-    // Toast notifikasi
     const label = phase === 'waiting_pickup'
         ? 'Robot sudah sampai di pickup! Silakan muat barang.'
         : 'Robot sudah sampai di tujuan! Silakan ambil barang.';
@@ -602,11 +774,21 @@ async function confirmAction(command) {
     if (result && result.success) {
         const label = command === 'confirm_pickup' ? 'Pickup dikonfirmasi! Robot lanjut mengantar.' : 'Delivery dikonfirmasi! Task selesai.';
         showToast(label, 'success');
-        // Sembunyikan section konfirmasi
+        _modalDismissedForCurrentPhase = false;
+        hideArrivalModal();
+        hideGlobalMissionBanner();
         const sec = document.getElementById('confirm-action-section');
         if (sec) {
             sec.classList.add('hidden');
             sec.innerHTML = '';
+        }
+        // Ambil status terbaru segera
+        const data = await apiGet('/api/status');
+        if (data && data.delivery) {
+            handleDeliveryStatusUpdate(data.delivery);
+            if (APP.currentPage === 'delivery') {
+                updateMissionUI();
+            }
         }
     } else {
         showToast('Gagal mengirim konfirmasi', 'error');
@@ -622,6 +804,16 @@ function startDeliveryPolling() {
         }
     }, 1000);
 }
+
+// Window bindings untuk event handler global
+window.onBannerClick = onBannerClick;
+window.onBannerBtnClick = onBannerBtnClick;
+window.closeArrivalModalOnBackdrop = closeArrivalModalOnBackdrop;
+window.confirmActionFromModal = confirmActionFromModal;
+window.goToDeliveryPageFromModal = goToDeliveryPageFromModal;
+window.dismissArrivalModal = dismissArrivalModal;
+window.hideArrivalModal = hideArrivalModal;
+window.handleDeliveryStatusUpdate = handleDeliveryStatusUpdate;
 
 // ====================== PAGE: MONITORING ======================
 function renderMonitoring() {
@@ -747,12 +939,15 @@ function startCameraPolling() {
     APP.statusPollTimer = setInterval(async () => {
         const data = await apiGet('/api/status');
         if (data) {
+            if (data.delivery && typeof handleDeliveryStatusUpdate === 'function') {
+                handleDeliveryStatusUpdate(data.delivery);
+            }
             const camHuman = document.getElementById('cam-human');
             const camPos = document.getElementById('cam-pos');
             if (camHuman) camHuman.textContent = data.human_status || '—';
             if (camPos) camPos.textContent = `${data.pose.x.toFixed(1)}, ${data.pose.y.toFixed(1)}`;
         }
-    }, 1500);
+    }, 1000);
 }
 
 // ====================== PAGE: HISTORY ======================
@@ -888,6 +1083,9 @@ function renderJoystick() {
 async function emergencyStop() {
     await apiPost('/api/cmd_vel', { linear: 0, angular: 0 });
     await apiPost('/api/delivery/control', { command: 'cancel' });
+    _modalDismissedForCurrentPhase = false;
+    hideArrivalModal();
+    hideGlobalMissionBanner();
     showToast('EMERGENCY STOP!', 'error');
 }
 
@@ -1105,6 +1303,10 @@ async function globalStatusPoll() {
         APP.delivery = data.delivery || APP.delivery;
         APP.humanStatus = data.human_status || 'NO_HUMAN';
 
+        if (typeof handleDeliveryStatusUpdate === 'function') {
+            handleDeliveryStatusUpdate(APP.delivery);
+        }
+
         if (badge) {
             badge.className = 'badge badge-online';
             badge.querySelector('.badge-text').textContent = 'Online';
@@ -1159,7 +1361,7 @@ async function init() {
 
     // Start global polling
     globalStatusPoll();
-    setInterval(globalStatusPoll, 2000);
+    setInterval(globalStatusPoll, 1000);
 }
 
 // Start when DOM ready
