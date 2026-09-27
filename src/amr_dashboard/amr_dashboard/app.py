@@ -31,6 +31,7 @@ from flask import Flask, render_template, jsonify, request, Response, send_file
 # Coba import cv_bridge & cv2 (untuk camera streaming)
 try:
     from cv_bridge import CvBridge
+    # pyrefly: ignore [missing-import]
     import cv2
     HAS_CAMERA = True
 except ImportError:
@@ -428,8 +429,6 @@ def api_delivery_control():
         return jsonify({'error': f'Perintah tidak valid: {command}'}), 400
     
     ros_node.send_control(command)
-    if command == 'cancel':
-        ros_node.send_cmd_vel(0.0, 0.0)
     return jsonify({'message': f'Perintah [{command}] terkirim', 'success': True})
 
 
