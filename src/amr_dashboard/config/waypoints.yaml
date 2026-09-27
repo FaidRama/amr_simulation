@@ -46,5 +46,5 @@ predefined_points:
 settings:
   auto_return_home: true
   max_angular_speed: 0.9
-  max_linear_speed: 0.9
+  max_linear_speed: 1.4
   waypoint_pause_duration: 3

@@ -52,12 +52,8 @@ function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
-    const icons = {
-        success: '✓',
-        error: '✕',
-        info: 'ℹ'
-    };
-    toast.innerHTML = `<span>${icons[type] || 'ℹ'}</span><span>${message}</span>`;
+    const iconName = type === 'success' ? 'checkCircle' : (type === 'error' ? 'xCircle' : 'info');
+    toast.innerHTML = `<span class="icon-inline">${getIcon(iconName, 18)}</span><span>${message}</span>`;
     container.appendChild(toast);
     setTimeout(() => {
         toast.style.opacity = '0';
@@ -104,12 +100,12 @@ function navigateTo(page) {
     } else {
         backBtn.classList.remove('hidden');
         const titles = {
-            delivery: '📦 Kontrol Delivery',
-            monitoring: '📡 Monitoring',
-            camera: '📷 View Kamera',
-            history: '📋 Riwayat Delivery',
-            joystick: '🎮 Manual Control',
-            settings: '⚙️ Pengaturan'
+            delivery: 'Kontrol Delivery',
+            monitoring: 'Monitoring',
+            camera: 'View Kamera',
+            history: 'Riwayat Delivery',
+            joystick: 'Manual Control',
+            settings: 'Pengaturan'
         };
         titleEl.textContent = titles[page] || page;
     }
@@ -150,9 +146,12 @@ function renderHome() {
     const phaseLabels = {
         idle: 'Siap',
         navigating_pickup: 'Menuju Pickup',
+        waiting_pickup: 'Menunggu Muat Barang',
         at_pickup: 'Di Pickup',
         navigating_delivery: 'Menuju Tujuan',
-        at_delivery: 'Di Tujuan'
+        waiting_delivery: 'Menunggu Ambil Barang',
+        at_delivery: 'Di Tujuan',
+        returning_home: 'Kembali ke Titik Awal'
     };
 
     div.innerHTML = `
@@ -178,32 +177,32 @@ function renderHome() {
 
         <div class="menu-grid">
             <div class="menu-card" onclick="navigateTo('delivery')">
-                <div class="card-icon icon-delivery">📦</div>
+                <div class="card-icon icon-delivery">${getIcon('delivery', 26)}</div>
                 <div class="card-title">Kontrol Delivery</div>
                 <div class="card-desc">Atur titik pickup & tujuan pengiriman</div>
             </div>
             <div class="menu-card" onclick="navigateTo('monitoring')">
-                <div class="card-icon icon-monitor">📡</div>
+                <div class="card-icon icon-monitor">${getIcon('monitor', 26)}</div>
                 <div class="card-title">Monitoring</div>
                 <div class="card-desc">Posisi AMR & status real-time</div>
             </div>
             <div class="menu-card" onclick="navigateTo('camera')">
-                <div class="card-icon icon-camera">📷</div>
+                <div class="card-icon icon-camera">${getIcon('camera', 26)}</div>
                 <div class="card-title">View Kamera</div>
                 <div class="card-desc">Live feed kamera robot</div>
             </div>
             <div class="menu-card" onclick="navigateTo('history')">
-                <div class="card-icon icon-history">📋</div>
+                <div class="card-icon icon-history">${getIcon('history', 26)}</div>
                 <div class="card-title">Riwayat</div>
                 <div class="card-desc">Log pengiriman sebelumnya</div>
             </div>
             <div class="menu-card" onclick="navigateTo('joystick')">
-                <div class="card-icon icon-joystick">🎮</div>
+                <div class="card-icon icon-joystick">${getIcon('joystick', 26)}</div>
                 <div class="card-title">Manual Control</div>
                 <div class="card-desc">Joystick virtual & emergency stop</div>
             </div>
             <div class="menu-card" onclick="navigateTo('settings')">
-                <div class="card-icon icon-settings">⚙️</div>
+                <div class="card-icon icon-settings">${getIcon('settings', 26)}</div>
                 <div class="card-title">Pengaturan</div>
                 <div class="card-desc">Konfigurasi robot & waypoints</div>
             </div>
@@ -239,13 +238,13 @@ function renderDelivery() {
                 </p>
 
                 <div class="mb-8">
-                    <div class="input-label mb-8">📍 Titik Pickup</div>
+                    <div class="input-label mb-8 icon-inline">${getIcon('pickup', 15)} Titik Pickup</div>
                     <div class="waypoint-chips" id="pickup-chips"></div>
                     <div id="pickup-selected" style="font-size:0.78rem; color:var(--accent); font-weight:600; min-height:20px;"></div>
                 </div>
 
                 <div class="mb-12">
-                    <div class="input-label mb-8">🎯 Titik Delivery</div>
+                    <div class="input-label mb-8 icon-inline">${getIcon('delivery_point', 15)} Titik Delivery</div>
                     <div class="waypoint-chips" id="delivery-chips"></div>
                     <div id="delivery-selected" style="font-size:0.78rem; color:var(--success); font-weight:600; min-height:20px;"></div>
                 </div>
@@ -265,7 +264,7 @@ function renderDelivery() {
                 </div>
 
                 <button class="btn btn-primary btn-block btn-sm mt-8" onclick="addTaskToQueue()">
-                    ＋ Tambah ke Antrian
+                    ${getIcon('plus', 16)} Tambah ke Antrian
                 </button>
             </div>
         </div>
@@ -275,13 +274,13 @@ function renderDelivery() {
             <ul class="task-list" id="task-list"></ul>
             <div class="btn-group mt-12" id="delivery-actions">
                 <button class="btn btn-success btn-block" onclick="startDelivery()" id="btn-start-delivery">
-                    🚀 Mulai Delivery
+                    ${getIcon('play', 16)} Mulai Delivery
                 </button>
                 <button class="btn btn-outline" onclick="clearTaskQueue()">Hapus</button>
             </div>
         </div>
 
-        <div class="page-section" id="mission-control-section" class="hidden">
+        <div class="page-section hidden" id="mission-control-section">
             <div class="section-title">Kontrol Misi</div>
             <div class="panel">
                 <div class="text-center mb-8">
@@ -292,12 +291,14 @@ function renderDelivery() {
                 </div>
                 <p style="font-size:0.72rem; color:var(--text-secondary); text-align:center;" id="mission-progress-text"></p>
                 <div class="btn-group mt-12">
-                    <button class="btn btn-warning btn-sm" onclick="controlMission('pause')" id="btn-pause">⏸ Pause</button>
-                    <button class="btn btn-primary btn-sm" onclick="controlMission('resume')" id="btn-resume">▶ Resume</button>
-                    <button class="btn btn-danger btn-sm" onclick="controlMission('cancel')">✕ Cancel</button>
+                    <button class="btn btn-warning btn-sm" onclick="controlMission('pause')" id="btn-pause">${getIcon('pause', 14)} Pause</button>
+                    <button class="btn btn-primary btn-sm" onclick="controlMission('resume')" id="btn-resume">${getIcon('play', 14)} Resume</button>
+                    <button class="btn btn-danger btn-sm" onclick="controlMission('cancel')">${getIcon('x', 14)} Cancel</button>
                 </div>
             </div>
         </div>
+
+        <div class="page-section hidden" id="confirm-action-section"></div>
     `;
 
     // Render setelah DOM ready
@@ -338,13 +339,13 @@ function renderWaypointChips() {
 function selectPredefinedPoint(point, role) {
     if (role === 'pickup') {
         APP.pendingPickup = { name: point.name, x: point.x, y: point.y };
-        document.getElementById('pickup-selected').textContent = `✓ ${point.name} (${point.x}, ${point.y})`;
+        document.getElementById('pickup-selected').innerHTML = `${getIcon('check', 14)} ${point.name} (${point.x}, ${point.y})`;
         // Highlight chip
         document.querySelectorAll('#pickup-chips .wp-chip').forEach(c =>
             c.classList.toggle('selected', c.textContent === point.name));
     } else {
         APP.pendingDelivery = { name: point.name, x: point.x, y: point.y };
-        document.getElementById('delivery-selected').textContent = `✓ ${point.name} (${point.x}, ${point.y})`;
+        document.getElementById('delivery-selected').innerHTML = `${getIcon('check', 14)} ${point.name} (${point.x}, ${point.y})`;
         document.querySelectorAll('#delivery-chips .wp-chip').forEach(c =>
             c.classList.toggle('selected', c.textContent === point.name));
     }
@@ -355,7 +356,7 @@ function setManualAsPickup() {
     const y = parseFloat(document.getElementById('manual-y').value);
     if (isNaN(x) || isNaN(y)) { showToast('Masukkan koordinat X dan Y', 'error'); return; }
     APP.pendingPickup = { name: `(${x}, ${y})`, x, y };
-    document.getElementById('pickup-selected').textContent = `✓ Pickup: (${x}, ${y})`;
+    document.getElementById('pickup-selected').innerHTML = `${getIcon('check', 14)} Pickup: (${x}, ${y})`;
     showToast('Pickup di-set ke koordinat manual', 'info');
 }
 
@@ -364,7 +365,7 @@ function setManualAsDelivery() {
     const y = parseFloat(document.getElementById('manual-y').value);
     if (isNaN(x) || isNaN(y)) { showToast('Masukkan koordinat X dan Y', 'error'); return; }
     APP.pendingDelivery = { name: `(${x}, ${y})`, x, y };
-    document.getElementById('delivery-selected').textContent = `✓ Delivery: (${x}, ${y})`;
+    document.getElementById('delivery-selected').innerHTML = `${getIcon('check', 14)} Delivery: (${x}, ${y})`;
     showToast('Delivery di-set ke koordinat manual', 'info');
 }
 
@@ -418,7 +419,7 @@ function renderTaskList() {
                 <div class="task-route">${task.pickup.name} → ${task.delivery.name}</div>
                 <div class="task-status-text">Menunggu</div>
             </div>
-            <button class="task-remove" onclick="removeTask(${i})">✕</button>
+            <button class="task-remove" onclick="removeTask(${i})">${getIcon('x', 14)}</button>
         </li>
     `).join('');
 }
@@ -437,7 +438,7 @@ async function startDelivery() {
         [
             { label: 'Batal', class: 'btn-outline' },
             {
-                label: '🚀 Mulai!',
+                label: 'Mulai Sekarang',
                 class: 'btn-success',
                 action: async () => {
                     const result = await apiPost('/api/delivery/start', { tasks: APP.taskQueue });
@@ -468,10 +469,14 @@ function updateMissionControlVisibility() {
     section.classList.toggle('hidden', !isActive);
 }
 
+// Track phase terakhir untuk deteksi perubahan fase
+let _lastNotifiedPhase = null;
+
 function updateMissionUI() {
     const badge = document.getElementById('mission-status-badge');
     const progress = document.getElementById('mission-progress');
     const progressText = document.getElementById('mission-progress-text');
+    const confirmSection = document.getElementById('confirm-action-section');
 
     if (!badge) return;
 
@@ -481,71 +486,115 @@ function updateMissionUI() {
 
     if (d.total_tasks > 0) {
         const pct = Math.round((d.completed_tasks / d.total_tasks) * 100);
-        progress.style.width = `${pct}%`;
+        if (progress) progress.style.width = `${pct}%`;
 
         const phaseLabels = {
-            navigating_pickup: '🚗 Menuju titik pickup...',
-            at_pickup: '📍 Tiba di pickup',
-            waiting_pickup: '📦 Menunggu barang dimuat',
-            navigating_delivery: '🚗 Mengantar barang...',
-            at_delivery: '📍 Tiba di delivery',
-            waiting_delivery: '📬 Menunggu barang diambil',
-            idle: '✅ Selesai'
+            navigating_pickup: 'Menuju titik pickup...',
+            at_pickup: 'Tiba di pickup',
+            waiting_pickup: 'Menunggu barang dimuat',
+            navigating_delivery: 'Mengantar barang...',
+            at_delivery: 'Tiba di delivery',
+            waiting_delivery: 'Menunggu barang diambil',
+            returning_home: 'Kembali ke titik awal...',
+            idle: 'Selesai'
         };
-        progressText.textContent = `Task ${(d.current_task_index || 0) + 1}/${d.total_tasks} — ${phaseLabels[d.current_phase] || d.current_phase}`;
+        if (progressText) {
+            progressText.textContent = `Task ${(d.current_task_index || 0) + 1}/${d.total_tasks} — ${phaseLabels[d.current_phase] || d.current_phase}`;
+        }
     }
 
     // === TOMBOL KONFIRMASI ===
-    let confirmSection = document.getElementById('confirm-action-section');
-    const isWaiting = d.current_phase === 'waiting_pickup' || d.current_phase === 'waiting_delivery';
+    const isWaiting = (d.current_phase === 'waiting_pickup' || d.current_phase === 'waiting_delivery');
 
     if (isWaiting && d.status === 'running') {
-        if (!confirmSection) {
-            // Buat section konfirmasi
-            confirmSection = document.createElement('div');
-            confirmSection.id = 'confirm-action-section';
-            confirmSection.className = 'page-section';
-            // Cari tempat untuk insert — setelah mission-control-section
-            const missionCtrl = document.getElementById('mission-control-section');
-            if (missionCtrl && missionCtrl.parentElement) {
-                missionCtrl.parentElement.insertBefore(confirmSection, missionCtrl.nextSibling);
-            }
+        // Notifikasi saat fase baru berubah ke waiting (hanya sekali per transisi)
+        if (_lastNotifiedPhase !== d.current_phase) {
+            _lastNotifiedPhase = d.current_phase;
+            notifyArrival(d.current_phase);
         }
 
+        const taskIdx = d.current_task_index || 0;
+        const taskInfo = d.tasks && d.tasks[taskIdx] ? d.tasks[taskIdx] : null;
+
         if (d.current_phase === 'waiting_pickup') {
-            const taskIdx = d.current_task_index || 0;
-            const taskInfo = d.tasks && d.tasks[taskIdx] ? d.tasks[taskIdx] : null;
             const pickupName = taskInfo ? taskInfo.pickup.name : 'Pickup';
-            confirmSection.innerHTML = `
-                <div class="confirm-card confirm-pickup">
-                    <div class="confirm-icon">📦</div>
-                    <div class="confirm-title">Tiba di ${pickupName}</div>
-                    <div class="confirm-desc">Robot sudah sampai di titik pickup. Tekan tombol di bawah setelah barang dimuat ke robot.</div>
-                    <button class="btn btn-confirm btn-confirm-pickup" onclick="confirmAction('confirm_pickup')">
-                        ✓ Barang Sudah Dimuat
-                    </button>
-                </div>
-            `;
+            if (confirmSection) {
+                confirmSection.classList.remove('hidden');
+                confirmSection.innerHTML = `
+                    <div class="confirm-card confirm-pickup">
+                        <div class="confirm-icon">${getIcon('box', 44)}</div>
+                        <div class="confirm-title">Robot Tiba di ${pickupName}!</div>
+                        <div class="confirm-desc">Robot sudah sampai di titik pickup. Tekan tombol di bawah setelah barang dimuat ke robot.</div>
+                        <button class="btn btn-confirm btn-confirm-pickup" onclick="confirmAction('confirm_pickup')">
+                            ${getIcon('check', 20)} Barang Sudah Dimuat
+                        </button>
+                    </div>
+                `;
+            }
         } else {
-            const taskIdx = d.current_task_index || 0;
-            const taskInfo = d.tasks && d.tasks[taskIdx] ? d.tasks[taskIdx] : null;
             const deliveryName = taskInfo ? taskInfo.delivery.name : 'Delivery';
-            confirmSection.innerHTML = `
-                <div class="confirm-card confirm-delivery">
-                    <div class="confirm-icon">📬</div>
-                    <div class="confirm-title">Tiba di ${deliveryName}</div>
-                    <div class="confirm-desc">Robot sudah sampai di titik delivery. Tekan tombol di bawah setelah barang diambil.</div>
-                    <button class="btn btn-confirm btn-confirm-delivery" onclick="confirmAction('confirm_delivery')">
-                        ✓ Barang Sudah Diambil
-                    </button>
-                </div>
-            `;
+            if (confirmSection) {
+                confirmSection.classList.remove('hidden');
+                confirmSection.innerHTML = `
+                    <div class="confirm-card confirm-delivery">
+                        <div class="confirm-icon">${getIcon('checkCircle', 44)}</div>
+                        <div class="confirm-title">Robot Tiba di ${deliveryName}!</div>
+                        <div class="confirm-desc">Robot sudah sampai di titik delivery. Tekan tombol di bawah setelah barang diambil.</div>
+                        <button class="btn btn-confirm btn-confirm-delivery" onclick="confirmAction('confirm_delivery')">
+                            ${getIcon('check', 20)} Barang Sudah Diambil
+                        </button>
+                    </div>
+                `;
+            }
         }
-    } else if (confirmSection) {
-        confirmSection.remove();
+    } else {
+        // Sembunyikan section konfirmasi
+        if (confirmSection) {
+            confirmSection.classList.add('hidden');
+            confirmSection.innerHTML = '';
+        }
+        // Reset notif tracker saat fase berubah dari waiting
+        if (!isWaiting) {
+            _lastNotifiedPhase = null;
+        }
     }
 
     updateMissionControlVisibility();
+}
+
+function notifyArrival(phase) {
+    // Getarkan HP (jika didukung)
+    if (navigator.vibrate) {
+        navigator.vibrate([200, 100, 200, 100, 200]);
+    }
+    // Mainkan suara notifikasi sederhana via Web Audio API
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value = phase === 'waiting_pickup' ? 880 : 660;
+        osc.type = 'sine';
+        gain.gain.value = 0.3;
+        osc.start();
+        osc.stop(ctx.currentTime + 0.3);
+        setTimeout(() => {
+            const osc2 = ctx.createOscillator();
+            osc2.connect(gain);
+            osc2.frequency.value = phase === 'waiting_pickup' ? 1100 : 880;
+            osc2.type = 'sine';
+            osc2.start();
+            osc2.stop(ctx.currentTime + 0.3);
+        }, 350);
+    } catch (e) {
+        // Audio API tidak tersedia, tidak masalah
+    }
+    // Toast notifikasi
+    const label = phase === 'waiting_pickup'
+        ? 'Robot sudah sampai di pickup! Silakan muat barang.'
+        : 'Robot sudah sampai di tujuan! Silakan ambil barang.';
+    showToast(label, 'success');
 }
 
 async function confirmAction(command) {
@@ -553,9 +602,12 @@ async function confirmAction(command) {
     if (result && result.success) {
         const label = command === 'confirm_pickup' ? 'Pickup dikonfirmasi! Robot lanjut mengantar.' : 'Delivery dikonfirmasi! Task selesai.';
         showToast(label, 'success');
-        // Hapus section konfirmasi
+        // Sembunyikan section konfirmasi
         const sec = document.getElementById('confirm-action-section');
-        if (sec) sec.remove();
+        if (sec) {
+            sec.classList.add('hidden');
+            sec.innerHTML = '';
+        }
     } else {
         showToast('Gagal mengirim konfirmasi', 'error');
     }
@@ -652,7 +704,7 @@ function renderCamera() {
                     <div class="camera-badge"><span class="rec-dot"></span>LIVE</div>
                 </div>
                 <div id="cam-offline" class="flex-center" style="display:none; min-height:250px; color:var(--text-muted); font-size:0.85rem; flex-direction:column; gap:8px;">
-                    <span style="font-size:2rem;">📷</span>
+                    ${getIcon('camera', 36)}
                     Kamera tidak tersedia
                 </div>
             </div>
@@ -675,7 +727,7 @@ function renderCamera() {
         </div>
 
         <div class="page-section">
-            <button class="btn btn-outline btn-block" onclick="captureScreenshot()">📸 Screenshot</button>
+            <button class="btn btn-outline btn-block" onclick="captureScreenshot()">${getIcon('camera', 16)} Screenshot</button>
         </div>
     `;
 
@@ -716,7 +768,7 @@ function renderHistory() {
             </div>
         </div>
         <div class="page-section">
-            <button class="btn btn-danger btn-block btn-sm" onclick="clearHistory()">🗑 Hapus Semua Riwayat</button>
+            <button class="btn btn-danger btn-block btn-sm" onclick="clearHistory()">${getIcon('trash', 15)} Hapus Semua Riwayat</button>
         </div>
     `;
 
@@ -794,7 +846,7 @@ function renderJoystick() {
                     <div class="camera-badge"><span class="rec-dot"></span>LIVE</div>
                 </div>
                 <div class="flex-center" style="display:none; min-height:160px; color:var(--text-muted); font-size:0.8rem; flex-direction:column; gap:6px;">
-                    <span style="font-size:1.5rem;">📷</span> Kamera tidak tersedia
+                    ${getIcon('camera', 28)} Kamera tidak tersedia
                 </div>
             </div>
         </div>
@@ -874,14 +926,14 @@ function renderSettings() {
                     <input class="setting-input" id="set-pause-duration" type="number"
                            step="1" min="0" max="30" value="${s.waypoint_pause_duration || 3}">
                 </div>
-                <button class="btn btn-primary btn-block mt-12" onclick="saveSettings()">💾 Simpan Pengaturan</button>
+                <button class="btn btn-primary btn-block mt-12" onclick="saveSettings()">${getIcon('save', 16)} Simpan Pengaturan</button>
             </div>
         </div>
 
         <div class="page-section">
             <div class="section-title">Titik Tersimpan</div>
             <div class="panel" id="saved-points-list"></div>
-            <button class="btn btn-outline btn-block btn-sm mt-8" onclick="showAddPointModal()">＋ Tambah Titik Baru</button>
+            <button class="btn btn-outline btn-block btn-sm mt-8" onclick="showAddPointModal()">${getIcon('plus', 14)} Tambah Titik Baru</button>
         </div>
 
         <div class="page-section">
@@ -924,10 +976,10 @@ function renderSavedPointsList() {
         <div class="setting-row">
             <div>
                 <div class="setting-label">${p.name}</div>
-                <div class="setting-desc">${p.type === 'pickup' ? '📍 Pickup' : '🎯 Delivery'} — (${p.x}, ${p.y})</div>
+                <div class="setting-desc icon-inline">${p.type === 'pickup' ? getIcon('pickup', 13) + ' Pickup' : getIcon('delivery_point', 13) + ' Delivery'} — (${p.x}, ${p.y})</div>
             </div>
             <button class="btn btn-outline btn-sm" style="padding:6px 10px; font-size:0.7rem;"
-                    onclick="deletePoint('${p.name}')">✕</button>
+                    onclick="deletePoint('${p.name}')">${getIcon('trash', 14)}</button>
         </div>
     `).join('');
 }
@@ -1067,8 +1119,11 @@ async function globalStatusPoll() {
             homeStatus.textContent = st;
 
             const phaseLabels = {
-                idle: 'Siap', navigating_pickup: 'Menuju Pickup', at_pickup: 'Di Pickup',
-                navigating_delivery: 'Menuju Tujuan', at_delivery: 'Di Tujuan'
+                idle: 'Siap', navigating_pickup: 'Menuju Pickup',
+                waiting_pickup: 'Menunggu Muat', at_pickup: 'Di Pickup',
+                navigating_delivery: 'Menuju Tujuan',
+                waiting_delivery: 'Menunggu Ambil', at_delivery: 'Di Tujuan',
+                returning_home: 'Kembali ke Titik Awal'
             };
             const homePhase = document.getElementById('home-phase');
             if (homePhase) homePhase.textContent = phaseLabels[APP.delivery.current_phase] || APP.delivery.current_phase;

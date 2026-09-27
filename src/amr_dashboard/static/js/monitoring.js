@@ -47,8 +47,8 @@ function getHumanStatusLabel(status) {
         'NO_HUMAN': 'Aman',
         'IDLE': 'Manusia (Diam)',
         'WALKING': 'Manusia (Berjalan)',
-        'DISTURBING': '⚠ Menghalangi!',
-        'CALLING': '✋ Memanggil',
+        'DISTURBING': 'Menghalangi',
+        'CALLING': 'Memanggil',
         'CALIBRATION': 'Kalibrasi...'
     };
     return labels[status] || status;
@@ -68,7 +68,7 @@ function checkStatusAlerts(newStatus) {
     if (newStatus === lastDeliveryStatus) return;
 
     if (newStatus === 'completed' && lastDeliveryStatus === 'running') {
-        showToast('🎉 Misi selesai! Semua task berhasil.', 'success');
+        showToast('Misi selesai! Semua task berhasil.', 'success');
         vibrateAlert([200, 100, 200, 100, 200]);
     } else if (newStatus === 'cancelled') {
         showToast('Misi dibatalkan.', 'error');

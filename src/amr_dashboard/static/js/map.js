@@ -265,20 +265,20 @@ async function initDeliveryMap() {
              Tetapkan sebagai apa?`,
             [
                 {
-                    label: '📍 Pickup', class: 'btn-primary',
+                    label: 'Set Pickup', class: 'btn-primary',
                     action: () => {
                         APP.pendingPickup = { name: `Peta (${wx}, ${wy})`, x: wx, y: wy };
                         const el = document.getElementById('pickup-selected');
-                        if (el) el.textContent = `✓ Pickup: (${wx}, ${wy})`;
+                        if (el) el.innerHTML = `${getIcon('check', 14)} Pickup: (${wx}, ${wy})`;
                         showToast(`Pickup: (${wx}, ${wy})`, 'info');
                     }
                 },
                 {
-                    label: '🎯 Delivery', class: 'btn-success',
+                    label: 'Set Delivery', class: 'btn-success',
                     action: () => {
                         APP.pendingDelivery = { name: `Peta (${wx}, ${wy})`, x: wx, y: wy };
                         const el = document.getElementById('delivery-selected');
-                        if (el) el.textContent = `✓ Delivery: (${wx}, ${wy})`;
+                        if (el) el.innerHTML = `${getIcon('check', 14)} Delivery: (${wx}, ${wy})`;
                         showToast(`Delivery: (${wx}, ${wy})`, 'info');
                     }
                 }

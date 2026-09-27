@@ -315,12 +315,25 @@ body::before {
 }
 
 /* Card icon backgrounds */
-.icon-delivery { background: linear-gradient(135deg, rgba(0, 212, 255, 0.15), rgba(0, 212, 255, 0.05)); }
-.icon-monitor { background: linear-gradient(135deg, rgba(0, 255, 136, 0.15), rgba(0, 255, 136, 0.05)); }
-.icon-camera { background: linear-gradient(135deg, rgba(168, 85, 247, 0.15), rgba(168, 85, 247, 0.05)); }
-.icon-history { background: linear-gradient(135deg, rgba(255, 170, 0, 0.15), rgba(255, 170, 0, 0.05)); }
-.icon-joystick { background: linear-gradient(135deg, rgba(255, 68, 102, 0.15), rgba(255, 68, 102, 0.05)); }
-.icon-settings { background: linear-gradient(135deg, rgba(120, 140, 180, 0.15), rgba(120, 140, 180, 0.05)); }
+.icon-delivery { background: linear-gradient(135deg, rgba(0, 212, 255, 0.15), rgba(0, 212, 255, 0.05)); color: var(--accent); }
+.icon-monitor { background: linear-gradient(135deg, rgba(0, 255, 136, 0.15), rgba(0, 255, 136, 0.05)); color: #00ff88; }
+.icon-camera { background: linear-gradient(135deg, rgba(168, 85, 247, 0.15), rgba(168, 85, 247, 0.05)); color: #a855f7; }
+.icon-history { background: linear-gradient(135deg, rgba(255, 170, 0, 0.15), rgba(255, 170, 0, 0.05)); color: #ffaa00; }
+.icon-joystick { background: linear-gradient(135deg, rgba(255, 68, 102, 0.15), rgba(255, 68, 102, 0.05)); color: #ff4466; }
+.icon-settings { background: linear-gradient(135deg, rgba(120, 140, 180, 0.15), rgba(120, 140, 180, 0.05)); color: #94a3b8; }
+
+/* === APP ICON SYSTEM === */
+.app-icon {
+    display: inline-block;
+    vertical-align: middle;
+    flex-shrink: 0;
+}
+
+.icon-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
 
 /* === SUBPAGE LAYOUT === */
 .page-section {
