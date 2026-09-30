@@ -24,6 +24,8 @@ setup(
         (os.path.join('share', package_name, 'static', 'js'), glob('static/js/*.js')),
         # Static assets
         (os.path.join('share', package_name, 'static', 'assets'), glob('static/assets/*')),
+        # Audio cache (TTS)
+        (os.path.join('share', package_name, 'static', 'audio_cache'), glob('static/audio_cache/*')),
     ],
     install_requires=['setuptools', 'flask'],
     zip_safe=True,

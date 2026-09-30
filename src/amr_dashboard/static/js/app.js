@@ -509,7 +509,7 @@ function handleDeliveryStatusUpdate(d) {
         if (isNewPhase) {
             _lastNotifiedPhase = d.current_phase;
             _modalDismissedForCurrentPhase = false;
-            notifyArrival(d.current_phase);
+            notifyArrival(d.current_phase, d);
             // Jika berada di halaman lain (camera, monitoring, dsb), langsung munculkan modal pop-up konfirmasi
             if (APP.currentPage !== 'delivery') {
                 showArrivalModal(d);
@@ -745,37 +745,179 @@ function updateMissionUI() {
     updateMissionControlVisibility();
 }
 
-function notifyArrival(phase) {
+// ====================== AUDIO & NOTIFICATION SYSTEM ======================
+function getSoundMode() {
+    return localStorage.getItem('amr_sound_mode') || (APP.settings && APP.settings.arrival_sound_mode) || 'human';
+}
+
+function setSoundMode(mode) {
+    localStorage.setItem('amr_sound_mode', mode);
+    if (APP.settings) {
+        APP.settings.arrival_sound_mode = mode;
+    }
+}
+
+// Browser Autoplay Policy unlocker
+function unlockAudioContext() {
+    try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextClass) {
+            const tempCtx = new AudioContextClass();
+            if (tempCtx.state === 'suspended') {
+                tempCtx.resume();
+            }
+        }
+        if ('speechSynthesis' in window) {
+            window.speechSynthesis.getVoices();
+        }
+    } catch (e) {}
+    document.removeEventListener('click', unlockAudioContext);
+    document.removeEventListener('touchstart', unlockAudioContext);
+}
+document.addEventListener('click', unlockAudioContext);
+document.addEventListener('touchstart', unlockAudioContext);
+
+// Synthesized clean notification chime (Web Audio API)
+function playChimeSound(type = 'waiting_pickup') {
+    try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+        const ctx = new AudioContextClass();
+        if (ctx.state === 'suspended') {
+            ctx.resume();
+        }
+
+        const now = ctx.currentTime;
+        // Pickup: nada ceria 2-tingkat (E5 -> A5)
+        // Delivery / chime: nada melodi 3-tingkat selesai (C5 -> G5 -> C6)
+        const notes = type === 'waiting_pickup'
+            ? [659.25, 880.0]
+            : [523.25, 783.99, 1046.5];
+
+        notes.forEach((freq, idx) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, now + idx * 0.16);
+
+            // Volume envelope: smooth attack & decay
+            gain.gain.setValueAtTime(0.001, now + idx * 0.16);
+            gain.gain.linearRampToValueAtTime(0.25, now + idx * 0.16 + 0.03);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.16 + 0.45);
+
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+
+            osc.start(now + idx * 0.16);
+            osc.stop(now + idx * 0.16 + 0.5);
+        });
+    } catch (e) {
+        console.warn('AudioContext error:', e);
+    }
+}
+
+let _currentAudio = null;
+
+// Human Voice Text-To-Speech (Google Translate TTS dengan fallback ke Web Speech API)
+function speakHumanVoice(text) {
+    if (!text) return;
+
+    try {
+        // Hentikan audio sebelumnya jika masih berputar
+        if (_currentAudio) {
+            _currentAudio.pause();
+            _currentAudio.currentTime = 0;
+            _currentAudio = null;
+        }
+
+        // Putar audio Google Translate via backend /api/tts
+        const audioUrl = `/api/tts?text=${encodeURIComponent(text)}`;
+        const audio = new Audio(audioUrl);
+        _currentAudio = audio;
+
+        audio.play().catch(err => {
+            console.warn('Gagal memutar audio /api/tts, mencoba fallback Web Speech:', err);
+            fallbackWebSpeech(text);
+        });
+    } catch (e) {
+        console.warn('Error saat memutar audio TTS:', e);
+        fallbackWebSpeech(text);
+    }
+}
+
+function fallbackWebSpeech(text) {
+    if (!('speechSynthesis' in window)) return;
+    try {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'id-ID';
+        utterance.rate = 0.95;
+        const voices = window.speechSynthesis.getVoices();
+        const idVoice = voices.find(v => v.lang === 'id-ID' || v.lang.startsWith('id'));
+        if (idVoice) utterance.voice = idVoice;
+        window.speechSynthesis.speak(utterance);
+    } catch (e) {}
+}
+
+// Pre-load voices on voice changed
+if ('speechSynthesis' in window) {
+    window.speechSynthesis.onvoiceschanged = () => {
+        try { window.speechSynthesis.getVoices(); } catch (e) {}
+    };
+}
+
+function notifyArrival(phase, deliveryData) {
     if (navigator.vibrate) {
         navigator.vibrate([200, 100, 200, 100, 200]);
     }
-    try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.frequency.value = phase === 'waiting_pickup' ? 880 : 660;
-        osc.type = 'sine';
-        gain.gain.value = 0.3;
-        osc.start();
-        osc.stop(ctx.currentTime + 0.3);
+
+    const d = deliveryData || APP.delivery;
+    const isPickup = (phase === 'waiting_pickup');
+    const taskIdx = (d && d.current_task_index) || 0;
+    const taskInfo = (d && d.tasks && d.tasks[taskIdx]) ? d.tasks[taskIdx] : null;
+    const pointName = isPickup
+        ? (taskInfo && taskInfo.pickup ? taskInfo.pickup.name : '')
+        : (taskInfo && taskInfo.delivery ? taskInfo.delivery.name : '');
+
+    // Siapkan teks pemberitahuan
+    const speechText = isPickup
+        ? (pointName ? `Robot sudah tiba di titik pickup ${pointName}. Silakan muat barang.` : 'Robot sudah sampai di titik pickup. Silakan muat barang.')
+        : (pointName ? `Robot sudah tiba di titik tujuan ${pointName}. Silakan ambil barang.` : 'Robot sudah sampai di titik tujuan. Silakan ambil barang.');
+
+    const toastLabel = isPickup
+        ? (pointName ? `Robot tiba di pickup: ${pointName}! Silakan muat barang.` : 'Robot sudah sampai di pickup! Silakan muat barang.')
+        : (pointName ? `Robot tiba di tujuan: ${pointName}! Silakan ambil barang.` : 'Robot sudah sampai di tujuan! Silakan ambil barang.');
+
+    showToast(toastLabel, 'success');
+
+    // Eksekusi audio berdasarkan preferensi user
+    const mode = getSoundMode();
+    if (mode === 'mute') {
+        return;
+    } else if (mode === 'chime') {
+        playChimeSound(phase);
+    } else if (mode === 'human') {
+        speakHumanVoice(speechText);
+    } else if (mode === 'both') {
+        playChimeSound(phase);
         setTimeout(() => {
-            const osc2 = ctx.createOscillator();
-            osc2.connect(gain);
-            osc2.frequency.value = phase === 'waiting_pickup' ? 1100 : 880;
-            osc2.type = 'sine';
-            osc2.start();
-            osc2.stop(ctx.currentTime + 0.3);
-        }, 350);
-    } catch (e) {
-        // Audio API tidak tersedia di browser tertentu
+            speakHumanVoice(speechText);
+        }, 550);
     }
-    const label = phase === 'waiting_pickup'
-        ? 'Robot sudah sampai di pickup! Silakan muat barang.'
-        : 'Robot sudah sampai di tujuan! Silakan ambil barang.';
-    showToast(label, 'success');
 }
+
+function testArrivalSound(phase) {
+    const fakeData = {
+        current_task_index: 0,
+        tasks: [{
+            pickup: { name: 'Rak 1A' },
+            delivery: { name: 'Meja 2' }
+        }]
+    };
+    notifyArrival(phase, fakeData);
+}
+
 
 async function confirmAction(command) {
     const result = await apiPost('/api/delivery/control', { command });
@@ -1295,7 +1437,8 @@ function renderSettings() {
     const div = document.createElement('div');
     div.className = 'page-enter';
 
-    const s = APP.settings;
+    const s = APP.settings || {};
+    const currentSoundMode = getSoundMode();
 
     div.innerHTML = `
         <div class="page-section">
@@ -1326,6 +1469,36 @@ function renderSettings() {
                            step="1" min="0" max="30" value="${s.waypoint_pause_duration || 3}">
                 </div>
                 <button class="btn btn-primary btn-block mt-12" onclick="saveSettings()">${getIcon('save', 16)} Simpan Pengaturan</button>
+            </div>
+        </div>
+
+        <div class="page-section">
+            <div class="section-title">Notifikasi Suara Kedatangan</div>
+            <div class="panel">
+                <div class="setting-row">
+                    <div>
+                        <div class="setting-label">Tipe Suara</div>
+                        <div class="setting-desc">Pemberitahuan saat tiba di titik pickup & deliver</div>
+                    </div>
+                    <select class="input-field" id="set-sound-mode" onchange="setSoundMode(this.value)"
+                            style="width: auto; min-width: 195px; padding: 7px 12px; font-size: 0.8rem; cursor: pointer;">
+                        <option value="human" ${currentSoundMode === 'human' ? 'selected' : ''}>🗣️ Suara Manusia (TTS)</option>
+                        <option value="chime" ${currentSoundMode === 'chime' ? 'selected' : ''}>🔔 Suara Notifikasi Biasa</option>
+                        <option value="both" ${currentSoundMode === 'both' ? 'selected' : ''}>🎵 Keduanya (Chime + Suara)</option>
+                        <option value="mute" ${currentSoundMode === 'mute' ? 'selected' : ''}>🔇 Senyap (Mute)</option>
+                    </select>
+                </div>
+                <div class="setting-row" style="flex-wrap: wrap; gap: 8px;">
+                    <div>
+                        <div class="setting-label">Uji Coba Suara</div>
+                        <div class="setting-desc">Dengarkan contoh suara notifikasi di browser</div>
+                    </div>
+                    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                        <button type="button" class="btn btn-outline btn-sm" onclick="testArrivalSound('waiting_pickup')">🔊 Tes Pickup</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="testArrivalSound('waiting_delivery')">🔊 Tes Deliver</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="playChimeSound('waiting_pickup')">🔔 Tes Chime</button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -1384,10 +1557,14 @@ function renderSavedPointsList() {
 }
 
 async function saveSettings() {
+    const soundMode = document.getElementById('set-sound-mode')?.value || getSoundMode();
+    setSoundMode(soundMode);
+
     const data = {
         max_linear_speed: parseFloat(document.getElementById('set-max-linear').value) || 0.7,
         max_angular_speed: parseFloat(document.getElementById('set-max-angular').value) || 0.9,
-        waypoint_pause_duration: parseInt(document.getElementById('set-pause-duration').value) || 3
+        waypoint_pause_duration: parseInt(document.getElementById('set-pause-duration').value) || 3,
+        arrival_sound_mode: soundMode
     };
     const result = await apiPost('/api/settings', data);
     if (result && result.success) {

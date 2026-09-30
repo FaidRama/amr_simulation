@@ -8,7 +8,13 @@ predefined_points:
   type: pickup
   x: -6
   y: 10
+- description: ''
+  name: Ruang 1B
+  type: delivery
+  x: -17
+  y: 3
 settings:
+  arrival_sound_mode: human
   auto_return_home: true
   max_angular_speed: 0.9
   max_linear_speed: 1.4

@@ -14,6 +14,9 @@ import math
 import sqlite3
 import threading
 import signal
+import hashlib
+import urllib.request
+import urllib.parse
 from datetime import datetime
 from io import BytesIO
 
@@ -72,6 +75,8 @@ def find_package_path():
 PKG_PATH = find_package_path()
 TEMPLATE_DIR = os.path.join(PKG_PATH, 'templates')
 STATIC_DIR = os.path.join(PKG_PATH, 'static')
+AUDIO_CACHE_DIR = os.path.join(STATIC_DIR, 'audio_cache')
+os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
 
 # Cari path peta dari package amr_simulation
 MAP_PGM_PATH = None
@@ -588,6 +593,41 @@ def api_set_settings():
         pass
     
     return jsonify({'success': True, 'settings': waypoints_config['settings']})
+
+
+@app.route('/api/tts')
+def api_tts():
+    """Endpoint Google Translate Text-To-Speech (suara alami) dengan caching lokal offline."""
+    text = request.args.get('text', '').strip()
+    if not text:
+        return jsonify({'error': 'Parameter text tidak boleh kosong'}), 400
+
+    if len(text) > 300:
+        text = text[:300]
+
+    # Hash nama file untuk caching lokal
+    text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
+    cache_file = os.path.join(AUDIO_CACHE_DIR, f'{text_hash}.mp3')
+
+    # Jika file sudah ada di cache lokal, kirim langsung
+    if os.path.exists(cache_file) and os.path.getsize(cache_file) > 0:
+        return send_file(cache_file, mimetype='audio/mpeg')
+
+    # Unduh dari Google Translate TTS jika belum ada di cache
+    try:
+        url = 'https://translate.google.com/translate_tts?ie=UTF-8&tl=id&client=tw-ob&q=' + urllib.parse.quote(text)
+        req = urllib.request.Request(
+            url,
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            audio_bytes = resp.read()
+            with open(cache_file, 'wb') as f:
+                f.write(audio_bytes)
+            return Response(audio_bytes, mimetype='audio/mpeg')
+    except Exception as e:
+        print(f'[WARN] Gagal mengunduh audio Google TTS: {e}')
+        return jsonify({'error': str(e)}), 500
 
 
 _placeholder_jpeg_cache = None
