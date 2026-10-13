@@ -5,13 +5,15 @@ from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition
+from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg_amr_simulation = get_package_share_directory('amr_simulation')
 
-    # Deklarasi argumen: mode "slam" (untuk bikin peta) atau "nav" (untuk navigasi A*)
+    # Deklarasi argumen
     slam_arg = DeclareLaunchArgument('slam', default_value='False', description='Jalankan SLAM untuk mapping')
     nav_arg = DeclareLaunchArgument('nav', default_value='True', description='Jalankan Navigasi A*')
+    human_arg = DeclareLaunchArgument('human', default_value='True', description='Jalankan Human Awareness System (Vision AI)')
 
     # Path ke file launch masing-masing
     gazebo_launch_path = os.path.join(pkg_amr_simulation, 'launch', 'gazebo.launch.py')
@@ -35,10 +37,26 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('nav'))
     )
 
+    # 4. Jalankan Human Awareness Node (Vision AI)
+    human_node = Node(
+        package='amr_simulation',
+        executable='human_awareness_node.py',
+        output='screen',
+        parameters=[{
+            'image_topic': '/camera_sensor/image_raw',
+            'model_path': '/home/faid/Documents/amr_ws/yolov8n-pose.pt',
+            'show_window': False,
+            'conf': 0.4
+        }],
+        condition=IfCondition(LaunchConfiguration('human'))
+    )
+
     return LaunchDescription([
         slam_arg,
         nav_arg,
+        human_arg,
         start_gazebo,
         start_slam,
-        start_nav
+        start_nav,
+        human_node
     ])

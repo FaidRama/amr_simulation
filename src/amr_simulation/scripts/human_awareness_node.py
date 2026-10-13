@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
@@ -16,15 +17,37 @@ class Human_Awareness_Node(Node):
         """
         super().__init__('human_awareness_system_node')
         
-        # 1. PUSTAKA AI & MEMORI TEMPORAL (Kodemu)
-        # Sesuai target model, pastikan file .pt ada di folder workspace atau berikan path absolut
-        self.model = YOLO("yolov8n-pose.pt")
+        # 1. PARAMETER SISTEM
+        self.declare_parameter('image_topic', '/camera_sensor/image_raw')
+        self.declare_parameter('model_path', '/home/faid/Documents/amr_ws/yolov8n-pose.pt')
+        self.declare_parameter('show_window', False)
+        self.declare_parameter('conf', 0.4)
+
+        image_topic = self.get_parameter('image_topic').value
+        model_path = self.get_parameter('model_path').value
+        self.show_window = self.get_parameter('show_window').value
+        self.conf_threshold = float(self.get_parameter('conf').value)
+
+        # Fallback pencarian model yolov8n-pose.pt jika path tidak valid
+        if not os.path.exists(model_path):
+            candidates = [
+                os.path.join(os.getcwd(), 'yolov8n-pose.pt'),
+                os.path.expanduser('~/Documents/amr_ws/yolov8n-pose.pt'),
+                'yolov8n-pose.pt'
+            ]
+            for c in candidates:
+                if os.path.exists(c):
+                    model_path = c
+                    break
+
+        self.get_logger().info(f"Memuat model AI YOLO: {model_path}")
+        self.model = YOLO(model_path)
         self.posisi_history = {}
         self.missing_count = {}
         
         # Hyperparameters Sistem
         self.treshold_gerakan = 30       
-        self.kp_conf_treshold = 0.6      
+        self.kp_conf_treshold = 0.4      
         self.max_missing_frames = 45     
 
         # 2. INFRASTRUKTUR JEMBATAN ROS 2
@@ -33,15 +56,18 @@ class Human_Awareness_Node(Node):
         # Subscriber: Mengambil gambar aktif dari GPU rendering Gazebo
         self.image_sub = self.create_subscription(
             Image,
-            '/camera/image_raw',
+            image_topic,
             self.image_callback,
             10)
             
-        # Publisher: Melempar status perilaku hasil inferensi AI ke Node FSM
+        # Publisher: Melempar status perilaku hasil inferensi AI ke Node FSM / Dashboard
         self.status_pub = self.create_publisher(String, '/human_status', 10)
+
+        # Publisher: Mengirim gambar dengan visualisasi bounding box & pose skeleton
+        self.annotated_pub = self.create_publisher(Image, '/camera/image_annotated', 10)
         
         self.get_logger().info("====================================================")
-        self.get_logger().info("NODE EDGE AI: Human Awareness System AKTIF & MEMANTAU")
+        self.get_logger().info(f"NODE EDGE AI: Human Awareness System AKTIF & MEMANTAU ({image_topic})")
         self.get_logger().info("====================================================")
 
     def clean_stale_tracks(self, active_ids):
@@ -101,7 +127,7 @@ class Human_Awareness_Node(Node):
             return
 
         # Jalankan tracking model YOLOv8-pose
-        results = self.model.track(frame, persist=True, conf=0.6, verbose=False)
+        results = self.model.track(frame, persist=True, conf=self.conf_threshold, verbose=False)
         active_ids = set()
         
         # Variabel penampung keputusan akhir untuk di-publish ke FSM
@@ -215,14 +241,27 @@ class Human_Awareness_Node(Node):
         # 4. MANAJEMEN MEMORI & PUBLIKASI DATA KE ROS 2
         self.clean_stale_tracks(active_ids)
         
-        # Kirim string keputusan akhir ke topik FSM
+        # Kirim string keputusan akhir ke topik FSM / Dashboard
         fsm_msg = String()
         fsm_msg.data = final_fsm_decision
         self.status_pub.publish(fsm_msg)
         
-        # Opsional: Tampilkan window OpenCV di WSL jika mau dipamerkan saat demo
-        cv2.imshow("Monitor Edge AI - AMR Core", frame)
-        cv2.waitKey(1)
+        # Publish annotated frame jika ada subscriber
+        if self.annotated_pub.get_subscription_count() > 0:
+            try:
+                annotated_msg = self.bridge.cv2_to_imgmsg(frame, encoding='bgr8')
+                annotated_msg.header = msg.header
+                self.annotated_pub.publish(annotated_msg)
+            except Exception as e:
+                self.get_logger().warn(f"Gagal publish annotated image: {e}")
+
+        # Opsional: Tampilkan window OpenCV jika show_window diaktifkan
+        if self.show_window:
+            try:
+                cv2.imshow("Monitor Edge AI - AMR Core", frame)
+                cv2.waitKey(1)
+            except Exception:
+                pass
 
 def main(args=None):
     rclpy.init(args=args)

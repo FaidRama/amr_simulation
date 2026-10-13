@@ -220,10 +220,13 @@ class DashboardNode(Node):
         if HAS_CAMERA:
             self.bridge = CvBridge()
             self.last_cam_time = 0
+            self.last_annotated_time = 0
             self.cam_sub = self.create_subscription(
                 Image, '/camera/image_raw', self.on_camera, 10)
             self.cam_sub_sensor = self.create_subscription(
                 Image, '/camera_sensor/image_raw', self.on_camera, 10)
+            self.cam_sub_annotated = self.create_subscription(
+                Image, '/camera/image_annotated', self.on_annotated_camera, 10)
         
         # Timer untuk cek stale status (jika waypoint_manager mati)
         self.stale_timer = self.create_timer(3.0, self.check_stale_status)
@@ -299,8 +302,19 @@ class DashboardNode(Node):
         with self.lock:
             self.human_status = msg.data
     
+    def on_annotated_camera(self, msg):
+        """Callback kamera ber-anotasi AI (YOLO pose & bounding box)."""
+        self.last_annotated_time = time.time()
+        self.process_camera_frame(msg)
+
     def on_camera(self, msg):
-        """Callback kamera — convert ke JPEG untuk streaming."""
+        """Callback kamera raw — abaikan jika stream ber-anotasi AI sedang aktif."""
+        if time.time() - getattr(self, 'last_annotated_time', 0) < 1.5:
+            return
+        self.process_camera_frame(msg)
+
+    def process_camera_frame(self, msg):
+        """Convert ROS Image ke JPEG untuk web streaming."""
         now = time.time()
         if now - self.last_cam_time < 0.03:  # Throttle ~30 FPS
             return
