@@ -24,7 +24,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CompressedImage
 from std_msgs.msg import String
 from nav_msgs.msg import OccupancyGrid, Odometry
 import numpy as np
@@ -222,11 +222,13 @@ class DashboardNode(Node):
             self.last_cam_time = 0
             self.last_annotated_time = 0
             self.cam_sub = self.create_subscription(
-                Image, '/camera/image_raw', self.on_camera, 10)
+                Image, '/camera/image_raw', self.on_camera, 1)
             self.cam_sub_sensor = self.create_subscription(
-                Image, '/camera_sensor/image_raw', self.on_camera, 10)
+                Image, '/camera_sensor/image_raw', self.on_camera, 1)
             self.cam_sub_annotated = self.create_subscription(
-                Image, '/camera/image_annotated', self.on_annotated_camera, 10)
+                Image, '/camera/image_annotated', self.on_annotated_camera, 1)
+            self.cam_sub_comp = self.create_subscription(
+                CompressedImage, '/camera/image_raw/compressed', self.on_compressed_camera, 1)
         
         # Timer untuk cek stale status (jika waypoint_manager mati)
         self.stale_timer = self.create_timer(3.0, self.check_stale_status)
@@ -307,8 +309,22 @@ class DashboardNode(Node):
         self.last_annotated_time = time.time()
         self.process_camera_frame(msg)
 
+    def on_compressed_camera(self, msg):
+        """Callback kamera terkompresi JPEG langsung dari robot (ultra-ringan bandwidth)."""
+        self.last_comp_time = time.time()
+        if time.time() - getattr(self, 'last_annotated_time', 0) < 1.5:
+            return
+        now = time.time()
+        if now - self.last_cam_time < 0.03:
+            return
+        self.last_cam_time = now
+        with self.lock:
+            self.latest_frame = bytes(msg.data)
+
     def on_camera(self, msg):
-        """Callback kamera raw — abaikan jika stream ber-anotasi AI sedang aktif."""
+        """Callback kamera raw — abaikan jika stream compressed atau annotated aktif."""
+        if time.time() - getattr(self, 'last_comp_time', 0) < 2.0:
+            return
         if time.time() - getattr(self, 'last_annotated_time', 0) < 1.5:
             return
         self.process_camera_frame(msg)
@@ -670,18 +686,22 @@ def api_camera_stream():
         return jsonify({'error': 'Kamera tidak tersedia'}), 503
     
     def generate():
+        last_sent = None
         while True:
             with ros_node.lock:
                 frame = ros_node.latest_frame
             if frame:
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+                if frame != last_sent:
+                    last_sent = frame
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
             else:
-                # Kirim placeholder JPEG valid
                 placeholder = get_placeholder_frame()
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + placeholder + b'\r\n')
-            time.sleep(0.033)  # ~30 FPS mulus
+                if placeholder != last_sent:
+                    last_sent = placeholder
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + placeholder + b'\r\n')
+            time.sleep(0.015)
     
     return Response(generate(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
