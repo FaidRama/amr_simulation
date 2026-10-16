@@ -175,31 +175,35 @@ class ArduinoBridgeNode(Node):
             self.prev_left_ticks = left_ticks
             self.prev_right_ticks = right_ticks
             self.prev_odom_time = now
-            return
+            self.get_logger().info(
+                f"Paket Encoder pertama diterima (L={left_ticks}, R={right_ticks}) -> Topik /odom mulai dipublish!"
+            )
 
         dt = (now - self.prev_odom_time).nanoseconds / 1e9
         if dt <= 0.0001:
-            return
+            d_left = 0.0
+            d_right = 0.0
+            vx = 0.0
+            wz = 0.0
+        else:
+            d_left = (left_ticks - self.prev_left_ticks) * self.meters_per_tick
+            d_right = (right_ticks - self.prev_right_ticks) * self.meters_per_tick
+            self.prev_left_ticks = left_ticks
+            self.prev_right_ticks = right_ticks
+            self.prev_odom_time = now
 
-        d_left = (left_ticks - self.prev_left_ticks) * self.meters_per_tick
-        d_right = (right_ticks - self.prev_right_ticks) * self.meters_per_tick
+            # Jarak rata-rata dan perubahan sudut orientasi (yaw)
+            d_center = (d_right + d_left) / 2.0
+            d_yaw = (d_right - d_left) / self.wheel_separation
 
-        self.prev_left_ticks = left_ticks
-        self.prev_right_ticks = right_ticks
-        self.prev_odom_time = now
+            # Integrasi Runge-Kutta orde 2 (Midpoint)
+            mid_yaw = self.yaw + (d_yaw / 2.0)
+            self.x += d_center * math.cos(mid_yaw)
+            self.y += d_center * math.sin(mid_yaw)
+            self.yaw = math.atan2(math.sin(self.yaw + d_yaw), math.cos(self.yaw + d_yaw))
 
-        # Jarak rata-rata dan perubahan sudut orientasi (yaw)
-        d_center = (d_right + d_left) / 2.0
-        d_yaw = (d_right - d_left) / self.wheel_separation
-
-        # Integrasi Runge-Kutta orde 2 (Midpoint)
-        mid_yaw = self.yaw + (d_yaw / 2.0)
-        self.x += d_center * math.cos(mid_yaw)
-        self.y += d_center * math.sin(mid_yaw)
-        self.yaw = math.atan2(math.sin(self.yaw + d_yaw), math.cos(self.yaw + d_yaw))
-
-        vx = d_center / dt
-        wz = d_yaw / dt
+            vx = d_center / dt
+            wz = d_yaw / dt
 
         qx, qy, qz, qw = euler_to_quaternion(self.yaw)
         stamp = now.to_msg()
