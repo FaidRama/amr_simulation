@@ -35,6 +35,7 @@ install(PROGRAMS
   scripts/human_awareness_node.py
   scripts/astar_benchmark.py
   scripts/hitung_jarak_astar.py
+  scripts/camera_publisher.py
   scripts/arduino_bridge.py
   DESTINATION lib/${PROJECT_NAME}
 )
