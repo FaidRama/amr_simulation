@@ -1,7 +1,121 @@
 /* =================================================================
-   AMR DELIVERY DASHBOARD — Main Application (SPA Router)
-   Handles page navigation, state management, and API calls.
+   AMR-01 // CONTROL STUDIO — Main Application (SPA Router & Theme Engine)
+   Handles page navigation, state management, theme system, and API calls.
    ================================================================= */
+
+// ====================== CURATED THEME REGISTRY ======================
+const STUDIO_THEMES = [
+    {
+        id: 'nordic-slate',
+        name: 'Nordic Slate',
+        desc: 'Soft Eye-Care Dark',
+        bg: '#11151f',
+        card: '#181e2c',
+        accent: '#3b82f6',
+        secondary: '#38bdf8',
+        success: '#10b981'
+    },
+    {
+        id: 'tokyo-night',
+        name: 'Tokyo Night',
+        desc: 'Deep Indigo & Lavender',
+        bg: '#16161e',
+        card: '#1a1b26',
+        accent: '#7aa2f7',
+        secondary: '#bb9af7',
+        success: '#73daca'
+    },
+    {
+        id: 'catppuccin-mocha',
+        name: 'Catppuccin Mocha',
+        desc: 'Warm Cozy Espresso',
+        bg: '#181825',
+        card: '#1e1e2e',
+        accent: '#89b4fa',
+        secondary: '#cba6f7',
+        success: '#a6e3a1'
+    },
+    {
+        id: 'emerald-forest',
+        name: 'Emerald Forest',
+        desc: 'Calm Botanical Pine',
+        bg: '#0d1514',
+        card: '#13201e',
+        accent: '#10b981',
+        secondary: '#34d399',
+        success: '#2dd4bf'
+    },
+    {
+        id: 'tactical-amber',
+        name: 'Tactical Amber',
+        desc: 'Avionics Carbon & Gold',
+        bg: '#121311',
+        card: '#191b18',
+        accent: '#f59e0b',
+        secondary: '#fbbf24',
+        success: '#22c55e'
+    },
+    {
+        id: 'swiss-daylight',
+        name: 'Swiss Daylight',
+        desc: 'Clean Industrial Light',
+        bg: '#f1f5f9',
+        card: '#ffffff',
+        accent: '#2563eb',
+        secondary: '#0ea5e9',
+        success: '#059669'
+    }
+];
+
+function getTheme() {
+    const saved = localStorage.getItem('amr_theme') || (APP.settings && APP.settings.theme) || 'nordic-slate';
+    return STUDIO_THEMES.some(t => t.id === saved) ? saved : 'nordic-slate';
+}
+
+function applyTheme(themeId, silent = false) {
+    const themeObj = STUDIO_THEMES.find(t => t.id === themeId) || STUDIO_THEMES[0];
+    document.documentElement.setAttribute('data-theme', themeObj.id);
+    localStorage.setItem('amr_theme', themeObj.id);
+
+    if (APP.settings) {
+        APP.settings.theme = themeObj.id;
+    }
+
+    // Update topbar label
+    const topLabel = document.getElementById('topbar-theme-label');
+    if (topLabel) {
+        topLabel.textContent = themeObj.name;
+    }
+
+    // Update active state on theme cards if on Config page
+    document.querySelectorAll('.theme-card').forEach(card => {
+        card.classList.toggle('active', card.dataset.themeId === themeObj.id);
+    });
+
+    // Redraw canvases if visible so colors match new theme immediately
+    if (typeof drawSpeedHistoryChart === 'function') {
+        drawSpeedHistoryChart();
+    }
+    if (typeof window.redrawJoystick === 'function') {
+        window.redrawJoystick();
+    }
+
+    if (!silent) {
+        showToast(`Tema diterapkan: ${themeObj.name}`, 'info');
+    }
+}
+
+function cycleTheme() {
+    const current = getTheme();
+    const idx = STUDIO_THEMES.findIndex(t => t.id === current);
+    const next = STUDIO_THEMES[(idx + 1) % STUDIO_THEMES.length];
+    applyTheme(next.id, false);
+}
+
+window.STUDIO_THEMES = STUDIO_THEMES;
+window.getTheme = getTheme;
+window.applyTheme = applyTheme;
+window.cycleTheme = cycleTheme;
 
 // ====================== STATE ======================
 const APP = {
@@ -13,10 +127,10 @@ const APP = {
     savedPoints: [],
     homePosition: { x: 0, y: 0, yaw: 0 },
     settings: {},
-    // Delivery task builder
-    taskQueue: [],       // [{pickup: {name,x,y}, delivery: {name,x,y}}, ...]
-    selectingFor: null,  // 'pickup' or 'delivery'
+    taskQueue: [],
+    selectingFor: null,
     pendingPickup: null,
+    pendingDelivery: null,
     statusPollTimer: null,
 };
 
@@ -50,16 +164,17 @@ async function apiPost(url, data) {
 // ====================== TOAST ======================
 function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
+    if (!container) return;
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
     const iconName = type === 'success' ? 'checkCircle' : (type === 'error' ? 'xCircle' : 'info');
-    toast.innerHTML = `<span class="icon-inline">${getIcon(iconName, 18)}</span><span>${message}</span>`;
+    toast.innerHTML = `<span class="icon-inline">${getIcon(iconName, 16)}</span><span>${message}</span>`;
     container.appendChild(toast);
     setTimeout(() => {
         toast.style.opacity = '0';
-        toast.style.transform = 'translateY(10px)';
-        toast.style.transition = '0.3s ease';
-        setTimeout(() => toast.remove(), 300);
+        toast.style.transform = 'translateY(8px)';
+        toast.style.transition = '0.25s ease';
+        setTimeout(() => toast.remove(), 250);
     }, 3000);
 }
 
@@ -99,24 +214,22 @@ function navigateTo(page) {
     const backBtn = document.getElementById('btn-back');
     const titleEl = document.getElementById('page-title');
 
-    // Update topbar
     if (page === 'home') {
         backBtn.classList.add('hidden');
-        titleEl.textContent = 'AMR Dashboard';
+        titleEl.textContent = 'Mission Overview';
     } else {
         backBtn.classList.remove('hidden');
         const titles = {
-            delivery: 'Kontrol Delivery',
-            monitoring: 'Pusat Pemantauan',
-            camera: 'View Kamera',
-            history: 'Riwayat Delivery',
-            joystick: 'Manual Control',
-            settings: 'Pengaturan'
+            delivery: 'Delivery Dispatch',
+            monitoring: 'Cockpit Telemetry',
+            camera: 'Optical Camera Stream',
+            history: 'Mission Logs',
+            joystick: 'Manual Teleop',
+            settings: 'System Configuration'
         };
         titleEl.textContent = titles[page] || page;
     }
 
-    // Update active state in sidebar and mobile nav
     document.querySelectorAll('#app-sidebar .nav-item').forEach(item => {
         item.classList.toggle('active', item.dataset.page === page);
     });
@@ -124,13 +237,14 @@ function navigateTo(page) {
         item.classList.toggle('active', item.dataset.page === page);
     });
 
-    // Stop previous polling
     if (APP.statusPollTimer) {
         clearInterval(APP.statusPollTimer);
         APP.statusPollTimer = null;
     }
+    if (typeof stopAllMapLoops === 'function') {
+        stopAllMapLoops();
+    }
 
-    // Render page
     const renderers = {
         home: renderHome,
         delivery: renderDelivery,
@@ -144,89 +258,219 @@ function navigateTo(page) {
     if (renderers[page]) {
         content.innerHTML = '';
         content.appendChild(renderers[page]());
-        content.querySelector('.page-enter')?.classList.add('page-enter');
     }
 
-    // Sinkronkan status kedatangan / banner / popup di halaman baru
     if (typeof handleDeliveryStatusUpdate === 'function' && APP.delivery) {
         handleDeliveryStatusUpdate(APP.delivery);
     }
 }
 
-// ====================== PAGE: HOME ======================
+// ====================== PAGE: HOME (MISSION & TELEMETRY OVERVIEW) ======================
 function renderHome() {
     const div = document.createElement('div');
     div.className = 'page-enter';
 
     const statusText = APP.delivery.status === 'running'
-        ? `Task ${(APP.delivery.current_task_index || 0) + 1}/${APP.delivery.total_tasks || 0}`
-        : (APP.delivery.status === 'idle' ? 'Standby' : APP.delivery.status);
+        ? `TASK ${(APP.delivery.current_task_index || 0) + 1}/${APP.delivery.total_tasks || 0}`
+        : (APP.delivery.status === 'idle' ? 'STANDBY' : String(APP.delivery.status).toUpperCase());
 
     const phaseLabels = {
-        idle: 'Siap',
-        navigating_pickup: 'Menuju Pickup',
+        idle: 'Siap Menerima Tugas',
+        navigating_pickup: 'Menuju Titik Pickup',
         waiting_pickup: 'Menunggu Muat Barang',
-        at_pickup: 'Di Pickup',
-        navigating_delivery: 'Menuju Tujuan',
+        at_pickup: 'Tiba di Pickup',
+        navigating_delivery: 'Menuju Titik Tujuan',
         waiting_delivery: 'Menunggu Ambil Barang',
-        at_delivery: 'Di Tujuan',
-        returning_home: 'Kembali ke Titik Awal'
+        at_delivery: 'Tiba di Tujuan',
+        returning_home: 'Kembali ke Home Base'
     };
 
+    const yawDeg = ((APP.pose.yaw || 0) * 180 / Math.PI).toFixed(1);
+    const humanReadable = APP.humanStatus === 'NO_HUMAN' ? 'CLEAR (AMAN)' : APP.humanStatus;
+    const activeTasksCount = (APP.delivery.status === 'running' && APP.delivery.total_tasks)
+        ? APP.delivery.total_tasks
+        : APP.taskQueue.length;
+
     div.innerHTML = `
-        <div class="home-header">
-            <h1>AMR Delivery</h1>
-            <p>Kontrol & monitoring robot pengiriman</p>
-        </div>
-
-        <div class="home-status-bar">
-            <div class="status-chip">
-                <div class="chip-label">Status</div>
-                <div class="chip-value" id="home-status">${statusText}</div>
+        <div class="studio-overview-header">
+            <div>
+                <div class="studio-title-tag">${getIcon('terminal', 13)} SYS // OVERVIEW</div>
+                <h1>Mission & Telemetry Overview</h1>
+                <p>Pusat kendali utama, peta SLAM real-time, dan direktori operasi unit AMR-01</p>
             </div>
-            <div class="status-chip">
-                <div class="chip-label">Fase</div>
-                <div class="chip-value" id="home-phase">${phaseLabels[APP.delivery.current_phase] || APP.delivery.current_phase}</div>
-            </div>
-            <div class="status-chip">
-                <div class="chip-label">Posisi</div>
-                <div class="chip-value" id="home-pos">${APP.pose.x.toFixed(1)}, ${APP.pose.y.toFixed(1)}</div>
+            <div class="studio-header-actions">
+                <button class="btn btn-outline btn-sm" onclick="navigateTo('monitoring')">
+                    ${getIcon('activity', 15)} Buka Cockpit
+                </button>
+                <button class="btn btn-primary btn-sm" onclick="navigateTo('delivery')">
+                    ${getIcon('plus', 15)} Dispatch Baru
+                </button>
             </div>
         </div>
 
-        <div class="menu-grid">
-            <div class="menu-card" onclick="navigateTo('delivery')">
-                <div class="card-icon icon-delivery">${getIcon('delivery', 26)}</div>
-                <div class="card-title">Kontrol Delivery</div>
-                <div class="card-desc">Atur titik pickup & tujuan pengiriman</div>
+        <!-- 4-Card KPI Telemetry Strip -->
+        <div class="overview-kpi-grid">
+            <div class="kpi-card">
+                <div class="kpi-top">
+                    <span>01 // STATUS MISI</span>
+                    ${getIcon('activity', 14)}
+                </div>
+                <div class="kpi-main" id="home-status">${statusText}</div>
+                <div class="kpi-sub">
+                    <span>FASE</span>
+                    <span class="text-accent" id="home-phase">${phaseLabels[APP.delivery.current_phase] || APP.delivery.current_phase}</span>
+                </div>
             </div>
-            <div class="menu-card" onclick="navigateTo('monitoring')">
-                <div class="card-icon icon-monitor">${getIcon('monitor', 26)}</div>
-                <div class="card-title">Monitoring</div>
-                <div class="card-desc">Posisi AMR & status real-time</div>
+
+            <div class="kpi-card">
+                <div class="kpi-top">
+                    <span>02 // POSE (X, Y)</span>
+                    ${getIcon('crosshair', 14)}
+                </div>
+                <div class="kpi-main" id="home-pos">${APP.pose.x.toFixed(2)}, ${APP.pose.y.toFixed(2)}</div>
+                <div class="kpi-sub">
+                    <span>HEADING YAW</span>
+                    <span class="text-accent" id="home-yaw">${yawDeg}°</span>
+                </div>
             </div>
-            <div class="menu-card" onclick="navigateTo('camera')">
-                <div class="card-icon icon-camera">${getIcon('camera', 26)}</div>
-                <div class="card-title">View Kamera</div>
-                <div class="card-desc">Live feed kamera robot</div>
+
+            <div class="kpi-card">
+                <div class="kpi-top">
+                    <span>03 // AI SAFETY</span>
+                    ${getIcon('shield', 14)}
+                </div>
+                <div class="kpi-main text-emerald" id="home-human">${humanReadable}</div>
+                <div class="kpi-sub">
+                    <span>SENSOR</span>
+                    <span class="text-emerald">LIDAR + VISION OK</span>
+                </div>
             </div>
-            <div class="menu-card" onclick="navigateTo('history')">
-                <div class="card-icon icon-history">${getIcon('history', 26)}</div>
-                <div class="card-title">Riwayat</div>
-                <div class="card-desc">Log pengiriman sebelumnya</div>
+
+            <div class="kpi-card">
+                <div class="kpi-top">
+                    <span>04 // TASK QUEUE</span>
+                    ${getIcon('package', 14)}
+                </div>
+                <div class="kpi-main"><span id="home-queue-count">${activeTasksCount}</span> <span style="font-size:0.75rem; color:var(--text-muted); font-weight:500;">TASK</span></div>
+                <div class="kpi-sub">
+                    <span>WAYPOINTS</span>
+                    <span>${APP.savedPoints.length} Tersimpan</span>
+                </div>
             </div>
-            <div class="menu-card" onclick="navigateTo('joystick')">
-                <div class="card-icon icon-joystick">${getIcon('joystick', 26)}</div>
-                <div class="card-title">Manual Control</div>
-                <div class="card-desc">Joystick virtual & emergency stop</div>
+        </div>
+
+        <!-- Main 2-Column Overview Grid -->
+        <div class="overview-main-grid">
+            <!-- LEFT: Live SLAM Map Preview & 1-Click Quick Dispatch -->
+            <div class="studio-panel">
+                <div class="studio-panel-header">
+                    <div class="studio-panel-title">
+                        ${getIcon('map', 15)} LIVE 2D SLAM RADAR & QUICK DISPATCH
+                    </div>
+                    <button class="btn btn-outline btn-sm" style="padding:3px 9px; font-size:0.68rem;" onclick="navigateTo('delivery')">
+                        Buka Full Dispatch ${getIcon('chevronRight', 13)}
+                    </button>
+                </div>
+                <div class="studio-panel-body">
+                    <div class="map-container" style="margin-bottom: 12px;">
+                        <canvas id="home-map-canvas"></canvas>
+                        <div class="map-legend">
+                            <span class="legend-pickup">Pickup</span>
+                            <span class="legend-delivery">Delivery</span>
+                            <span class="legend-robot">AMR-01</span>
+                        </div>
+                    </div>
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+                        <span class="input-label">1-Click Quick Dispatch Target</span>
+                        <span class="mono" style="font-size:0.66rem; color:var(--text-muted);">Klik untuk kirim langsung</span>
+                    </div>
+                    <div class="quick-dispatch-grid" id="home-dispatch-grid"></div>
+                </div>
             </div>
-            <div class="menu-card" onclick="navigateTo('settings')">
-                <div class="card-icon icon-settings">${getIcon('settings', 26)}</div>
-                <div class="card-title">Pengaturan</div>
-                <div class="card-desc">Konfigurasi robot & waypoints</div>
+
+            <!-- RIGHT: Studio Control Modules -->
+            <div class="studio-panel">
+                <div class="studio-panel-header">
+                    <div class="studio-panel-title">
+                        ${getIcon('layers', 15)} DIREKTORI MODUL KONTROL
+                    </div>
+                    <span class="mono" style="font-size:0.66rem; color:var(--text-muted);">6 MODUL</span>
+                </div>
+                <div class="studio-panel-body">
+                    <div class="module-list">
+                        <div class="module-row" onclick="navigateTo('monitoring')">
+                            <span class="module-index">01</span>
+                            <div class="module-icon-box">${getIcon('activity', 18)}</div>
+                            <div class="module-info">
+                                <div class="module-name">Cockpit Telemetry</div>
+                                <div class="module-desc">Dual viewport (Kamera + Peta), speedometer, & grafik kecepatan</div>
+                            </div>
+                            <span class="module-arrow">${getIcon('chevronRight', 16)}</span>
+                        </div>
+
+                        <div class="module-row" onclick="navigateTo('delivery')">
+                            <span class="module-index">02</span>
+                            <div class="module-icon-box">${getIcon('delivery', 18)}</div>
+                            <div class="module-info">
+                                <div class="module-name">Delivery Dispatch</div>
+                                <div class="module-desc">Susun antrean pickup & tujuan pengiriman multi-waypoint</div>
+                            </div>
+                            <span class="module-arrow">${getIcon('chevronRight', 16)}</span>
+                        </div>
+
+                        <div class="module-row" onclick="navigateTo('camera')">
+                            <span class="module-index">03</span>
+                            <div class="module-icon-box">${getIcon('video', 18)}</div>
+                            <div class="module-info">
+                                <div class="module-name">Optical Camera Stream</div>
+                                <div class="module-desc">Live feed kamera robot, status deteksi manusia, & tangkapan layar</div>
+                            </div>
+                            <span class="module-arrow">${getIcon('chevronRight', 16)}</span>
+                        </div>
+
+                        <div class="module-row" onclick="navigateTo('joystick')">
+                            <span class="module-index">04</span>
+                            <div class="module-icon-box">${getIcon('compass', 18)}</div>
+                            <div class="module-info">
+                                <div class="module-name">Manual Teleop</div>
+                                <div class="module-desc">Kendali langsung via virtual radar joystick & tombol darurat</div>
+                            </div>
+                            <span class="module-arrow">${getIcon('chevronRight', 16)}</span>
+                        </div>
+
+                        <div class="module-row" onclick="navigateTo('history')">
+                            <span class="module-index">05</span>
+                            <div class="module-icon-box">${getIcon('clock', 18)}</div>
+                            <div class="module-info">
+                                <div class="module-name">Mission Logs</div>
+                                <div class="module-desc">Tabel catatan waktu dan status riwayat pengiriman selesai</div>
+                            </div>
+                            <span class="module-arrow">${getIcon('chevronRight', 16)}</span>
+                        </div>
+
+                        <div class="module-row" onclick="navigateTo('settings')">
+                            <span class="module-index">06</span>
+                            <div class="module-icon-box">${getIcon('sliders', 18)}</div>
+                            <div class="module-info">
+                                <div class="module-name">System Configuration & Themes</div>
+                                <div class="module-desc">Pilih tema warna studio, batas kecepatan, audio TTS, & waypoint</div>
+                            </div>
+                            <span class="module-arrow">${getIcon('chevronRight', 16)}</span>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     `;
+
+    setTimeout(() => {
+        if (typeof initMonitorMap === 'function') {
+            initMonitorMap('home-map-canvas');
+        }
+        if (typeof renderQuickDispatchChips === 'function') {
+            renderQuickDispatchChips('home-dispatch-grid');
+        }
+    }, 50);
 
     return div;
 }
@@ -237,90 +481,108 @@ function renderDelivery() {
     div.className = 'page-enter';
 
     div.innerHTML = `
-        <div class="page-section">
-            <div class="section-title">Peta & Titik Tujuan</div>
-            <div class="map-container" id="delivery-map-container">
-                <canvas id="delivery-map-canvas"></canvas>
-                <div class="map-legend">
-                    <span class="legend-pickup">Pickup</span>
-                    <span class="legend-delivery">Delivery</span>
-                    <span class="legend-robot">Robot</span>
-                </div>
-            </div>
-        </div>
-
-        <div class="page-section">
-            <div class="section-title">Tambah Task</div>
-            <div class="panel">
-                <p style="font-size:0.75rem; color:var(--text-secondary); margin-bottom:10px;">
-                    Pilih titik pickup, lalu titik delivery. Atau tap langsung di peta.
-                </p>
-
-                <div class="mb-8">
-                    <div class="input-label mb-8 icon-inline">${getIcon('pickup', 15)} Titik Pickup</div>
-                    <div class="waypoint-chips" id="pickup-chips"></div>
-                    <div id="pickup-selected" style="font-size:0.78rem; color:var(--accent); font-weight:600; min-height:20px;"></div>
-                </div>
-
-                <div class="mb-12">
-                    <div class="input-label mb-8 icon-inline">${getIcon('delivery_point', 15)} Titik Delivery</div>
-                    <div class="waypoint-chips" id="delivery-chips"></div>
-                    <div id="delivery-selected" style="font-size:0.78rem; color:var(--success); font-weight:600; min-height:20px;"></div>
-                </div>
-
-                <div class="input-label mb-8">Atau masukkan koordinat manual:</div>
-                <div class="input-row mb-8">
-                    <div class="input-group" style="margin-bottom:0">
-                        <input class="input-field" id="manual-x" type="number" step="0.1" placeholder="X">
+        <div class="studio-two-col">
+            <!-- LEFT COLUMN: Interactive SLAM Map & Active Mission Control -->
+            <div>
+                <div class="page-section">
+                    <div class="section-title">
+                        <span>01 // PETA SLAM & TITIK TUJUAN</span>
+                        <span>KLIK PETA UNTUK SET TITIK</span>
                     </div>
-                    <div class="input-group" style="margin-bottom:0">
-                        <input class="input-field" id="manual-y" type="number" step="0.1" placeholder="Y">
+                    <div class="map-container" id="delivery-map-container">
+                        <canvas id="delivery-map-canvas"></canvas>
+                        <div class="map-legend">
+                            <span class="legend-pickup">Pickup</span>
+                            <span class="legend-delivery">Delivery</span>
+                            <span class="legend-robot">AMR-01</span>
+                        </div>
                     </div>
                 </div>
-                <div class="btn-group mb-8">
-                    <button class="btn btn-outline btn-sm" onclick="setManualAsPickup()">Set Pickup</button>
-                    <button class="btn btn-outline btn-sm" onclick="setManualAsDelivery()">Set Delivery</button>
-                </div>
 
-                <button class="btn btn-primary btn-block btn-sm mt-8" onclick="addTaskToQueue()">
-                    ${getIcon('plus', 16)} Tambah ke Antrian
-                </button>
-            </div>
-        </div>
+                <div class="page-section hidden" id="confirm-action-section"></div>
 
-        <div class="page-section">
-            <div class="section-title">Antrian Task (<span id="task-count">${APP.taskQueue.length}</span>)</div>
-            <ul class="task-list" id="task-list"></ul>
-            <div class="btn-group mt-12" id="delivery-actions">
-                <button class="btn btn-success btn-block" onclick="startDelivery()" id="btn-start-delivery">
-                    ${getIcon('play', 16)} Mulai Delivery
-                </button>
-                <button class="btn btn-outline" onclick="clearTaskQueue()">Hapus</button>
-            </div>
-        </div>
-
-        <div class="page-section hidden" id="mission-control-section">
-            <div class="section-title">Kontrol Misi</div>
-            <div class="panel">
-                <div class="text-center mb-8">
-                    <span class="status-badge" id="mission-status-badge">IDLE</span>
-                </div>
-                <div class="progress-bar">
-                    <div class="progress-fill" id="mission-progress" style="width:0%"></div>
-                </div>
-                <p style="font-size:0.72rem; color:var(--text-secondary); text-align:center;" id="mission-progress-text"></p>
-                <div class="btn-group mt-12">
-                    <button class="btn btn-warning btn-sm" onclick="controlMission('pause')" id="btn-pause">${getIcon('pause', 14)} Pause</button>
-                    <button class="btn btn-primary btn-sm" onclick="controlMission('resume')" id="btn-resume">${getIcon('play', 14)} Resume</button>
-                    <button class="btn btn-danger btn-sm" onclick="controlMission('cancel')">${getIcon('x', 14)} Cancel</button>
+                <div class="page-section hidden" id="mission-control-section">
+                    <div class="section-title">02 // KONTROL MISI AKTIF</div>
+                    <div class="panel">
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                            <span class="input-label">STATUS EKSEKUSI</span>
+                            <span class="status-badge" id="mission-status-badge">IDLE</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="mission-progress" style="width:0%"></div>
+                        </div>
+                        <p class="mono" style="font-size:0.72rem; color:var(--text-secondary); margin-top:6px;" id="mission-progress-text"></p>
+                        <div class="btn-group mt-12">
+                            <button class="btn btn-warning btn-sm" onclick="controlMission('pause')" id="btn-pause">${getIcon('pause', 14)} Pause</button>
+                            <button class="btn btn-primary btn-sm" onclick="controlMission('resume')" id="btn-resume">${getIcon('play', 14)} Resume</button>
+                            <button class="btn btn-danger btn-sm" onclick="controlMission('cancel')">${getIcon('x', 14)} Cancel</button>
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
 
-        <div class="page-section hidden" id="confirm-action-section"></div>
+            <!-- RIGHT COLUMN: Task Builder & Queue -->
+            <div>
+                <div class="page-section">
+                    <div class="section-title">03 // KONFIGURASI TASK BARU</div>
+                    <div class="panel">
+                        <p style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:12px;">
+                            Pilih titik pickup & tujuan dari daftar waypoint atau klik langsung pada peta 2D.
+                        </p>
+
+                        <div class="mb-12">
+                            <div class="input-label mb-8 icon-inline">${getIcon('pickup', 14)} Titik Pickup</div>
+                            <div class="waypoint-chips" id="pickup-chips"></div>
+                            <div id="pickup-selected" class="mono" style="font-size:0.75rem; color:var(--accent-bright); font-weight:600; min-height:18px;"></div>
+                        </div>
+
+                        <div class="mb-12">
+                            <div class="input-label mb-8 icon-inline">${getIcon('delivery_point', 14)} Titik Delivery</div>
+                            <div class="waypoint-chips" id="delivery-chips"></div>
+                            <div id="delivery-selected" class="mono" style="font-size:0.75rem; color:var(--success); font-weight:600; min-height:18px;"></div>
+                        </div>
+
+                        <div style="border-top:1px solid var(--border-subtle); padding-top:12px; margin-top:8px;">
+                            <div class="input-label mb-8">Input Koordinat Manual (Meter)</div>
+                            <div class="input-row mb-8">
+                                <div class="input-group" style="margin-bottom:0">
+                                    <input class="input-field" id="manual-x" type="number" step="0.1" placeholder="Koordinat X">
+                                </div>
+                                <div class="input-group" style="margin-bottom:0">
+                                    <input class="input-field" id="manual-y" type="number" step="0.1" placeholder="Koordinat Y">
+                                </div>
+                            </div>
+                            <div class="btn-group mb-8">
+                                <button class="btn btn-outline btn-sm" onclick="setManualAsPickup()">Set Pickup</button>
+                                <button class="btn btn-outline btn-sm" onclick="setManualAsDelivery()">Set Delivery</button>
+                            </div>
+                        </div>
+
+                        <button class="btn btn-primary btn-block mt-8" onclick="addTaskToQueue()">
+                            ${getIcon('plus', 15)} Tambah ke Antrean
+                        </button>
+                    </div>
+                </div>
+
+                <div class="page-section">
+                    <div class="section-title">
+                        <span>04 // ANTREAN PENGIRIMAN</span>
+                        <span id="task-count">${APP.taskQueue.length} TASK</span>
+                    </div>
+                    <div class="panel">
+                        <ul class="task-list" id="task-list"></ul>
+                        <div class="btn-group mt-12" id="delivery-actions">
+                            <button class="btn btn-success btn-block" onclick="startDelivery()" id="btn-start-delivery">
+                                ${getIcon('play', 15)} Eksekusi Misi
+                            </button>
+                            <button class="btn btn-outline" onclick="clearTaskQueue()">Reset</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     `;
 
-    // Render setelah DOM ready
     setTimeout(() => {
         renderWaypointChips();
         renderTaskList();
@@ -358,13 +620,12 @@ function renderWaypointChips() {
 function selectPredefinedPoint(point, role) {
     if (role === 'pickup') {
         APP.pendingPickup = { name: point.name, x: point.x, y: point.y };
-        document.getElementById('pickup-selected').innerHTML = `${getIcon('check', 14)} ${point.name} (${point.x}, ${point.y})`;
-        // Highlight chip
+        document.getElementById('pickup-selected').innerHTML = `${getIcon('check', 13)} ${point.name} [${point.x}, ${point.y}]`;
         document.querySelectorAll('#pickup-chips .wp-chip').forEach(c =>
             c.classList.toggle('selected', c.textContent === point.name));
     } else {
         APP.pendingDelivery = { name: point.name, x: point.x, y: point.y };
-        document.getElementById('delivery-selected').innerHTML = `${getIcon('check', 14)} ${point.name} (${point.x}, ${point.y})`;
+        document.getElementById('delivery-selected').innerHTML = `${getIcon('check', 13)} ${point.name} [${point.x}, ${point.y}]`;
         document.querySelectorAll('#delivery-chips .wp-chip').forEach(c =>
             c.classList.toggle('selected', c.textContent === point.name));
     }
@@ -375,7 +636,7 @@ function setManualAsPickup() {
     const y = parseFloat(document.getElementById('manual-y').value);
     if (isNaN(x) || isNaN(y)) { showToast('Masukkan koordinat X dan Y', 'error'); return; }
     APP.pendingPickup = { name: `(${x}, ${y})`, x, y };
-    document.getElementById('pickup-selected').innerHTML = `${getIcon('check', 14)} Pickup: (${x}, ${y})`;
+    document.getElementById('pickup-selected').innerHTML = `${getIcon('check', 13)} Pickup: [${x}, ${y}]`;
     showToast('Pickup di-set ke koordinat manual', 'info');
 }
 
@@ -384,13 +645,13 @@ function setManualAsDelivery() {
     const y = parseFloat(document.getElementById('manual-y').value);
     if (isNaN(x) || isNaN(y)) { showToast('Masukkan koordinat X dan Y', 'error'); return; }
     APP.pendingDelivery = { name: `(${x}, ${y})`, x, y };
-    document.getElementById('delivery-selected').innerHTML = `${getIcon('check', 14)} Delivery: (${x}, ${y})`;
+    document.getElementById('delivery-selected').innerHTML = `${getIcon('check', 13)} Delivery: [${x}, ${y}]`;
     showToast('Delivery di-set ke koordinat manual', 'info');
 }
 
 function addTaskToQueue() {
-    if (!APP.pendingPickup) { showToast('Pilih titik pickup dulu!', 'error'); return; }
-    if (!APP.pendingDelivery) { showToast('Pilih titik delivery dulu!', 'error'); return; }
+    if (!APP.pendingPickup) { showToast('Pilih titik pickup terlebih dahulu', 'error'); return; }
+    if (!APP.pendingDelivery) { showToast('Pilih titik delivery terlebih dahulu', 'error'); return; }
 
     APP.taskQueue.push({
         pickup: { ...APP.pendingPickup },
@@ -400,13 +661,12 @@ function addTaskToQueue() {
     APP.pendingPickup = null;
     APP.pendingDelivery = null;
 
-    // Reset UI
     document.getElementById('pickup-selected').textContent = '';
     document.getElementById('delivery-selected').textContent = '';
     document.querySelectorAll('.wp-chip').forEach(c => c.classList.remove('selected'));
 
     renderTaskList();
-    showToast(`Task ditambahkan (total: ${APP.taskQueue.length})`, 'success');
+    showToast(`Task ditambahkan (${APP.taskQueue.length} dalam antrean)`, 'success');
 }
 
 function removeTask(index) {
@@ -417,26 +677,26 @@ function removeTask(index) {
 function clearTaskQueue() {
     APP.taskQueue = [];
     renderTaskList();
-    showToast('Antrian dihapus', 'info');
+    showToast('Antrean dikosongkan', 'info');
 }
 
 function renderTaskList() {
     const list = document.getElementById('task-list');
     const countEl = document.getElementById('task-count');
     if (!list) return;
-    if (countEl) countEl.textContent = APP.taskQueue.length;
+    if (countEl) countEl.textContent = `${APP.taskQueue.length} TASK`;
 
     if (APP.taskQueue.length === 0) {
-        list.innerHTML = '<li class="history-empty">Belum ada task. Tambahkan titik pickup & delivery.</li>';
+        list.innerHTML = '<li class="history-empty">Antrean kosong. Tambahkan pasangan titik pickup & delivery.</li>';
         return;
     }
 
     list.innerHTML = APP.taskQueue.map((task, i) => `
         <li class="task-item">
-            <span class="task-number">${i + 1}</span>
+            <span class="task-number">${String(i + 1).padStart(2, '0')}</span>
             <div class="task-info">
                 <div class="task-route">${task.pickup.name} → ${task.delivery.name}</div>
-                <div class="task-status-text">Menunggu</div>
+                <div class="task-status-text">QUEUED // MENUNGGU EKSEKUSI</div>
             </div>
             <button class="task-remove" onclick="removeTask(${i})">${getIcon('x', 14)}</button>
         </li>
@@ -445,15 +705,15 @@ function renderTaskList() {
 
 async function startDelivery() {
     if (APP.taskQueue.length === 0) {
-        showToast('Tambahkan task dulu!', 'error');
+        showToast('Tambahkan minimal 1 task ke antrean', 'error');
         return;
     }
 
     showModal(
-        'Mulai Delivery?',
-        `<p>AMR akan memulai misi dengan <strong>${APP.taskQueue.length} task</strong>.</p>
+        'Eksekusi Misi Pengiriman?',
+        `<p>Unit AMR-01 akan mengeksekusi <strong>${APP.taskQueue.length} task</strong> secara berurutan.</p>
          <p style="margin-top:8px; font-size:0.75rem; color:var(--text-muted);">
-         Robot akan bergerak ke setiap titik pickup, lalu mengantar ke tujuan masing-masing.</p>`,
+         Pastikan jalur navigasi bebas dari hambatan statis sebelum memulai.</p>`,
         [
             { label: 'Batal', class: 'btn-outline' },
             {
@@ -462,7 +722,7 @@ async function startDelivery() {
                 action: async () => {
                     const result = await apiPost('/api/delivery/start', { tasks: APP.taskQueue });
                     if (result && result.success) {
-                        showToast('Misi dimulai!', 'success');
+                        showToast('Misi pengiriman dimulai!', 'success');
                         updateMissionControlVisibility();
                     } else {
                         showToast('Gagal memulai misi', 'error');
@@ -476,7 +736,7 @@ async function startDelivery() {
 async function controlMission(command) {
     const result = await apiPost('/api/delivery/control', { command });
     if (result && result.success) {
-        const labels = { pause: 'Misi di-pause', resume: 'Misi dilanjutkan', cancel: 'Misi dibatalkan', skip: 'Task di-skip' };
+        const labels = { pause: 'Misi dijeda', resume: 'Misi dilanjutkan', cancel: 'Misi dibatalkan', skip: 'Task dilewati' };
         showToast(labels[command] || command, command === 'cancel' ? 'error' : 'info');
         if (command === 'cancel') {
             _modalDismissedForCurrentPhase = false;
@@ -493,7 +753,6 @@ function updateMissionControlVisibility() {
     section.classList.toggle('hidden', !isActive);
 }
 
-// Track phase & modal status untuk notifikasi kedatangan
 let _lastNotifiedPhase = null;
 let _modalDismissedForCurrentPhase = false;
 
@@ -510,33 +769,27 @@ function handleDeliveryStatusUpdate(d) {
             _lastNotifiedPhase = d.current_phase;
             _modalDismissedForCurrentPhase = false;
             notifyArrival(d.current_phase, d);
-            // Jika berada di halaman lain (camera, monitoring, dsb), langsung munculkan modal pop-up konfirmasi
             if (APP.currentPage !== 'delivery') {
                 showArrivalModal(d);
             }
         }
 
-        // Tampilkan floating banner di semua halaman selain halaman delivery
         if (APP.currentPage !== 'delivery') {
             updateGlobalMissionBanner(d);
             if (!_modalDismissedForCurrentPhase) {
                 showArrivalModal(d);
             }
         } else {
-            // Di halaman delivery, sembunyikan modal/banner agar fokus ke card di halaman
             hideGlobalMissionBanner();
             hideArrivalModal();
         }
 
-        // Update in-page card jika sedang di halaman delivery
         if (APP.currentPage === 'delivery') {
             updateInPageConfirmCard(d);
         }
     } else {
-        if (!isWaiting) {
-            _lastNotifiedPhase = null;
-            _modalDismissedForCurrentPhase = false;
-        }
+        _lastNotifiedPhase = null;
+        _modalDismissedForCurrentPhase = false;
         hideArrivalModal();
         hideGlobalMissionBanner();
         if (APP.currentPage === 'delivery') {
@@ -566,34 +819,34 @@ function showArrivalModal(d) {
         : (taskInfo && taskInfo.delivery ? taskInfo.delivery.name : 'Titik Tujuan');
 
     box.className = isPickup ? 'arrival-box-pickup' : 'arrival-box-delivery';
-    if (iconEl) iconEl.innerHTML = isPickup ? getIcon('box', 36) : getIcon('checkCircle', 36);
+    if (iconEl) iconEl.innerHTML = isPickup ? getIcon('box', 28) : getIcon('checkCircle', 28);
 
     if (titleEl) {
         titleEl.textContent = isPickup
-            ? `Robot Tiba di Pickup: ${pointName}!`
-            : `Robot Tiba di Tujuan: ${pointName}!`;
+            ? `Tiba di Pickup: ${pointName}`
+            : `Tiba di Tujuan: ${pointName}`;
     }
 
     if (descEl) {
         descEl.textContent = isPickup
-            ? 'Robot sudah sampai di titik pickup dan siap dimuat. Silakan muat barang ke robot lalu tekan konfirmasi.'
-            : 'Robot sudah sampai di titik tujuan pengantaran. Silakan ambil barang dari robot lalu tekan konfirmasi.';
+            ? 'Unit AMR-01 telah tiba di titik pickup dan siap dimuat. Muat barang ke kompartemen lalu tekan konfirmasi.'
+            : 'Unit AMR-01 telah tiba di titik tujuan. Silakan ambil barang lalu tekan konfirmasi penyelesaian.';
     }
 
     const cmd = isPickup ? 'confirm_pickup' : 'confirm_delivery';
-    const btnLabel = isPickup ? 'Barang Sudah Dimuat' : 'Barang Sudah Diambil';
+    const btnLabel = isPickup ? 'Konfirmasi Barang Dimuat' : 'Konfirmasi Barang Diambil';
     const btnClass = isPickup ? 'btn-confirm-pickup' : 'btn-confirm-delivery';
 
     if (actionsEl) {
         actionsEl.innerHTML = `
             <button class="btn btn-confirm ${btnClass}" onclick="confirmActionFromModal('${cmd}')">
-                ${getIcon('check', 20)} ${btnLabel}
+                ${getIcon('check', 18)} ${btnLabel}
             </button>
-            <button class="btn btn-secondary" onclick="goToDeliveryPageFromModal()" style="display:flex; align-items:center; justify-content:center; gap:8px;">
-                ${getIcon('delivery', 18)} Buka Halaman Delivery
+            <button class="btn btn-secondary" onclick="goToDeliveryPageFromModal()">
+                ${getIcon('delivery', 16)} Buka Halaman Dispatch
             </button>
-            <button class="btn btn-outline" onclick="dismissArrivalModal()" style="display:flex; align-items:center; justify-content:center; gap:6px; font-size:0.8rem; opacity:0.8; padding:8px;">
-                ${getIcon('x', 14)} Tutup Dialog
+            <button class="btn btn-outline btn-sm" onclick="dismissArrivalModal()">
+                ${getIcon('x', 14)} Sembunyikan Sementara
             </button>
         `;
     }
@@ -633,11 +886,11 @@ function updateGlobalMissionBanner(d) {
         : (taskInfo && taskInfo.delivery ? taskInfo.delivery.name : 'Delivery');
 
     banner.className = isPickup ? 'banner-pickup' : 'banner-delivery';
-    if (iconEl) iconEl.innerHTML = isPickup ? getIcon('box', 22) : getIcon('checkCircle', 22);
-    if (titleEl) titleEl.textContent = `Tiba di ${pointName}!`;
-    if (subtitleEl) subtitleEl.textContent = isPickup ? 'Menunggu konfirmasi muat barang' : 'Menunggu konfirmasi ambil barang';
+    if (iconEl) iconEl.innerHTML = isPickup ? getIcon('box', 20) : getIcon('checkCircle', 20);
+    if (titleEl) titleEl.textContent = `AMR-01 Tiba di ${pointName}`;
+    if (subtitleEl) subtitleEl.textContent = isPickup ? 'WAITING_PICKUP // Konfirmasi muat barang' : 'WAITING_DELIVERY // Konfirmasi ambil barang';
     if (btnEl) {
-        btnEl.innerHTML = `${getIcon('check', 14)} ${isPickup ? 'Muat' : 'Ambil'}`;
+        btnEl.innerHTML = `${getIcon('check', 14)} ${isPickup ? 'Konfirmasi Muat' : 'Konfirmasi Ambil'}`;
     }
 
     banner.classList.remove('hidden');
@@ -687,11 +940,11 @@ function updateInPageConfirmCard(d) {
         confirmSection.classList.remove('hidden');
         confirmSection.innerHTML = `
             <div class="confirm-card confirm-pickup">
-                <div class="confirm-icon">${getIcon('box', 44)}</div>
-                <div class="confirm-title">Robot Tiba di ${pickupName}!</div>
-                <div class="confirm-desc">Robot sudah sampai di titik pickup. Tekan tombol di bawah setelah barang dimuat ke robot.</div>
+                <div class="confirm-icon">${getIcon('box', 32)}</div>
+                <div class="confirm-title">AMR-01 Tiba di ${pickupName}</div>
+                <div class="confirm-desc">Silakan muat barang ke unit robot, kemudian tekan tombol konfirmasi di bawah untuk melanjutkan rute.</div>
                 <button class="btn btn-confirm btn-confirm-pickup" onclick="confirmAction('confirm_pickup')">
-                    ${getIcon('check', 20)} Barang Sudah Dimuat
+                    ${getIcon('check', 18)} Konfirmasi Barang Dimuat
                 </button>
             </div>
         `;
@@ -700,11 +953,11 @@ function updateInPageConfirmCard(d) {
         confirmSection.classList.remove('hidden');
         confirmSection.innerHTML = `
             <div class="confirm-card confirm-delivery">
-                <div class="confirm-icon">${getIcon('checkCircle', 44)}</div>
-                <div class="confirm-title">Robot Tiba di ${deliveryName}!</div>
-                <div class="confirm-desc">Robot sudah sampai di titik delivery. Tekan tombol di bawah setelah barang diambil.</div>
+                <div class="confirm-icon">${getIcon('checkCircle', 32)}</div>
+                <div class="confirm-title">AMR-01 Tiba di ${deliveryName}</div>
+                <div class="confirm-desc">Silakan ambil barang dari unit robot, kemudian tekan tombol konfirmasi untuk menyelesaikan task.</div>
                 <button class="btn btn-confirm btn-confirm-delivery" onclick="confirmAction('confirm_delivery')">
-                    ${getIcon('check', 20)} Barang Sudah Diambil
+                    ${getIcon('check', 18)} Konfirmasi Barang Diambil
                 </button>
             </div>
         `;
@@ -737,7 +990,7 @@ function updateMissionUI() {
             idle: 'Selesai'
         };
         if (progressText) {
-            progressText.textContent = `Task ${(d.current_task_index || 0) + 1}/${d.total_tasks} — ${phaseLabels[d.current_phase] || d.current_phase}`;
+            progressText.textContent = `TASK ${(d.current_task_index || 0) + 1}/${d.total_tasks} // ${phaseLabels[d.current_phase] || d.current_phase}`;
         }
     }
 
@@ -757,7 +1010,6 @@ function setSoundMode(mode) {
     }
 }
 
-// Browser Autoplay Policy unlocker
 function unlockAudioContext() {
     try {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -777,7 +1029,6 @@ function unlockAudioContext() {
 document.addEventListener('click', unlockAudioContext);
 document.addEventListener('touchstart', unlockAudioContext);
 
-// Synthesized clean notification chime (Web Audio API)
 function playChimeSound(type = 'waiting_pickup') {
     try {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -788,8 +1039,6 @@ function playChimeSound(type = 'waiting_pickup') {
         }
 
         const now = ctx.currentTime;
-        // Pickup: nada ceria 2-tingkat (E5 -> A5)
-        // Delivery / chime: nada melodi 3-tingkat selesai (C5 -> G5 -> C6)
         const notes = type === 'waiting_pickup'
             ? [659.25, 880.0]
             : [523.25, 783.99, 1046.5];
@@ -797,11 +1046,9 @@ function playChimeSound(type = 'waiting_pickup') {
         notes.forEach((freq, idx) => {
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
-
             osc.type = 'sine';
             osc.frequency.setValueAtTime(freq, now + idx * 0.16);
 
-            // Volume envelope: smooth attack & decay
             gain.gain.setValueAtTime(0.001, now + idx * 0.16);
             gain.gain.linearRampToValueAtTime(0.25, now + idx * 0.16 + 0.03);
             gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.16 + 0.45);
@@ -819,19 +1066,16 @@ function playChimeSound(type = 'waiting_pickup') {
 
 let _currentAudio = null;
 
-// Human Voice Text-To-Speech (Google Translate TTS dengan fallback ke Web Speech API)
 function speakHumanVoice(text) {
     if (!text) return;
 
     try {
-        // Hentikan audio sebelumnya jika masih berputar
         if (_currentAudio) {
             _currentAudio.pause();
             _currentAudio.currentTime = 0;
             _currentAudio = null;
         }
 
-        // Putar audio Google Translate via backend /api/tts
         const audioUrl = `/api/tts?text=${encodeURIComponent(text)}`;
         const audio = new Audio(audioUrl);
         _currentAudio = audio;
@@ -860,7 +1104,6 @@ function fallbackWebSpeech(text) {
     } catch (e) {}
 }
 
-// Pre-load voices on voice changed
 if ('speechSynthesis' in window) {
     window.speechSynthesis.onvoiceschanged = () => {
         try { window.speechSynthesis.getVoices(); } catch (e) {}
@@ -880,18 +1123,16 @@ function notifyArrival(phase, deliveryData) {
         ? (taskInfo && taskInfo.pickup ? taskInfo.pickup.name : '')
         : (taskInfo && taskInfo.delivery ? taskInfo.delivery.name : '');
 
-    // Siapkan teks pemberitahuan
     const speechText = isPickup
         ? (pointName ? `Robot sudah tiba di titik pickup ${pointName}. Silakan muat barang.` : 'Robot sudah sampai di titik pickup. Silakan muat barang.')
         : (pointName ? `Robot sudah tiba di titik tujuan ${pointName}. Silakan ambil barang.` : 'Robot sudah sampai di titik tujuan. Silakan ambil barang.');
 
     const toastLabel = isPickup
-        ? (pointName ? `Robot tiba di pickup: ${pointName}! Silakan muat barang.` : 'Robot sudah sampai di pickup! Silakan muat barang.')
-        : (pointName ? `Robot tiba di tujuan: ${pointName}! Silakan ambil barang.` : 'Robot sudah sampai di tujuan! Silakan ambil barang.');
+        ? (pointName ? `Tiba di pickup: ${pointName}. Silakan muat barang.` : 'Tiba di pickup. Silakan muat barang.')
+        : (pointName ? `Tiba di tujuan: ${pointName}. Silakan ambil barang.` : 'Tiba di tujuan. Silakan ambil barang.');
 
     showToast(toastLabel, 'success');
 
-    // Eksekusi audio berdasarkan preferensi user
     const mode = getSoundMode();
     if (mode === 'mute') {
         return;
@@ -918,11 +1159,10 @@ function testArrivalSound(phase) {
     notifyArrival(phase, fakeData);
 }
 
-
 async function confirmAction(command) {
     const result = await apiPost('/api/delivery/control', { command });
     if (result && result.success) {
-        const label = command === 'confirm_pickup' ? 'Pickup dikonfirmasi! Robot lanjut mengantar.' : 'Delivery dikonfirmasi! Task selesai.';
+        const label = command === 'confirm_pickup' ? 'Pickup dikonfirmasi! Melanjutkan rute.' : 'Delivery dikonfirmasi! Task selesai.';
         showToast(label, 'success');
         _modalDismissedForCurrentPhase = false;
         hideArrivalModal();
@@ -932,7 +1172,6 @@ async function confirmAction(command) {
             sec.classList.add('hidden');
             sec.innerHTML = '';
         }
-        // Ambil status terbaru segera
         const data = await apiGet('/api/status');
         if (data && data.delivery) {
             handleDeliveryStatusUpdate(data.delivery);
@@ -955,7 +1194,6 @@ function startDeliveryPolling() {
     }, 1000);
 }
 
-// Window bindings untuk event handler global
 window.onBannerClick = onBannerClick;
 window.onBannerBtnClick = onBannerBtnClick;
 window.closeArrivalModalOnBackdrop = closeArrivalModalOnBackdrop;
@@ -973,32 +1211,33 @@ function renderMonitoring() {
     div.innerHTML = `
         <div class="cockpit-header">
             <div>
-                <h1 class="cockpit-header-title">Pusat Pemantauan Sistem</h1>
-                <p class="cockpit-header-subtitle">Monitoring visual, telemetri kecepatan, dan misi AMR secara real-time</p>
+                <div class="studio-title-tag">${getIcon('activity', 13)} SYS // TELEMETRY COCKPIT</div>
+                <h1 class="cockpit-header-title">Cockpit Telemetry & Visual Stream</h1>
+                <p class="cockpit-header-subtitle">Pemantauan optik, peta SLAM, kinematika kecepatan, dan kontrol misi real-time</p>
             </div>
             <div style="display:flex; align-items:center; gap:10px;">
-                <span class="status-badge" id="cockpit-status-badge">STANDBY</span>
+                <span class="status-badge status-idle" id="cockpit-status-badge">STANDBY</span>
             </div>
         </div>
 
         <div class="cockpit-grid">
             <!-- LEFT COLUMN: VIEWPORT & LOWER ROW -->
-            <div style="display:flex; flex-direction:column; gap:18px;">
+            <div style="display:flex; flex-direction:column; gap:16px;">
                 <!-- Card 1: Visual Monitoring (Hero Widget) -->
                 <div class="cockpit-card viewport-card">
                     <div class="cockpit-card-header">
                         <div class="cockpit-card-title">
-                            ${getIcon('camera', 18)} Visual Pemantauan
+                            ${getIcon('video', 16)} 01 // VISUAL VIEWPORT
                         </div>
                         <div class="viewport-tabs">
                             <button class="viewport-tab-btn active" data-mode="camera" onclick="switchViewportMode('camera')">
-                                ${getIcon('camera', 14)} Kamera Live
+                                ${getIcon('video', 13)} Kamera
                             </button>
                             <button class="viewport-tab-btn" data-mode="map" onclick="switchViewportMode('map')">
-                                ${getIcon('map', 14)} Peta 2D
+                                ${getIcon('map', 13)} Peta 2D
                             </button>
                             <button class="viewport-tab-btn" data-mode="dual" onclick="switchViewportMode('dual')">
-                                ${getIcon('layers', 14)} Dual Split
+                                ${getIcon('layers', 13)} Split View
                             </button>
                         </div>
                     </div>
@@ -1009,31 +1248,33 @@ function renderMonitoring() {
                         <div class="viewport-view active" id="view-camera">
                             <img id="cockpit-cam-img" class="cockpit-cam-img" src="/api/camera/stream" alt="Live Kamera"
                                  onerror="this.style.display='none'; document.getElementById('cockpit-cam-offline').style.display='flex';">
-                            <div id="cockpit-cam-offline" class="flex-center" style="display:none; width:100%; height:100%; color:var(--text-muted); font-size:0.85rem; flex-direction:column; gap:8px;">
-                                ${getIcon('camera', 36)}
-                                Kamera tidak tersedia
+                            <div id="cockpit-cam-offline" class="flex-center mono" style="display:none; width:100%; height:100%; color:var(--text-muted); font-size:0.78rem; flex-direction:column; gap:8px;">
+                                ${getIcon('video', 32)}
+                                STREAM KAMERA OFFLINE
                             </div>
                             <div class="viewport-hud">
                                 <div class="viewport-hud-left">
-                                    <span class="hud-badge hud-badge-rec"><span class="rec-dot"></span>LIVE</span>
-                                    <span class="hud-badge hud-badge-human" id="hud-human-badge">AI: Aman</span>
+                                    <span class="hud-badge hud-badge-rec"><span class="rec-dot"></span>CAM_01 // LIVE</span>
+                                    <span class="hud-badge hud-badge-human" id="hud-human-badge">AI: AMAN</span>
                                 </div>
                             </div>
                             <div class="viewport-tools">
-                                <button class="tool-btn" onclick="captureScreenshot()" title="Ambil Screenshot">${getIcon('camera', 16)}</button>
+                                <button class="tool-btn" onclick="captureScreenshot()" title="Ambil Screenshot">${getIcon('camera', 15)}</button>
                             </div>
                         </div>
 
                         <!-- View 2: 2D Map -->
                         <div class="viewport-view" id="view-map">
-                            <div class="map-container" style="width:100%; height:100%; position:relative;">
+                            <div class="map-container" style="width:100%; height:100%; position:relative; border:none;">
                                 <canvas id="monitor-map-canvas"></canvas>
                                 <div class="map-legend">
-                                    <span class="legend-robot">Robot</span>
+                                    <span class="legend-pickup">Pickup</span>
+                                    <span class="legend-delivery">Delivery</span>
+                                    <span class="legend-robot">AMR-01</span>
                                 </div>
                             </div>
                             <div class="viewport-tools">
-                                <button class="tool-btn" onclick="resetMapCenter()" title="Pusatkan ke Robot">${getIcon('navigation', 16)}</button>
+                                <button class="tool-btn" onclick="resetMapCenter()" title="Pusatkan ke Robot">${getIcon('crosshair', 15)}</button>
                             </div>
                         </div>
 
@@ -1042,11 +1283,11 @@ function renderMonitoring() {
                             <div class="viewport-split-pane">
                                 <img id="split-cam-img" class="cockpit-cam-img" src="/api/camera/stream" alt="Live Kamera">
                                 <div class="viewport-hud">
-                                    <span class="hud-badge hud-badge-rec"><span class="rec-dot"></span>LIVE</span>
+                                    <span class="hud-badge hud-badge-rec"><span class="rec-dot"></span>CAM_01</span>
                                 </div>
                             </div>
                             <div class="viewport-split-pane">
-                                <div class="map-container" style="width:100%; height:100%; position:relative;">
+                                <div class="map-container" style="width:100%; height:100%; position:relative; border:none;">
                                     <canvas id="split-map-canvas"></canvas>
                                 </div>
                             </div>
@@ -1060,17 +1301,17 @@ function renderMonitoring() {
                     <div class="cockpit-card">
                         <div class="cockpit-card-header">
                             <div class="cockpit-card-title">
-                                ${getIcon('activity', 18)} Grafik Kecepatan
+                                ${getIcon('activity', 16)} 02 // VELOCITY PROFILE
                             </div>
-                            <span style="font-size:0.68rem; color:var(--text-muted);">Real-time</span>
+                            <span class="mono" style="font-size:0.65rem; color:var(--text-muted);">30 SAMPLES</span>
                         </div>
                         <div class="telemetry-chart-container">
                             <canvas id="speed-history-canvas"></canvas>
                         </div>
                         <div class="telemetry-meta">
-                            <div>Rata-rata: <b id="tele-avg-speed">0.00 m/s</b></div>
-                            <div>Odometer: <b id="tele-odometer">0.0 m</b></div>
-                            <div>Misi: <b id="tele-elapsed">0s</b></div>
+                            <div>AVG: <b id="tele-avg-speed">0.00 m/s</b></div>
+                            <div>ODO: <b id="tele-odometer">0.0 m</b></div>
+                            <div>TIME: <b id="tele-elapsed">0s</b></div>
                         </div>
                     </div>
 
@@ -1078,47 +1319,38 @@ function renderMonitoring() {
                     <div class="cockpit-card">
                         <div class="cockpit-card-header">
                             <div class="cockpit-card-title">
-                                ${getIcon('delivery_point', 18)} Quick Dispatch Meja
+                                ${getIcon('delivery_point', 16)} 03 // QUICK DISPATCH
                             </div>
-                            <span style="font-size:0.68rem; color:var(--accent);">1-Click Target</span>
+                            <span class="mono" style="font-size:0.65rem; color:var(--accent-bright);">1-CLICK</span>
                         </div>
-                        <div class="quick-dispatch-grid" id="cockpit-dispatch-grid">
-                            <!-- Di-render oleh JavaScript -->
-                        </div>
+                        <div class="quick-dispatch-grid" id="cockpit-dispatch-grid"></div>
                     </div>
                 </div>
             </div>
 
             <!-- RIGHT COLUMN: SPEEDOMETER, MISSION STATUS, SAFETY -->
-            <div style="display:flex; flex-direction:column; gap:18px;">
-                <!-- Card 2: Kecepatan & Pose Robot (Menggantikan Temperature) -->
+            <div style="display:flex; flex-direction:column; gap:16px;">
+                <!-- Card 2: Kecepatan & Pose Robot -->
                 <div class="cockpit-card gauge-card">
                     <div class="cockpit-card-header" style="width:100%;">
                         <div class="cockpit-card-title">
-                            ${getIcon('gauge', 18)} Kecepatan & Pose
+                            ${getIcon('gauge', 16)} 04 // KINEMATICS & POSE
                         </div>
-                        <span style="font-size:0.68rem; color:var(--text-muted);" id="speed-limit-tag">Maks 0.5 m/s</span>
+                        <span class="mono" style="font-size:0.65rem; color:var(--text-muted);" id="speed-limit-tag">MAX 0.5 m/s</span>
                     </div>
 
                     <!-- Speedometer Arc Gauge -->
                     <div class="speed-gauge-wrap">
                         <svg class="speed-gauge-svg" viewBox="0 0 220 140">
-                            <defs>
-                                <linearGradient id="cockpit-gauge-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-                                    <stop offset="0%" stop-color="#00d4ff"/>
-                                    <stop offset="65%" stop-color="#00ff88"/>
-                                    <stop offset="100%" stop-color="#ffaa00"/>
-                                </linearGradient>
-                            </defs>
-                            <path d="M 25 115 A 85 85 0 0 1 195 115" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="12" stroke-linecap="round"/>
-                            <path id="cockpit-gauge-path" d="M 25 115 A 85 85 0 0 1 195 115" fill="none" stroke="url(#cockpit-gauge-grad)" stroke-width="12" stroke-linecap="round"
-                                  stroke-dasharray="267" stroke-dashoffset="267" style="transition: stroke-dashoffset 0.25s ease;"/>
+                            <path d="M 25 115 A 85 85 0 0 1 195 115" fill="none" stroke="var(--border)" stroke-width="10" stroke-linecap="round"/>
+                            <path id="cockpit-gauge-path" d="M 25 115 A 85 85 0 0 1 195 115" fill="none" stroke="var(--accent)" stroke-width="10" stroke-linecap="round"
+                                  stroke-dasharray="267" stroke-dashoffset="267" style="transition: stroke-dashoffset 0.2s ease, stroke 0.25s ease;"/>
                         </svg>
                         <div class="gauge-readout">
                             <div class="gauge-val" id="cockpit-speed-val">0.00</div>
-                            <div class="gauge-subtext">Kecepatan Linear (m/s)</div>
+                            <div class="gauge-subtext">LINEAR VELOCITY (m/s)</div>
                             <div class="angular-pill" id="cockpit-angular-val">
-                                ${getIcon('gauge', 12)} 0.00 rad/s
+                                ${getIcon('compass', 12)} 0.00 rad/s
                             </div>
                         </div>
                     </div>
@@ -1126,23 +1358,23 @@ function renderMonitoring() {
                     <!-- Coordinates Grid -->
                     <div class="cockpit-pose-grid">
                         <div class="pose-cell">
-                            <div class="pose-cell-label">Posisi X</div>
+                            <div class="pose-cell-label">POS X</div>
                             <div class="pose-cell-val pose-cell-accent" id="mon-x">0.000</div>
                         </div>
                         <div class="pose-cell">
-                            <div class="pose-cell-label">Posisi Y</div>
+                            <div class="pose-cell-label">POS Y</div>
                             <div class="pose-cell-val pose-cell-accent" id="mon-y">0.000</div>
                         </div>
                         <div class="pose-cell">
-                            <div class="pose-cell-label">Orientasi</div>
+                            <div class="pose-cell-label">YAW</div>
                             <div class="pose-cell-val pose-cell-warning" id="mon-yaw">0.0°</div>
                         </div>
                     </div>
 
                     <!-- Distance status -->
                     <div class="distance-bar">
-                        <div class="dist-item">Ke Target: <span id="mon-dist-target">—</span></div>
-                        <div class="dist-item">Ke Home: <span id="mon-dist-home">—</span></div>
+                        <div class="dist-item">TARGET: <span id="mon-dist-target">—</span></div>
+                        <div class="dist-item">HOME: <span id="mon-dist-home">—</span></div>
                     </div>
                 </div>
 
@@ -1150,35 +1382,33 @@ function renderMonitoring() {
                 <div class="cockpit-card">
                     <div class="cockpit-card-header">
                         <div class="cockpit-card-title">
-                            ${getIcon('delivery', 18)} Misi Pengiriman
+                            ${getIcon('delivery', 16)} 05 // ACTIVE MISSION
                         </div>
-                        <span class="status-badge" id="cockpit-mission-badge">IDLE</span>
+                        <span class="status-badge status-idle" id="cockpit-mission-badge">IDLE</span>
                     </div>
                     <div class="mission-mini-card">
                         <div class="mission-phase-badge" id="cockpit-phase-badge">
-                            <span>Fase Saat Ini:</span>
+                            <span>PHASE</span>
                             <b id="cockpit-phase-text">Standby</b>
                         </div>
                         <div class="progress-bar">
                             <div class="progress-fill" id="cockpit-progress-fill" style="width:0%"></div>
                         </div>
-                        <div style="display:flex; justify-content:space-between; font-size:0.7rem; color:var(--text-muted);">
-                            <span id="cockpit-task-counter">Antrean: 0 Task</span>
-                            <span id="cockpit-target-info">—</span>
+                        <div class="mono" style="display:flex; justify-content:space-between; font-size:0.68rem; color:var(--text-muted);">
+                            <span id="cockpit-task-counter">QUEUE: 0</span>
+                            <span class="text-accent" id="cockpit-target-info">—</span>
                         </div>
 
-                        <!-- Tombol Konfirmasi Kedatangan Cepat di Cockpit -->
-                        <div id="cockpit-confirm-btn-wrap" class="hidden" style="margin-top:6px;">
+                        <div id="cockpit-confirm-btn-wrap" class="hidden" style="margin-top:4px;">
                             <button id="cockpit-confirm-btn" class="btn btn-confirm btn-block" onclick="onCockpitConfirmArrival()">
-                                ${getIcon('check', 18)} Konfirmasi Kedatangan
+                                ${getIcon('check', 16)} Konfirmasi Kedatangan
                             </button>
                         </div>
 
-                        <!-- Quick Mission Controls -->
                         <div class="cockpit-ctrl-row">
-                            <button class="btn btn-warning" onclick="controlMission('pause')">${getIcon('pause', 14)} Pause</button>
-                            <button class="btn btn-primary" onclick="controlMission('resume')">${getIcon('play', 14)} Resume</button>
-                            <button class="btn btn-danger" onclick="controlMission('cancel')">${getIcon('x', 14)} Batal</button>
+                            <button class="btn btn-warning" onclick="controlMission('pause')">${getIcon('pause', 13)} Pause</button>
+                            <button class="btn btn-primary" onclick="controlMission('resume')">${getIcon('play', 13)} Resume</button>
+                            <button class="btn btn-danger" onclick="controlMission('cancel')">${getIcon('x', 13)} Batal</button>
                         </div>
                     </div>
                 </div>
@@ -1187,26 +1417,26 @@ function renderMonitoring() {
                 <div class="cockpit-card">
                     <div class="cockpit-card-header">
                         <div class="cockpit-card-title">
-                            ${getIcon('shield', 18)} Keamanan & Sensor
+                            ${getIcon('shield', 16)} 06 // SUBSYSTEM HEALTH
                         </div>
-                        <span style="font-size:0.68rem; color:var(--success);">Proteksi Aktif</span>
+                        <span class="mono" style="font-size:0.65rem; color:var(--success);">NOMINAL</span>
                     </div>
                     <div class="nodes-grid">
                         <div class="node-item">
-                            <span class="node-name">AI Vision</span>
+                            <span class="node-name">AI_VISION</span>
                             <span class="node-status" id="cockpit-human-status" style="color:var(--success);">Aman</span>
                         </div>
                         <div class="node-item">
-                            <span class="node-name">Sensor LiDAR</span>
-                            <span class="node-status node-status-ok" id="cockpit-lidar-status">Aman</span>
+                            <span class="node-name">LIDAR_SCAN</span>
+                            <span class="node-status node-status-ok" id="cockpit-lidar-status">OK</span>
                         </div>
                         <div class="node-item">
-                            <span class="node-name">Nav2 Stack</span>
-                            <span class="node-status node-status-ok">Active</span>
+                            <span class="node-name">NAV2_STACK</span>
+                            <span class="node-status node-status-ok">ACTIVE</span>
                         </div>
                         <div class="node-item">
-                            <span class="node-name">E-Stop System</span>
-                            <span class="node-status" style="color:var(--accent);">Ready</span>
+                            <span class="node-name">E_STOP_BUS</span>
+                            <span class="node-status text-accent">ARMED</span>
                         </div>
                     </div>
                 </div>
@@ -1230,39 +1460,45 @@ function renderCamera() {
     div.className = 'page-enter';
 
     div.innerHTML = `
-        <div class="page-section">
-            <div class="section-title">Live Feed Kamera</div>
-            <div class="camera-frame">
-                <img id="camera-feed" src="/api/camera/stream" alt="Kamera AMR"
-                     onerror="this.style.display='none'; document.getElementById('cam-offline').style.display='flex';">
-                <div class="camera-overlay">
-                    <div class="camera-badge"><span class="rec-dot"></span>LIVE</div>
+        <div class="studio-two-col">
+            <div class="page-section">
+                <div class="section-title">
+                    <span>01 // OPTICAL CAMERA FEED</span>
+                    <span>/api/camera/stream</span>
                 </div>
-                <div id="cam-offline" class="flex-center" style="display:none; min-height:250px; color:var(--text-muted); font-size:0.85rem; flex-direction:column; gap:8px;">
-                    ${getIcon('camera', 36)}
-                    Kamera tidak tersedia
-                </div>
-            </div>
-        </div>
-
-        <div class="page-section">
-            <div class="section-title">Info</div>
-            <div class="panel">
-                <div class="monitor-grid">
-                    <div class="monitor-card">
-                        <div class="mon-label">Human Status</div>
-                        <div class="mon-value mon-success" id="cam-human">—</div>
+                <div class="camera-frame">
+                    <img id="camera-feed" src="/api/camera/stream" alt="Kamera AMR"
+                         onerror="this.style.display='none'; document.getElementById('cam-offline').style.display='flex';">
+                    <div class="camera-overlay">
+                        <div class="camera-badge"><span class="rec-dot"></span>CAM_01 // LIVE</div>
                     </div>
-                    <div class="monitor-card">
-                        <div class="mon-label">Posisi</div>
-                        <div class="mon-value mon-accent" id="cam-pos">—</div>
+                    <div id="cam-offline" class="flex-center mono" style="display:none; min-height:280px; color:var(--text-muted); font-size:0.8rem; flex-direction:column; gap:8px;">
+                        ${getIcon('video', 32)}
+                        STREAM KAMERA TIDAK TERSEDIA
                     </div>
                 </div>
             </div>
-        </div>
 
-        <div class="page-section">
-            <button class="btn btn-outline btn-block" onclick="captureScreenshot()">${getIcon('camera', 16)} Screenshot</button>
+            <div>
+                <div class="page-section">
+                    <div class="section-title">02 // VISION & POSE READOUT</div>
+                    <div class="panel">
+                        <div class="monitor-grid">
+                            <div class="monitor-card">
+                                <div class="mon-label">Human AI Status</div>
+                                <div class="mon-value mon-success" id="cam-human">NO_HUMAN</div>
+                            </div>
+                            <div class="monitor-card">
+                                <div class="mon-label">Koordinat (X, Y)</div>
+                                <div class="mon-value mon-accent" id="cam-pos">${APP.pose.x.toFixed(2)}, ${APP.pose.y.toFixed(2)}</div>
+                            </div>
+                        </div>
+                        <button class="btn btn-outline btn-block mt-12" onclick="captureScreenshot()">
+                            ${getIcon('camera', 16)} Ambil Snapshot Frame
+                        </button>
+                    </div>
+                </div>
+            </div>
         </div>
     `;
 
@@ -1275,7 +1511,7 @@ function renderCamera() {
 
 function captureScreenshot() {
     window.open('/api/camera/snapshot', '_blank');
-    showToast('Screenshot diambil', 'success');
+    showToast('Snapshot frame dibuka di tab baru', 'success');
 }
 
 function startCameraPolling() {
@@ -1288,7 +1524,7 @@ function startCameraPolling() {
             const camHuman = document.getElementById('cam-human');
             const camPos = document.getElementById('cam-pos');
             if (camHuman) camHuman.textContent = data.human_status || '—';
-            if (camPos) camPos.textContent = `${data.pose.x.toFixed(1)}, ${data.pose.y.toFixed(1)}`;
+            if (camPos && data.pose) camPos.textContent = `${data.pose.x.toFixed(2)}, ${data.pose.y.toFixed(2)}`;
         }
     }, 1000);
 }
@@ -1299,14 +1535,21 @@ function renderHistory() {
     div.className = 'page-enter';
 
     div.innerHTML = `
-        <div class="page-section">
-            <div class="section-title">Riwayat Pengiriman</div>
-            <div class="panel" id="history-content">
-                <div class="history-empty">Memuat...</div>
+        <div class="studio-overview-header">
+            <div>
+                <div class="studio-title-tag">${getIcon('clock', 13)} SYS // MISSION LOGS</div>
+                <h1>Riwayat Pengiriman</h1>
+                <p>Log eksekusi tugas pengiriman unit AMR-01 beserta status penyelesaian</p>
             </div>
+            <button class="btn btn-danger btn-sm" onclick="clearHistory()">
+                ${getIcon('trash', 14)} Bersihkan Log
+            </button>
         </div>
+
         <div class="page-section">
-            <button class="btn btn-danger btn-block btn-sm" onclick="clearHistory()">${getIcon('trash', 15)} Hapus Semua Riwayat</button>
+            <div class="panel" style="padding:0; overflow:hidden;" id="history-content">
+                <div class="history-empty">Memuat log pengiriman...</div>
+            </div>
         </div>
     `;
 
@@ -1320,7 +1563,7 @@ async function loadHistory() {
 
     const data = await apiGet('/api/history');
     if (!data || data.length === 0) {
-        container.innerHTML = '<div class="history-empty">Belum ada riwayat pengiriman.</div>';
+        container.innerHTML = '<div class="history-empty">BELUM ADA DATA LOG PENGIRIMAN</div>';
         return;
     }
 
@@ -1329,10 +1572,10 @@ async function loadHistory() {
         <table class="history-table">
             <thead>
                 <tr>
-                    <th>Waktu</th>
-                    <th>Dari</th>
-                    <th>Ke</th>
-                    <th>Status</th>
+                    <th>TIMESTAMP</th>
+                    <th>PICKUP ORIGIN</th>
+                    <th>DELIVERY TARGET</th>
+                    <th>STATUS</th>
                 </tr>
             </thead>
             <tbody>
@@ -1340,13 +1583,13 @@ async function loadHistory() {
                     const time = r.timestamp ? new Date(r.timestamp).toLocaleString('id-ID', {
                         day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
                     }) : '-';
-                    const statusClass = r.status === 'completed' ? 'mon-success' :
-                                       r.status === 'failed' ? 'mon-danger' : 'mon-warning';
+                    const statusClass = r.status === 'completed' ? 'status-completed' :
+                                       r.status === 'failed' ? 'status-failed' : 'status-paused';
                     return `<tr>
-                        <td>${time}</td>
-                        <td>${r.pickup_name}</td>
-                        <td>${r.delivery_name}</td>
-                        <td><span class="${statusClass}" style="font-weight:700">${r.status}</span></td>
+                        <td class="mono">${time}</td>
+                        <td class="mono" style="color:var(--text-primary); font-weight:600;">${r.pickup_name}</td>
+                        <td class="mono" style="color:var(--text-primary); font-weight:600;">${r.delivery_name}</td>
+                        <td><span class="status-badge ${statusClass}">${r.status}</span></td>
                     </tr>`;
                 }).join('')}
             </tbody>
@@ -1356,63 +1599,70 @@ async function loadHistory() {
 }
 
 async function clearHistory() {
-    showModal('Hapus Riwayat?', 'Semua riwayat pengiriman akan dihapus permanen.', [
+    showModal('Bersihkan Log Riwayat?', 'Seluruh catatan riwayat pengiriman akan dihapus secara permanen.', [
         { label: 'Batal', class: 'btn-outline' },
         {
-            label: 'Hapus', class: 'btn-danger',
+            label: 'Hapus Semua', class: 'btn-danger',
             action: async () => {
                 await apiPost('/api/history/clear', {});
                 loadHistory();
-                showToast('Riwayat dihapus', 'info');
+                showToast('Log riwayat dibersihkan', 'info');
             }
         }
     ]);
 }
 
-// ====================== PAGE: JOYSTICK ======================
+// ====================== PAGE: JOYSTICK (MANUAL TELEOP) ======================
 function renderJoystick() {
     const div = document.createElement('div');
     div.className = 'page-enter';
 
     div.innerHTML = `
-        <div class="page-section">
-            <div class="section-title">Kamera Feed</div>
-            <div class="camera-frame">
-                <img src="/api/camera/stream" alt="Kamera AMR"
-                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-                <div class="camera-overlay">
-                    <div class="camera-badge"><span class="rec-dot"></span>LIVE</div>
+        <div class="studio-two-col">
+            <div class="page-section">
+                <div class="section-title">
+                    <span>01 // FORWARD OPTICAL STREAM</span>
+                    <span>LIVE TELEOP VIEW</span>
                 </div>
-                <div class="flex-center" style="display:none; min-height:160px; color:var(--text-muted); font-size:0.8rem; flex-direction:column; gap:6px;">
-                    ${getIcon('camera', 28)} Kamera tidak tersedia
-                </div>
-            </div>
-        </div>
-
-        <div class="page-section">
-            <div class="section-title">Joystick</div>
-            <div class="joystick-container">
-                <div class="joystick-canvas-wrap">
-                    <canvas id="joystick-canvas" width="220" height="220"></canvas>
-                </div>
-                <div class="joystick-info">
-                    <div class="vel-display">
-                        <div class="vel-label">Linear (m/s)</div>
-                        <div class="vel-value" id="vel-linear">0.00</div>
+                <div class="camera-frame">
+                    <img src="/api/camera/stream" alt="Kamera AMR"
+                         onerror="this.style.display='none'; this.nextElementSibling.style.display='none'; this.parentElement.querySelector('.teleop-cam-offline').style.display='flex';">
+                    <div class="camera-overlay">
+                        <div class="camera-badge"><span class="rec-dot"></span>TELEOP_CAM // LIVE</div>
                     </div>
-                    <div class="vel-display">
-                        <div class="vel-label">Angular (rad/s)</div>
-                        <div class="vel-value" id="vel-angular">0.00</div>
+                    <div class="teleop-cam-offline flex-center mono" style="display:none; min-height:240px; color:var(--text-muted); font-size:0.78rem; flex-direction:column; gap:8px;">
+                        ${getIcon('video', 28)} STREAM KAMERA TIDAK TERSEDIA
                     </div>
                 </div>
             </div>
-        </div>
 
-        <div class="page-section flex-center">
-            <button class="estop-btn" onclick="emergencyStop()">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
-                STOP
-            </button>
+            <div class="page-section">
+                <div class="section-title">
+                    <span>02 // MANUAL VECTOR CONTROLLER</span>
+                    <span>/cmd_vel</span>
+                </div>
+                <div class="panel">
+                    <div class="joystick-container">
+                        <div class="joystick-canvas-wrap">
+                            <canvas id="joystick-canvas" width="240" height="240"></canvas>
+                        </div>
+                        <div class="joystick-info">
+                            <div class="vel-display">
+                                <div class="vel-label">LINEAR X (m/s)</div>
+                                <div class="vel-value" id="vel-linear">0.00</div>
+                            </div>
+                            <div class="vel-display">
+                                <div class="vel-label">ANGULAR Z (rad/s)</div>
+                                <div class="vel-value text-accent" id="vel-angular">0.00</div>
+                            </div>
+                        </div>
+                        <button class="estop-btn mt-8" onclick="emergencyStop()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+                            EMERGENCY STOP
+                        </button>
+                    </div>
+                </div>
+            </div>
         </div>
     `;
 
@@ -1429,99 +1679,164 @@ async function emergencyStop() {
     _modalDismissedForCurrentPhase = false;
     hideArrivalModal();
     hideGlobalMissionBanner();
-    showToast('EMERGENCY STOP!', 'error');
+    showToast('EMERGENCY STOP DIAKTIFKAN!', 'error');
 }
 
-// ====================== PAGE: SETTINGS ======================
+// ====================== PAGE: SETTINGS (CONFIG & THEMES) ======================
 function renderSettings() {
     const div = document.createElement('div');
     div.className = 'page-enter';
 
     const s = APP.settings || {};
     const currentSoundMode = getSoundMode();
+    const activeTheme = getTheme();
+
+    const themeCardsHtml = STUDIO_THEMES.map(t => `
+        <button type="button" class="theme-card ${t.id === activeTheme ? 'active' : ''}"
+                data-theme-id="${t.id}" onclick="applyTheme('${t.id}')">
+            <div class="theme-preview-box" style="background:${t.bg};">
+                <div class="theme-preview-top">
+                    <div class="theme-preview-dots">
+                        <span style="background:${t.accent}"></span>
+                        <span style="background:${t.secondary}"></span>
+                        <span style="background:${t.success}"></span>
+                    </div>
+                    <span style="width:18px; height:6px; border-radius:2px; background:${t.card}; border:1px solid rgba(128,128,128,0.3);"></span>
+                </div>
+                <div class="theme-preview-bar" style="background:linear-gradient(90deg, ${t.accent}, ${t.secondary});"></div>
+            </div>
+            <div class="theme-card-meta">
+                <div>
+                    <div class="theme-card-name">${t.name}</div>
+                    <div class="theme-card-desc">${t.desc}</div>
+                </div>
+                <span class="theme-check-badge">${getIcon('check', 11)}</span>
+            </div>
+        </button>
+    `).join('');
 
     div.innerHTML = `
+        <!-- FULL-WIDTH SECTION 01: VISUAL THEME PICKER -->
         <div class="page-section">
-            <div class="section-title">Kecepatan Robot</div>
-            <div class="panel">
-                <div class="setting-row">
-                    <div>
-                        <div class="setting-label">Kecepatan Linear Maks</div>
-                        <div class="setting-desc">Kecepatan maju/mundur (m/s)</div>
-                    </div>
-                    <input class="setting-input" id="set-max-linear" type="number"
-                           step="0.1" min="0.1" max="2.0" value="${s.max_linear_speed || 0.7}">
-                </div>
-                <div class="setting-row">
-                    <div>
-                        <div class="setting-label">Kecepatan Angular Maks</div>
-                        <div class="setting-desc">Kecepatan putar (rad/s)</div>
-                    </div>
-                    <input class="setting-input" id="set-max-angular" type="number"
-                           step="0.1" min="0.1" max="3.0" value="${s.max_angular_speed || 0.9}">
-                </div>
-                <div class="setting-row">
-                    <div>
-                        <div class="setting-label">Jeda di Waypoint</div>
-                        <div class="setting-desc">Waktu tunggu di setiap titik (detik)</div>
-                    </div>
-                    <input class="setting-input" id="set-pause-duration" type="number"
-                           step="1" min="0" max="30" value="${s.waypoint_pause_duration || 3}">
-                </div>
-                <button class="btn btn-primary btn-block mt-12" onclick="saveSettings()">${getIcon('save', 16)} Simpan Pengaturan</button>
+            <div class="section-title">
+                <span>01 // TEMA & PEWARNAAN STUDIO</span>
+                <span>LIVE PREVIEW</span>
             </div>
-        </div>
-
-        <div class="page-section">
-            <div class="section-title">Notifikasi Suara Kedatangan</div>
             <div class="panel">
-                <div class="setting-row">
+                <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
                     <div>
-                        <div class="setting-label">Tipe Suara</div>
-                        <div class="setting-desc">Pemberitahuan saat tiba di titik pickup & deliver</div>
+                        <div class="setting-label">Palet Warna Antarmuka</div>
+                        <div class="setting-desc">Pilih tema warna yang paling nyaman di mata untuk kondisi pencahayaan ruangan Anda</div>
                     </div>
-                    <select class="input-field" id="set-sound-mode" onchange="setSoundMode(this.value)"
-                            style="width: auto; min-width: 195px; padding: 7px 12px; font-size: 0.8rem; cursor: pointer;">
-                        <option value="human" ${currentSoundMode === 'human' ? 'selected' : ''}>🗣️ Suara Manusia (TTS)</option>
-                        <option value="chime" ${currentSoundMode === 'chime' ? 'selected' : ''}>🔔 Suara Notifikasi Biasa</option>
-                        <option value="both" ${currentSoundMode === 'both' ? 'selected' : ''}>🎵 Keduanya (Chime + Suara)</option>
-                        <option value="mute" ${currentSoundMode === 'mute' ? 'selected' : ''}>🔇 Senyap (Mute)</option>
-                    </select>
                 </div>
-                <div class="setting-row" style="flex-wrap: wrap; gap: 8px;">
-                    <div>
-                        <div class="setting-label">Uji Coba Suara</div>
-                        <div class="setting-desc">Dengarkan contoh suara notifikasi di browser</div>
-                    </div>
-                    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-                        <button type="button" class="btn btn-outline btn-sm" onclick="testArrivalSound('waiting_pickup')">🔊 Tes Pickup</button>
-                        <button type="button" class="btn btn-outline btn-sm" onclick="testArrivalSound('waiting_delivery')">🔊 Tes Deliver</button>
-                        <button type="button" class="btn btn-outline btn-sm" onclick="playChimeSound('waiting_pickup')">🔔 Tes Chime</button>
-                    </div>
+                <div class="theme-picker-grid">
+                    ${themeCardsHtml}
                 </div>
             </div>
         </div>
 
-        <div class="page-section">
-            <div class="section-title">Titik Tersimpan</div>
-            <div class="panel" id="saved-points-list"></div>
-            <button class="btn btn-outline btn-block btn-sm mt-8" onclick="showAddPointModal()">${getIcon('plus', 14)} Tambah Titik Baru</button>
-        </div>
+        <div class="studio-two-col">
+            <div>
+                <div class="page-section">
+                    <div class="section-title">02 // PARAMETER KINEMATIKA</div>
+                    <div class="panel">
+                        <div class="setting-row">
+                            <div>
+                                <div class="setting-label">Batas Kecepatan Linear</div>
+                                <div class="setting-desc">Kecepatan translasi maksimum maju/mundur (m/s)</div>
+                            </div>
+                            <input class="setting-input" id="set-max-linear" type="number"
+                                   step="0.1" min="0.1" max="2.0" value="${s.max_linear_speed || 0.7}">
+                        </div>
+                        <div class="setting-row">
+                            <div>
+                                <div class="setting-label">Batas Kecepatan Angular</div>
+                                <div class="setting-desc">Kecepatan rotasi yaw maksimum (rad/s)</div>
+                            </div>
+                            <input class="setting-input" id="set-max-angular" type="number"
+                                   step="0.1" min="0.1" max="3.0" value="${s.max_angular_speed || 0.9}">
+                        </div>
+                        <div class="setting-row">
+                            <div>
+                                <div class="setting-label">Durasi Tunggu Waypoint</div>
+                                <div class="setting-desc">Jeda waktu berhenti di setiap titik (detik)</div>
+                            </div>
+                            <input class="setting-input" id="set-pause-duration" type="number"
+                                   step="1" min="0" max="30" value="${s.waypoint_pause_duration || 3}">
+                        </div>
+                        <button class="btn btn-primary btn-block mt-12" onclick="saveSettings()">
+                            ${getIcon('save', 15)} Simpan Konfigurasi
+                        </button>
+                    </div>
+                </div>
 
-        <div class="page-section">
-            <div class="section-title">Informasi Sistem</div>
-            <div class="panel">
-                <div class="setting-row">
-                    <div class="setting-label">ROS2 Distro</div>
-                    <div style="color:var(--accent); font-weight:600; font-size:0.82rem;">Foxy</div>
+                <div class="page-section">
+                    <div class="section-title">03 // SISTEM AUDIO & NOTIFIKASI</div>
+                    <div class="panel">
+                        <div class="setting-row">
+                            <div>
+                                <div class="setting-label">Mode Audio Kedatangan</div>
+                                <div class="setting-desc">Output suara saat unit tiba di pickup/delivery</div>
+                            </div>
+                            <select class="input-field" id="set-sound-mode" onchange="setSoundMode(this.value)"
+                                    style="width: auto; min-width: 190px; cursor: pointer;">
+                                <option value="human" ${currentSoundMode === 'human' ? 'selected' : ''}>Voice TTS (Suara Manusia)</option>
+                                <option value="chime" ${currentSoundMode === 'chime' ? 'selected' : ''}>Synth Chime (Nada Teknis)</option>
+                                <option value="both" ${currentSoundMode === 'both' ? 'selected' : ''}>Hybrid (Chime + Voice TTS)</option>
+                                <option value="mute" ${currentSoundMode === 'mute' ? 'selected' : ''}>Silent (Nonaktif)</option>
+                            </select>
+                        </div>
+                        <div class="setting-row" style="flex-wrap: wrap;">
+                            <div>
+                                <div class="setting-label">Diagnostik Output Audio</div>
+                                <div class="setting-desc">Uji sampel pengumuman suara di perangkat ini</div>
+                            </div>
+                            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                                <button type="button" class="btn btn-outline btn-sm" onclick="testArrivalSound('waiting_pickup')">
+                                    ${getIcon('volume', 13)} Uji Pickup
+                                </button>
+                                <button type="button" class="btn btn-outline btn-sm" onclick="testArrivalSound('waiting_delivery')">
+                                    ${getIcon('volume', 13)} Uji Delivery
+                                </button>
+                                <button type="button" class="btn btn-outline btn-sm" onclick="playChimeSound('waiting_pickup')">
+                                    ${getIcon('bell', 13)} Uji Chime
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <div class="setting-row">
-                    <div class="setting-label">Koneksi</div>
-                    <div id="sys-connection" style="font-weight:600; font-size:0.82rem;">—</div>
+            </div>
+
+            <div>
+                <div class="page-section">
+                    <div class="section-title">
+                        <span>04 // DATABASE WAYPOINT</span>
+                        <span>${APP.savedPoints.length} TITIK</span>
+                    </div>
+                    <div class="panel">
+                        <div id="saved-points-list"></div>
+                        <button class="btn btn-outline btn-block btn-sm mt-12" onclick="showAddPointModal()">
+                            ${getIcon('plus', 14)} Registrasi Titik Baru
+                        </button>
+                    </div>
                 </div>
-                <div class="setting-row">
-                    <div class="setting-label">Kamera</div>
-                    <div id="sys-camera" style="font-weight:600; font-size:0.82rem;">—</div>
+
+                <div class="page-section">
+                    <div class="section-title">05 // INFORMASI SISTEM ROS2</div>
+                    <div class="panel">
+                        <div class="setting-row">
+                            <div class="setting-label">ROS2 Distribution</div>
+                            <div class="mono text-accent" style="font-weight:600; font-size:0.78rem;">FOXY FITZROY</div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-label">Status Bridge</div>
+                            <div class="mono" id="sys-connection" style="font-weight:600; font-size:0.78rem;">—</div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-label">Stream Kamera</div>
+                            <div class="mono" id="sys-camera" style="font-weight:600; font-size:0.78rem;">—</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1540,7 +1855,7 @@ function renderSavedPointsList() {
     if (!container) return;
 
     if (APP.savedPoints.length === 0) {
-        container.innerHTML = '<div class="history-empty">Belum ada titik tersimpan.</div>';
+        container.innerHTML = '<div class="history-empty">Belum ada titik koordinat tersimpan.</div>';
         return;
     }
 
@@ -1548,10 +1863,13 @@ function renderSavedPointsList() {
         <div class="setting-row">
             <div>
                 <div class="setting-label">${p.name}</div>
-                <div class="setting-desc icon-inline">${p.type === 'pickup' ? getIcon('pickup', 13) + ' Pickup' : getIcon('delivery_point', 13) + ' Delivery'} — (${p.x}, ${p.y})</div>
+                <div class="setting-desc mono icon-inline">
+                    ${p.type === 'pickup' ? getIcon('pickup', 12) + ' PICKUP' : getIcon('delivery_point', 12) + ' DELIVERY'}
+                    // X: ${p.x}, Y: ${p.y}
+                </div>
             </div>
-            <button class="btn btn-outline btn-sm" style="padding:6px 10px; font-size:0.7rem;"
-                    onclick="deletePoint('${p.name}')">${getIcon('trash', 14)}</button>
+            <button class="btn btn-outline btn-sm" style="padding:5px 9px;"
+                    onclick="deletePoint('${p.name}')">${getIcon('trash', 13)}</button>
         </div>
     `).join('');
 }
@@ -1564,39 +1882,40 @@ async function saveSettings() {
         max_linear_speed: parseFloat(document.getElementById('set-max-linear').value) || 0.7,
         max_angular_speed: parseFloat(document.getElementById('set-max-angular').value) || 0.9,
         waypoint_pause_duration: parseInt(document.getElementById('set-pause-duration').value) || 3,
-        arrival_sound_mode: soundMode
+        arrival_sound_mode: soundMode,
+        theme: getTheme()
     };
     const result = await apiPost('/api/settings', data);
     if (result && result.success) {
         APP.settings = result.settings;
-        showToast('Pengaturan disimpan!', 'success');
+        showToast('Konfigurasi & tema disimpan', 'success');
     } else {
-        showToast('Gagal menyimpan', 'error');
+        showToast('Konfigurasi lokal disimpan', 'info');
     }
 }
 
 function showAddPointModal() {
-    document.getElementById('modal-title').textContent = 'Tambah Titik Baru';
+    document.getElementById('modal-title').textContent = 'Registrasi Waypoint Baru';
     document.getElementById('modal-body').innerHTML = `
         <div class="input-group">
-            <div class="input-label">Nama Titik</div>
+            <div class="input-label">Nama Identifier</div>
             <input class="input-field" id="new-point-name" placeholder="Contoh: Rak C1">
         </div>
         <div class="input-row">
             <div class="input-group">
-                <div class="input-label">X</div>
+                <div class="input-label">Koordinat X (m)</div>
                 <input class="input-field" id="new-point-x" type="number" step="0.1" placeholder="0.0">
             </div>
             <div class="input-group">
-                <div class="input-label">Y</div>
+                <div class="input-label">Koordinat Y (m)</div>
                 <input class="input-field" id="new-point-y" type="number" step="0.1" placeholder="0.0">
             </div>
         </div>
         <div class="input-group">
-            <div class="input-label">Tipe</div>
+            <div class="input-label">Kategori Titik</div>
             <select class="input-field" id="new-point-type">
-                <option value="pickup">Pickup</option>
-                <option value="delivery">Delivery</option>
+                <option value="pickup">Pickup (Titik Muat)</option>
+                <option value="delivery">Delivery (Titik Tujuan)</option>
             </select>
         </div>
     `;
@@ -1625,7 +1944,7 @@ function showAddPointModal() {
             APP.savedPoints.push(result.point);
             renderSavedPointsList();
             hideModal();
-            showToast(`Titik "${name}" disimpan!`, 'success');
+            showToast(`Waypoint "${name}" ditambahkan`, 'success');
         }
     };
 
@@ -1635,7 +1954,7 @@ function showAddPointModal() {
 }
 
 async function deletePoint(name) {
-    showModal('Hapus Titik?', `Hapus titik <strong>"${name}"</strong>?`, [
+    showModal('Hapus Waypoint?', `Hapus titik <strong>"${name}"</strong> dari konfigurasi?`, [
         { label: 'Batal', class: 'btn-outline' },
         {
             label: 'Hapus', class: 'btn-danger',
@@ -1654,17 +1973,16 @@ async function updateSystemInfo() {
     const connEl = document.getElementById('sys-connection');
     const camEl = document.getElementById('sys-camera');
     if (connEl) {
-        connEl.textContent = data ? 'Terhubung' : 'Terputus';
+        connEl.textContent = data ? 'CONNECTED' : 'DISCONNECTED';
         connEl.style.color = data ? 'var(--success)' : 'var(--danger)';
     }
     if (camEl) {
-        // Camera check via snapshot
         try {
             const res = await fetch('/api/camera/snapshot');
-            camEl.textContent = res.ok ? 'Aktif' : 'Nonaktif';
+            camEl.textContent = res.ok ? 'ONLINE' : 'OFFLINE';
             camEl.style.color = res.ok ? 'var(--success)' : 'var(--text-muted)';
         } catch {
-            camEl.textContent = 'Nonaktif';
+            camEl.textContent = 'OFFLINE';
             camEl.style.color = 'var(--text-muted)';
         }
     }
@@ -1687,34 +2005,69 @@ async function globalStatusPoll() {
 
         if (badge) {
             badge.className = 'badge badge-online';
-            badge.querySelector('.badge-text').textContent = 'Online';
+            badge.querySelector('.badge-text').textContent = 'ROS2 ONLINE';
         }
 
-        // Update home page chips if visible
-        const homeStatus = document.getElementById('home-status');
-        if (homeStatus && APP.currentPage === 'home') {
-            const st = APP.delivery.status === 'running'
-                ? `Task ${(APP.delivery.current_task_index || 0) + 1}/${APP.delivery.total_tasks || 0}`
-                : (APP.delivery.status === 'idle' ? 'Standby' : APP.delivery.status);
-            homeStatus.textContent = st;
+        const topX = document.getElementById('topbar-pose-x');
+        const topY = document.getElementById('topbar-pose-y');
+        const topYaw = document.getElementById('topbar-pose-yaw');
+        const yawDeg = ((APP.pose.yaw || 0) * 180 / Math.PI).toFixed(1);
+        if (topX) topX.textContent = `${APP.pose.x.toFixed(2)}m`;
+        if (topY) topY.textContent = `${APP.pose.y.toFixed(2)}m`;
+        if (topYaw) topYaw.textContent = `${yawDeg}°`;
+
+        const sideNode = document.getElementById('sidebar-node-state');
+        const sideHuman = document.getElementById('sidebar-human-state');
+        if (sideNode) {
+            sideNode.textContent = APP.delivery.status === 'running' ? 'NAV2_ACTIVE' : 'NAV2_IDLE';
+            sideNode.className = APP.delivery.status === 'running' ? 'sys-card-val text-accent' : 'sys-card-val';
+        }
+        if (sideHuman) {
+            const isSafe = APP.humanStatus === 'NO_HUMAN';
+            sideHuman.textContent = isSafe ? 'CLEAR' : APP.humanStatus;
+            sideHuman.className = isSafe ? 'sys-card-val text-emerald' : 'sys-card-val text-amber';
+        }
+
+        if (APP.currentPage === 'home') {
+            const homeStatus = document.getElementById('home-status');
+            if (homeStatus) {
+                const st = APP.delivery.status === 'running'
+                    ? `TASK ${(APP.delivery.current_task_index || 0) + 1}/${APP.delivery.total_tasks || 0}`
+                    : (APP.delivery.status === 'idle' ? 'STANDBY' : String(APP.delivery.status).toUpperCase());
+                homeStatus.textContent = st;
+            }
 
             const phaseLabels = {
-                idle: 'Siap', navigating_pickup: 'Menuju Pickup',
-                waiting_pickup: 'Menunggu Muat', at_pickup: 'Di Pickup',
-                navigating_delivery: 'Menuju Tujuan',
-                waiting_delivery: 'Menunggu Ambil', at_delivery: 'Di Tujuan',
-                returning_home: 'Kembali ke Titik Awal'
+                idle: 'Siap Menerima Tugas',
+                navigating_pickup: 'Menuju Titik Pickup',
+                waiting_pickup: 'Menunggu Muat Barang',
+                at_pickup: 'Tiba di Pickup',
+                navigating_delivery: 'Menuju Titik Tujuan',
+                waiting_delivery: 'Menunggu Ambil Barang',
+                at_delivery: 'Tiba di Tujuan',
+                returning_home: 'Kembali ke Home Base'
             };
             const homePhase = document.getElementById('home-phase');
             if (homePhase) homePhase.textContent = phaseLabels[APP.delivery.current_phase] || APP.delivery.current_phase;
+
             const homePos = document.getElementById('home-pos');
-            if (homePos) homePos.textContent = `${APP.pose.x.toFixed(1)}, ${APP.pose.y.toFixed(1)}`;
+            if (homePos) homePos.textContent = `${APP.pose.x.toFixed(2)}, ${APP.pose.y.toFixed(2)}`;
+
+            const homeYaw = document.getElementById('home-yaw');
+            if (homeYaw) homeYaw.textContent = `${yawDeg}°`;
+
+            const homeHuman = document.getElementById('home-human');
+            if (homeHuman) {
+                const isSafe = APP.humanStatus === 'NO_HUMAN';
+                homeHuman.textContent = isSafe ? 'CLEAR (AMAN)' : APP.humanStatus;
+                homeHuman.className = isSafe ? 'kpi-main text-emerald' : 'kpi-main text-amber';
+            }
         }
     } else {
         APP.connected = false;
         if (badge) {
             badge.className = 'badge badge-offline';
-            badge.querySelector('.badge-text').textContent = 'Offline';
+            badge.querySelector('.badge-text').textContent = 'OFFLINE';
         }
     }
 }
@@ -1723,7 +2076,6 @@ async function globalStatusPoll() {
 function populateNavIcons() {
     if (typeof getIcon !== 'function') return;
 
-    // Sidebar icons
     const sidebarMap = {
         's-icon-home': 'home',
         's-icon-monitoring': 'activity',
@@ -1731,14 +2083,13 @@ function populateNavIcons() {
         's-icon-camera': 'video',
         's-icon-history': 'clock',
         's-icon-joystick': 'compass',
-        's-icon-settings': 'settings'
+        's-icon-settings': 'sliders'
     };
     Object.entries(sidebarMap).forEach(([id, icon]) => {
         const el = document.getElementById(id);
-        if (el) el.innerHTML = getIcon(icon, 20);
+        if (el) el.innerHTML = getIcon(icon, 17);
     });
 
-    // Mobile nav icons
     const mobileMap = {
         'm-icon-home': 'home',
         'm-icon-monitoring': 'activity',
@@ -1748,7 +2099,7 @@ function populateNavIcons() {
     };
     Object.entries(mobileMap).forEach(([id, icon]) => {
         const el = document.getElementById(id);
-        if (el) el.innerHTML = getIcon(icon, 20);
+        if (el) el.innerHTML = getIcon(icon, 18);
     });
 }
 
@@ -1765,30 +2116,28 @@ function startLiveClock() {
 
 // ====================== INIT ======================
 async function init() {
-    // Populate navigation icons and start real-time header clock
     populateNavIcons();
     startLiveClock();
+    applyTheme(getTheme(), true);
 
-    // Load saved points
     const pointsData = await apiGet('/api/saved_points');
     if (pointsData) {
         APP.savedPoints = pointsData.points || [];
         APP.homePosition = pointsData.home || { x: 0, y: 0, yaw: 0 };
     }
 
-    // Load settings
     const settingsData = await apiGet('/api/settings');
     if (settingsData) {
         APP.settings = settingsData;
+        if (!localStorage.getItem('amr_theme') && settingsData.theme) {
+            applyTheme(settingsData.theme, true);
+        }
     }
 
-    // Render home page
     navigateTo('home');
 
-    // Start global polling
     globalStatusPoll();
     setInterval(globalStatusPoll, 1000);
 }
 
-// Start when DOM ready
 document.addEventListener('DOMContentLoaded', init);

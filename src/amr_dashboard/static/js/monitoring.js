@@ -1,5 +1,5 @@
 /* =================================================================
-   AMR DASHBOARD — Comprehensive Monitoring Cockpit Module
+   AMR-01 // CONTROL STUDIO — Comprehensive Monitoring Cockpit Module
    Provides live viewport switching (Camera / 2D Map / Dual),
    Speedometer Arc Gauge, Real-time Speed Chart, Telemetry & Dispatch.
    ================================================================= */
@@ -10,7 +10,6 @@ const MAX_SPEED_HISTORY = 30;
 let lastPoseRecord = null;
 let lastPoseTimestamp = 0;
 let totalDistanceTraveled = 0.0;
-let speedChartAnimFrame = null;
 
 // ====================== VIEWPORT SWITCHER ======================
 function switchViewportMode(mode) {
@@ -40,7 +39,7 @@ function switchViewportMode(mode) {
     } else if (mode === 'map') {
         mapView.classList.add('active');
         if (typeof initMonitorMap === 'function') {
-            initMonitorMap();
+            initMonitorMap('monitor-map-canvas');
         }
     } else if (mode === 'dual') {
         splitView.classList.add('active');
@@ -54,14 +53,8 @@ function switchViewportMode(mode) {
     }
 }
 
-// Reset map pan/zoom center to robot position
 function resetMapCenter() {
-    if (typeof mapPanX !== 'undefined') {
-        mapPanX = 0;
-        mapPanY = 0;
-        mapZoom = 1.0;
-        showToast('Peta dipusatkan ke robot', 'info');
-    }
+    showToast('Peta disinkronkan ke posisi AMR-01', 'info');
 }
 
 // ====================== SPEEDOMETER GAUGE ======================
@@ -71,9 +64,12 @@ function updateSpeedGauge(linearSpeed, angularSpeed) {
     const angularValEl = document.getElementById('cockpit-angular-val');
     const limitTag = document.getElementById('speed-limit-tag');
 
-    const maxSpeed = (APP.settings && APP.settings.max_linear_vel) ? APP.settings.max_linear_vel : 0.5;
+    const maxSpeed = (APP.settings && (APP.settings.max_linear_speed || APP.settings.max_linear_vel))
+        ? (APP.settings.max_linear_speed || APP.settings.max_linear_vel)
+        : 0.7;
+
     if (limitTag) {
-        limitTag.textContent = `Maks ${maxSpeed.toFixed(1)} m/s`;
+        limitTag.textContent = `MAX ${maxSpeed.toFixed(1)} m/s`;
     }
 
     const safeLinear = Math.max(0, Math.abs(linearSpeed || 0));
@@ -83,11 +79,10 @@ function updateSpeedGauge(linearSpeed, angularSpeed) {
         speedValEl.textContent = safeLinear.toFixed(2);
     }
     if (angularValEl) {
-        angularValEl.innerHTML = `${getIcon('gauge', 12)} ${safeAngular >= 0 ? '+' : ''}${safeAngular.toFixed(2)} rad/s`;
+        angularValEl.innerHTML = `${getIcon('compass', 12)} ${safeAngular >= 0 ? '+' : ''}${safeAngular.toFixed(2)} rad/s`;
     }
 
     if (meterPath) {
-        // Semi-circle arc length for r=85 is pi * 85 ~= 267
         const totalLength = 267;
         const ratio = Math.min(1.0, Math.max(0.0, safeLinear / maxSpeed));
         const offset = totalLength * (1.0 - ratio);
@@ -108,10 +103,17 @@ function drawSpeedHistoryChart() {
     const canvas = document.getElementById('speed-history-canvas');
     if (!canvas) return;
 
+    const styles = getComputedStyle(document.documentElement);
+    const accentColor = styles.getPropertyValue('--accent').trim() || '#3b82f6';
+    const accentGlow = styles.getPropertyValue('--accent-glow').trim() || 'rgba(59, 130, 246, 0.2)';
+    const successColor = styles.getPropertyValue('--success').trim() || '#10b981';
+    const mutedColor = styles.getPropertyValue('--text-muted').trim() || '#64748b';
+    const gridColor = styles.getPropertyValue('--chart-grid').trim() || 'rgba(148, 163, 184, 0.08)';
+
     const ctx = canvas.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
     const w = canvas.clientWidth || 300;
-    const h = canvas.clientHeight || 110;
+    const h = canvas.clientHeight || 120;
 
     if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
         canvas.width = w * dpr;
@@ -122,36 +124,44 @@ function drawSpeedHistoryChart() {
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, w, h);
 
-    // Draw background grid lines
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+    // Draw theme-aware technical grid lines
+    ctx.strokeStyle = gridColor;
     ctx.lineWidth = 1;
-    for (let y = 20; y < h; y += 30) {
+    for (let y = 18; y < h; y += 28) {
         ctx.beginPath();
         ctx.moveTo(0, y);
         ctx.lineTo(w, y);
         ctx.stroke();
     }
+    for (let x = 40; x < w; x += 50) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+    }
 
     if (speedHistory.length < 2) {
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-        ctx.font = '11px Inter, sans-serif';
+        ctx.fillStyle = mutedColor;
+        ctx.font = '500 10px "JetBrains Mono", monospace';
         ctx.textAlign = 'center';
-        ctx.fillText('Mengumpulkan data kecepatan...', w / 2, h / 2);
+        ctx.fillText('SAMPLING VELOCITY TELEMETRY...', w / 2, h / 2);
         ctx.restore();
         return;
     }
 
-    const maxSpeed = (APP.settings && APP.settings.max_linear_vel) ? APP.settings.max_linear_vel : 0.5;
+    const maxSpeed = (APP.settings && (APP.settings.max_linear_speed || APP.settings.max_linear_vel))
+        ? (APP.settings.max_linear_speed || APP.settings.max_linear_vel)
+        : 0.7;
     const paddingBottom = 8;
-    const paddingTop = 12;
+    const paddingTop = 10;
     const plotH = h - paddingTop - paddingBottom;
     const stepX = w / (MAX_SPEED_HISTORY - 1);
     const startX = w - (speedHistory.length - 1) * stepX;
 
-    // Fill area gradient
+    // Theme-aware area gradient
     const fillGrad = ctx.createLinearGradient(0, paddingTop, 0, h);
-    fillGrad.addColorStop(0, 'rgba(0, 212, 255, 0.35)');
-    fillGrad.addColorStop(1, 'rgba(0, 212, 255, 0.0)');
+    fillGrad.addColorStop(0, accentGlow);
+    fillGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
 
     ctx.beginPath();
     ctx.moveTo(startX, h - paddingBottom);
@@ -160,11 +170,7 @@ function drawSpeedHistoryChart() {
         const x = startX + i * stepX;
         const norm = Math.min(1.0, Math.max(0.0, speedHistory[i] / maxSpeed));
         const y = h - paddingBottom - (norm * plotH);
-        if (i === 0) {
-            ctx.lineTo(x, y);
-        } else {
-            ctx.lineTo(x, y);
-        }
+        ctx.lineTo(x, y);
     }
 
     ctx.lineTo(w, h - paddingBottom);
@@ -172,7 +178,7 @@ function drawSpeedHistoryChart() {
     ctx.fillStyle = fillGrad;
     ctx.fill();
 
-    // Draw stroke line
+    // Precision stroke line
     ctx.beginPath();
     for (let i = 0; i < speedHistory.length; i++) {
         const x = startX + i * stepX;
@@ -181,26 +187,21 @@ function drawSpeedHistoryChart() {
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
     }
-    ctx.strokeStyle = '#00d4ff';
-    ctx.lineWidth = 2.5;
-    ctx.shadowColor = 'rgba(0, 212, 255, 0.5)';
-    ctx.shadowBlur = 8;
+    ctx.strokeStyle = accentColor;
+    ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Draw pulse dot at current point
-    const lastX = w;
+    // Live indicator dot
+    const lastX = w - 3;
     const lastNorm = Math.min(1.0, Math.max(0.0, speedHistory[speedHistory.length - 1] / maxSpeed));
     const lastY = h - paddingBottom - (lastNorm * plotH);
     ctx.beginPath();
-    ctx.arc(lastX, lastY, 4, 0, Math.PI * 2);
-    ctx.fillStyle = '#00ff88';
-    ctx.shadowColor = '#00ff88';
-    ctx.shadowBlur = 10;
+    ctx.arc(lastX, lastY, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = successColor;
     ctx.fill();
 
     ctx.restore();
 
-    // Update telemetry summary numbers
     const avgEl = document.getElementById('tele-avg-speed');
     if (avgEl && speedHistory.length > 0) {
         const sum = speedHistory.reduce((a, b) => a + b, 0);
@@ -210,60 +211,56 @@ function drawSpeedHistoryChart() {
 }
 
 // ====================== QUICK DISPATCH ======================
-function renderQuickDispatchChips() {
-    const container = document.getElementById('cockpit-dispatch-grid');
+function renderQuickDispatchChips(targetId = 'cockpit-dispatch-grid') {
+    const container = document.getElementById(targetId);
     if (!container) return;
 
     const points = APP.savedPoints || [];
     let html = '';
 
-    // Home button
     const home = APP.homePosition || { x: 0, y: 0, yaw: 0 };
     html += `
-        <button class="dispatch-chip" onclick="quickDispatchTo('Home', ${home.x}, ${home.y}, ${home.yaw || 0})">
-            ${getIcon('home', 15)}
+        <button class="dispatch-chip" onclick="quickDispatchTo('Home Base', ${home.x}, ${home.y}, ${home.yaw || 0})">
+            ${getIcon('home', 14)}
             <span>Home</span>
         </button>
     `;
 
-    if (points.length === 0) {
-        html += '<span style="font-size:0.7rem; color:var(--text-muted); align-self:center; margin-left:6px;">Belum ada titik</span>';
-    } else {
-        points.forEach(pt => {
-            html += `
-                <button class="dispatch-chip" onclick="quickDispatchTo('${pt.name}', ${pt.x}, ${pt.y}, ${pt.yaw || 0})">
-                    ${getIcon('pickup', 15)}
-                    <span>${pt.name}</span>
-                </button>
-            `;
-        });
-    }
+    points.forEach(pt => {
+        const iconName = pt.type === 'pickup' ? 'pickup' : 'delivery_point';
+        html += `
+            <button class="dispatch-chip" onclick="quickDispatchTo('${pt.name}', ${pt.x}, ${pt.y}, ${pt.yaw || 0})">
+                ${getIcon(iconName, 14)}
+                <span>${pt.name}</span>
+            </button>
+        `;
+    });
 
     container.innerHTML = html;
 }
 
 async function quickDispatchTo(name, x, y, yaw) {
     if (APP.delivery && APP.delivery.status === 'running') {
-        showToast('Misi sedang berjalan! Selesaikan atau batalkan dulu.', 'warning');
+        showToast('Misi sedang berjalan. Selesaikan atau batalkan terlebih dahulu.', 'warning');
         return;
     }
 
     showModal(
-        `Kirim Robot ke ${name}?`,
-        `<p style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:12px;">Robot akan otomatis menavigasi ke titik <b>${name}</b> (X: ${x.toFixed(2)}, Y: ${y.toFixed(2)}).</p>`,
+        `Quick Dispatch → ${name}`,
+        `<p>Kirim unit AMR-01 langsung menuju titik <strong>${name}</strong> <span class="mono">[X: ${x.toFixed(2)}, Y: ${y.toFixed(2)}]</span>?</p>`,
         [
             { label: 'Batal', class: 'btn-outline', action: hideModal },
             {
-                label: 'Mulai Navigasi',
+                label: 'Eksekusi Dispatch',
                 class: 'btn-primary',
                 action: async () => {
                     const tasks = [{
-                        pickup: { name: 'Titik Saat Ini', x: APP.pose.x, y: APP.pose.y },
+                        pickup: { name: 'Posisi Saat Ini', x: APP.pose.x, y: APP.pose.y },
                         delivery: { name: name, x: x, y: y, yaw: yaw }
                     }];
                     const res = await apiPost('/api/delivery/start', { tasks });
                     if (res && res.success) {
-                        showToast(`Robot menuju ${name}!`, 'success');
+                        showToast(`AMR-01 bergerak menuju ${name}`, 'success');
                     } else {
                         showToast('Gagal memulai navigasi', 'error');
                     }
@@ -273,7 +270,6 @@ async function quickDispatchTo(name, x, y, yaw) {
     );
 }
 
-// In-cockpit quick confirm arrival
 async function onCockpitConfirmArrival() {
     if (!APP.delivery) return;
     const cmd = APP.delivery.current_phase === 'waiting_pickup' ? 'confirm_pickup' : 'confirm_delivery';
@@ -288,7 +284,6 @@ function updateCockpitData(data) {
     const d = data.delivery || APP.delivery;
     const human = data.human_status || 'NO_HUMAN';
 
-    // 1. Calculate / extract speed
     let linSpeed = 0.0;
     let angSpeed = 0.0;
 
@@ -300,7 +295,6 @@ function updateCockpitData(data) {
         angSpeed = data.cmd_vel.angular || 0.0;
     }
 
-    // Odometry distance calculation fallback
     const now = Date.now();
     if (lastPoseRecord && lastPoseTimestamp > 0) {
         const dt = (now - lastPoseTimestamp) / 1000.0;
@@ -308,7 +302,6 @@ function updateCockpitData(data) {
             const dist = Math.hypot(pose.x - lastPoseRecord.x, pose.y - lastPoseRecord.y);
             if (dist > 0.001) {
                 totalDistanceTraveled += dist;
-                // If linSpeed was 0 from cmd_vel but robot is moving
                 if (Math.abs(linSpeed) < 0.01) {
                     linSpeed = dist / dt;
                 }
@@ -318,11 +311,9 @@ function updateCockpitData(data) {
     lastPoseRecord = { x: pose.x, y: pose.y };
     lastPoseTimestamp = now;
 
-    // Push speed sample & update speedometer
     pushSpeedSample(linSpeed);
     updateSpeedGauge(linSpeed, angSpeed);
 
-    // 2. Update Coordinates
     const xEl = document.getElementById('mon-x');
     const yEl = document.getElementById('mon-y');
     const yawEl = document.getElementById('mon-yaw');
@@ -330,11 +321,10 @@ function updateCockpitData(data) {
     if (yEl) yEl.textContent = pose.y.toFixed(3);
     if (yawEl) yawEl.textContent = (pose.yaw * 180 / Math.PI).toFixed(1) + '°';
 
-    // 3. Update Distances
     const home = APP.homePosition || { x: 0, y: 0 };
     const distHome = Math.hypot(pose.x - home.x, pose.y - home.y);
     const homeEl = document.getElementById('mon-dist-home');
-    if (homeEl) homeEl.textContent = `${distHome.toFixed(2)} m`;
+    if (homeEl) homeEl.textContent = `${distHome.toFixed(2)}m`;
 
     const targetEl = document.getElementById('mon-dist-target');
     if (targetEl) {
@@ -343,13 +333,12 @@ function updateCockpitData(data) {
             const targetPt = (d.current_phase === 'navigating_pickup' || d.current_phase === 'waiting_pickup')
                 ? curTask.pickup : curTask.delivery;
             const distTarget = Math.hypot(pose.x - targetPt.x, pose.y - targetPt.y);
-            targetEl.textContent = `${distTarget.toFixed(2)} m (${targetPt.name})`;
+            targetEl.textContent = `${distTarget.toFixed(2)}m (${targetPt.name})`;
         } else {
             targetEl.textContent = '—';
         }
     }
 
-    // 4. Update Odometer & Mission Time
     const odoEl = document.getElementById('tele-odometer');
     if (odoEl) odoEl.textContent = `${totalDistanceTraveled.toFixed(1)} m`;
 
@@ -358,7 +347,6 @@ function updateCockpitData(data) {
         elapsedEl.textContent = formatElapsed(d.elapsed_time);
     }
 
-    // 5. Update Cockpit Status Badge
     const statusBadge = document.getElementById('cockpit-status-badge');
     if (statusBadge) {
         statusBadge.textContent = (d.status || 'idle').toUpperCase();
@@ -371,16 +359,15 @@ function updateCockpitData(data) {
         missionBadge.className = `status-badge status-${d.status || 'idle'}`;
     }
 
-    // 6. Update Mission Phase & Progress
     const phaseLabels = {
         idle: 'Standby / Siap',
-        navigating_pickup: 'Menuju Titik Pickup...',
+        navigating_pickup: 'Menuju Titik Pickup',
         at_pickup: 'Tiba di Titik Pickup',
-        waiting_pickup: 'Menunggu Barang Dimuat',
-        navigating_delivery: 'Mengantar ke Tujuan...',
+        waiting_pickup: 'Menunggu Muat Barang',
+        navigating_delivery: 'Mengantar ke Tujuan',
         at_delivery: 'Tiba di Titik Tujuan',
-        waiting_delivery: 'Menunggu Barang Diambil',
-        returning_home: 'Kembali ke Titik Awal...',
+        waiting_delivery: 'Menunggu Ambil Barang',
+        returning_home: 'Kembali ke Home Base',
     };
     const phaseText = document.getElementById('cockpit-phase-text');
     if (phaseText) {
@@ -396,9 +383,9 @@ function updateCockpitData(data) {
     const taskCounter = document.getElementById('cockpit-task-counter');
     if (taskCounter) {
         if (d.total_tasks > 0) {
-            taskCounter.textContent = `Task ${(d.current_task_index || 0) + 1} / ${d.total_tasks}`;
+            taskCounter.textContent = `TASK ${(d.current_task_index || 0) + 1}/${d.total_tasks}`;
         } else {
-            taskCounter.textContent = 'Antrean Kosong';
+            taskCounter.textContent = 'QUEUE: 0';
         }
     }
 
@@ -412,7 +399,6 @@ function updateCockpitData(data) {
         }
     }
 
-    // 7. Arrival Confirmation in Cockpit
     const confirmWrap = document.getElementById('cockpit-confirm-btn-wrap');
     const confirmBtn = document.getElementById('cockpit-confirm-btn');
     const isWaiting = (d.current_phase === 'waiting_pickup' || d.current_phase === 'waiting_delivery') && d.status === 'running';
@@ -422,13 +408,12 @@ function updateCockpitData(data) {
             confirmWrap.classList.remove('hidden');
             const isPickup = (d.current_phase === 'waiting_pickup');
             confirmBtn.className = `btn btn-confirm ${isPickup ? 'btn-confirm-pickup' : 'btn-confirm-delivery'} btn-block`;
-            confirmBtn.innerHTML = `${getIcon('check', 18)} ${isPickup ? '✓ Barang Sudah Dimuat' : '✓ Barang Sudah Diambil'}`;
+            confirmBtn.innerHTML = `${getIcon('check', 16)} ${isPickup ? 'Konfirmasi Barang Dimuat' : 'Konfirmasi Barang Diambil'}`;
         } else {
             confirmWrap.classList.add('hidden');
         }
     }
 
-    // 8. Update AI Vision & Safety Badges
     const humanStatusEl = document.getElementById('cockpit-human-status');
     const hudHumanBadge = document.getElementById('hud-human-badge');
     const humanLabel = getHumanStatusLabel(human);
@@ -439,46 +424,45 @@ function updateCockpitData(data) {
             (human === 'WALKING' ? 'var(--warning)' : 'var(--success)');
     }
     if (hudHumanBadge) {
-        hudHumanBadge.textContent = `AI: ${humanLabel}`;
+        hudHumanBadge.textContent = `AI: ${humanLabel.toUpperCase()}`;
         hudHumanBadge.style.color = (human === 'DISTURBING' || human === 'CALLING') ? 'var(--danger)' :
             (human === 'WALKING' ? 'var(--warning)' : 'var(--success)');
     }
 }
 
-// ====================== INITIALIZER ======================
 function initCockpit() {
-    renderQuickDispatchChips();
+    renderQuickDispatchChips('cockpit-dispatch-grid');
     drawSpeedHistoryChart();
     switchViewportMode(cockpitViewportMode || 'camera');
 }
 
-// Format elapsed time nicely
 function formatElapsed(seconds) {
     if (!seconds || seconds <= 0) return '0s';
     const h = Math.floor(seconds / 3600);
     const m = Math.floor((seconds % 3600) / 60);
     const s = Math.floor(seconds % 60);
-    if (h > 0) return `${h}j ${m}m ${s}d`;
-    if (m > 0) return `${m}m ${s}d`;
-    return `${s}d`;
+    if (h > 0) return `${h}h ${m}m ${s}s`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
 }
 
 function getHumanStatusLabel(status) {
     const labels = {
-        'NO_HUMAN': 'Aman (Normal)',
-        'IDLE': 'Manusia Terdeteksi',
-        'WALKING': 'Manusia Berjalan',
-        'DISTURBING': 'Menghalangi Jalan!',
-        'CALLING': 'Memanggil Robot!',
-        'CALIBRATION': 'Kalibrasi Sensor...'
+        'NO_HUMAN': 'Clear (Aman)',
+        'IDLE': 'Terdeteksi',
+        'WALKING': 'Berjalan',
+        'DISTURBING': 'Menghalangi!',
+        'CALLING': 'Memanggil!',
+        'CALIBRATION': 'Kalibrasi...'
     };
     return labels[status] || status;
 }
 
-// Window bindings
 window.switchViewportMode = switchViewportMode;
 window.resetMapCenter = resetMapCenter;
 window.quickDispatchTo = quickDispatchTo;
+window.renderQuickDispatchChips = renderQuickDispatchChips;
 window.onCockpitConfirmArrival = onCockpitConfirmArrival;
 window.initCockpit = initCockpit;
 window.updateCockpitData = updateCockpitData;
+window.drawSpeedHistoryChart = drawSpeedHistoryChart;

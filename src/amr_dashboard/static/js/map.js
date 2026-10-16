@@ -1,7 +1,7 @@
 /* =================================================================
-   AMR DASHBOARD — Interactive Map Module
-   Renders the warehouse map with robot position, waypoints, and
-   supports tap-to-add-waypoint on mobile.
+   AMR-01 // CONTROL STUDIO — Interactive 2D SLAM Map Module
+   Renders the warehouse map with robot position, heading vector,
+   waypoints, and supports tap-to-add-waypoint.
    ================================================================= */
 
 // ====================== MAP STATE ======================
@@ -9,27 +9,36 @@ const MAP_STATE = {
     image: null,
     metadata: null,
     loaded: false,
-    // Map image dimensions
     imgWidth: 0,
     imgHeight: 0,
-    // Canvas dimensions  
     canvasWidth: 0,
     canvasHeight: 0,
-    // Scale factor
     scale: 1,
 };
+
+let deliveryMapAnimFrame = null;
+let monitorMapAnimFrame = null;
+
+function stopAllMapLoops() {
+    if (deliveryMapAnimFrame) {
+        cancelAnimationFrame(deliveryMapAnimFrame);
+        deliveryMapAnimFrame = null;
+    }
+    if (monitorMapAnimFrame) {
+        cancelAnimationFrame(monitorMapAnimFrame);
+        monitorMapAnimFrame = null;
+    }
+}
 
 // ====================== LOAD MAP ======================
 async function loadMapData() {
     if (MAP_STATE.loaded) return true;
 
     try {
-        // Load metadata
         const meta = await apiGet('/api/map/metadata');
         if (!meta) return false;
         MAP_STATE.metadata = meta;
 
-        // Load image
         return new Promise((resolve) => {
             const img = new Image();
             img.onload = () => {
@@ -49,7 +58,6 @@ async function loadMapData() {
 }
 
 // ====================== COORDINATE CONVERSION ======================
-// World (ROS map frame) → Canvas pixel
 function worldToPixel(wx, wy) {
     if (!MAP_STATE.metadata) return { px: 0, py: 0 };
 
@@ -65,7 +73,6 @@ function worldToPixel(wx, wy) {
     };
 }
 
-// Canvas pixel → World (ROS map frame)
 function pixelToWorld(px, py) {
     if (!MAP_STATE.metadata) return { wx: 0, wy: 0 };
 
@@ -83,30 +90,30 @@ function pixelToWorld(px, py) {
 
 // ====================== DRAW FUNCTIONS ======================
 function drawMap(canvas, ctx, options = {}) {
-    if (!MAP_STATE.loaded || !canvas) return;
+    if (!MAP_STATE.loaded || !canvas || !canvas.parentElement) return;
 
     const {
         showRobot = true,
         showWaypoints = false,
         showTaskQueue = false,
-        interactive = false,
     } = options;
 
-    // Size canvas to container
     const container = canvas.parentElement;
-    const containerWidth = container.clientWidth;
+    const containerWidth = container.clientWidth || 400;
     MAP_STATE.scale = containerWidth / MAP_STATE.imgWidth;
     MAP_STATE.canvasWidth = containerWidth;
     MAP_STATE.canvasHeight = Math.round(MAP_STATE.imgHeight * MAP_STATE.scale);
 
-    canvas.width = MAP_STATE.canvasWidth;
-    canvas.height = MAP_STATE.canvasHeight;
+    if (canvas.width !== MAP_STATE.canvasWidth || canvas.height !== MAP_STATE.canvasHeight) {
+        canvas.width = MAP_STATE.canvasWidth;
+        canvas.height = MAP_STATE.canvasHeight;
+    }
 
-    // Draw map image
+    // Draw SLAM occupancy grid image
     ctx.drawImage(MAP_STATE.image, 0, 0, MAP_STATE.canvasWidth, MAP_STATE.canvasHeight);
 
-    // Apply slight tint for better contrast
-    ctx.fillStyle = 'rgba(6, 10, 24, 0.25)';
+    // Apply subtle studio dark contrast overlay
+    ctx.fillStyle = 'rgba(9, 9, 11, 0.22)';
     ctx.fillRect(0, 0, MAP_STATE.canvasWidth, MAP_STATE.canvasHeight);
 
     // Draw predefined waypoints
@@ -117,30 +124,28 @@ function drawMap(canvas, ctx, options = {}) {
         });
     }
 
-    // Draw task queue waypoints
+    // Draw task queue waypoints & route lines
     if (showTaskQueue && APP.taskQueue) {
         APP.taskQueue.forEach((task, i) => {
-            // Pickup
             const pickup = worldToPixel(task.pickup.x, task.pickup.y);
-            drawTaskMarker(ctx, pickup.px, pickup.py, 'pickup', i + 1);
-
-            // Delivery
             const delivery = worldToPixel(task.delivery.x, task.delivery.y);
-            drawTaskMarker(ctx, delivery.px, delivery.py, 'delivery', i + 1);
 
-            // Line between pickup and delivery
+            // Vector route line between pickup and delivery
             ctx.beginPath();
-            ctx.setLineDash([4, 4]);
-            ctx.strokeStyle = 'rgba(0, 212, 255, 0.3)';
-            ctx.lineWidth = 1;
+            ctx.setLineDash([5, 4]);
+            ctx.strokeStyle = 'rgba(59, 130, 246, 0.65)';
+            ctx.lineWidth = 1.5;
             ctx.moveTo(pickup.px, pickup.py);
             ctx.lineTo(delivery.px, delivery.py);
             ctx.stroke();
             ctx.setLineDash([]);
+
+            drawTaskMarker(ctx, pickup.px, pickup.py, 'pickup', i + 1);
+            drawTaskMarker(ctx, delivery.px, delivery.py, 'delivery', i + 1);
         });
     }
 
-    // Draw robot position
+    // Draw robot position & orientation
     if (showRobot) {
         const { px, py } = worldToPixel(APP.pose.x, APP.pose.y);
         drawRobot(ctx, px, py, APP.pose.yaw);
@@ -148,62 +153,72 @@ function drawMap(canvas, ctx, options = {}) {
 }
 
 function drawWaypointMarker(ctx, x, y, type, label) {
-    const color = type === 'pickup' ? '#00d4ff' : '#00ff88';
+    const color = type === 'pickup' ? '#3b82f6' : '#10b981';
     const radius = 5;
 
-    // Outer glow
+    // Outer technical halo
     ctx.beginPath();
     ctx.arc(x, y, radius + 4, 0, Math.PI * 2);
     ctx.fillStyle = type === 'pickup'
-        ? 'rgba(0, 212, 255, 0.15)'
-        : 'rgba(0, 255, 136, 0.15)';
+        ? 'rgba(59, 130, 246, 0.2)'
+        : 'rgba(16, 185, 129, 0.2)';
     ctx.fill();
 
-    // Dot
+    // Crisp center dot
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
     ctx.fillStyle = color;
     ctx.fill();
-
-    // Border
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#09090b';
+    ctx.lineWidth = 1.5;
     ctx.stroke();
 
-    // Label
+    // Monospace pill label
     if (label) {
-        ctx.font = '600 9px Inter, sans-serif';
-        ctx.fillStyle = '#fff';
+        ctx.font = '600 9px "JetBrains Mono", monospace';
+        const textWidth = ctx.measureText(label).width;
+        const padX = 4;
+        const boxW = textWidth + padX * 2;
+        const boxH = 13;
+        const boxX = x - boxW / 2;
+        const boxY = y - radius - boxH - 4;
+
+        ctx.fillStyle = 'rgba(9, 9, 11, 0.85)';
+        ctx.fillRect(boxX, boxY, boxW, boxH);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+        ctx.fillStyle = '#f4f4f5';
         ctx.textAlign = 'center';
-        ctx.fillText(label, x, y - radius - 6);
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, x, boxY + boxH / 2);
+        ctx.textBaseline = 'alphabetic';
     }
 }
 
 function drawTaskMarker(ctx, x, y, type, number) {
-    const color = type === 'pickup' ? '#00d4ff' : '#00ff88';
-    const radius = 10;
+    const color = type === 'pickup' ? '#3b82f6' : '#10b981';
+    const radius = 9;
 
-    // Circle with number
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
     ctx.fillStyle = color;
     ctx.fill();
-    ctx.strokeStyle = '#fff';
+    ctx.strokeStyle = '#09090b';
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
-    // Number
-    ctx.font = 'bold 9px Inter, sans-serif';
-    ctx.fillStyle = type === 'pickup' ? '#000' : '#000';
+    ctx.font = '700 9px "JetBrains Mono", monospace';
+    ctx.fillStyle = '#fff';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(number, x, y);
 
-    // Type label below
-    ctx.font = '600 7px Inter, sans-serif';
+    ctx.font = '700 7px "JetBrains Mono", monospace';
     ctx.fillStyle = color;
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText(type === 'pickup' ? 'P' : 'D', x, y + radius + 9);
+    ctx.fillText(type === 'pickup' ? 'PKP' : 'DLV', x, y + radius + 9);
 }
 
 function drawRobot(ctx, x, y, yaw) {
@@ -211,33 +226,40 @@ function drawRobot(ctx, x, y, yaw) {
 
     ctx.save();
     ctx.translate(x, y);
-    ctx.rotate(-yaw); // Canvas Y is inverted
+    ctx.rotate(-yaw);
 
-    // Robot body (triangle pointing forward)
+    // Heading ray line
     ctx.beginPath();
-    ctx.moveTo(size * 1.5, 0);
-    ctx.lineTo(-size, -size);
-    ctx.lineTo(-size, size);
-    ctx.closePath();
-    ctx.fillStyle = '#ff4466';
-    ctx.fill();
-    ctx.strokeStyle = '#fff';
+    ctx.moveTo(0, 0);
+    ctx.lineTo(size * 2.4, 0);
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.65)';
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
-    // Glow ring
+    // Outer radar ring
     ctx.beginPath();
     ctx.arc(0, 0, size + 5, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(255, 68, 102, 0.35)';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.4)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Robot directional chevron/triangle
+    ctx.beginPath();
+    ctx.moveTo(size * 1.45, 0);
+    ctx.lineTo(-size * 0.9, -size * 0.85);
+    ctx.lineTo(-size * 0.5, 0);
+    ctx.lineTo(-size * 0.9, size * 0.85);
+    ctx.closePath();
+    ctx.fillStyle = '#f59e0b';
+    ctx.fill();
+    ctx.strokeStyle = '#09090b';
+    ctx.lineWidth = 1.2;
     ctx.stroke();
 
     ctx.restore();
 }
 
 // ====================== DELIVERY MAP ======================
-let deliveryMapAnimFrame = null;
-
 async function initDeliveryMap() {
     const canvas = document.getElementById('delivery-map-canvas');
     if (!canvas) return;
@@ -245,63 +267,60 @@ async function initDeliveryMap() {
     const ok = await loadMapData();
     if (!ok) {
         const container = canvas.parentElement;
-        container.innerHTML = '<div class="flex-center" style="height:150px; color:var(--text-muted); font-size:0.82rem;">Peta tidak tersedia</div>';
+        if (container) {
+            container.innerHTML = '<div class="flex-center mono" style="height:160px; color:var(--text-muted); font-size:0.76rem;">DATA PETA SLAM TIDAK TERSEDIA</div>';
+        }
         return;
     }
 
     const ctx = canvas.getContext('2d');
 
-    // Add tap handler for interactive waypoint adding
-    canvas.addEventListener('click', (e) => {
+    canvas.onclick = (e) => {
         const rect = canvas.getBoundingClientRect();
         const px = e.clientX - rect.left;
         const py = e.clientY - rect.top;
         const { wx, wy } = pixelToWorld(px, py);
 
-        // Ask user what to set (pickup or delivery)
         showModal(
-            'Titik di Peta',
-            `Koordinat: <strong>(${wx}, ${wy})</strong><br>
-             Tetapkan sebagai apa?`,
+            'Tetapkan Koordinat Peta',
+            `<span class="mono">POSISI: <strong>X=${wx}m, Y=${wy}m</strong></span><br>
+             Pilih peran titik koordinat ini dalam task pengiriman:`,
             [
                 {
                     label: 'Set Pickup', class: 'btn-primary',
                     action: () => {
-                        APP.pendingPickup = { name: `Peta (${wx}, ${wy})`, x: wx, y: wy };
+                        APP.pendingPickup = { name: `Map (${wx}, ${wy})`, x: wx, y: wy };
                         const el = document.getElementById('pickup-selected');
-                        if (el) el.innerHTML = `${getIcon('check', 14)} Pickup: (${wx}, ${wy})`;
-                        showToast(`Pickup: (${wx}, ${wy})`, 'info');
+                        if (el) el.innerHTML = `${getIcon('check', 13)} Pickup: [${wx}, ${wy}]`;
+                        showToast(`Pickup ditetapkan: (${wx}, ${wy})`, 'info');
                     }
                 },
                 {
                     label: 'Set Delivery', class: 'btn-success',
                     action: () => {
-                        APP.pendingDelivery = { name: `Peta (${wx}, ${wy})`, x: wx, y: wy };
+                        APP.pendingDelivery = { name: `Map (${wx}, ${wy})`, x: wx, y: wy };
                         const el = document.getElementById('delivery-selected');
-                        if (el) el.innerHTML = `${getIcon('check', 14)} Delivery: (${wx}, ${wy})`;
-                        showToast(`Delivery: (${wx}, ${wy})`, 'info');
+                        if (el) el.innerHTML = `${getIcon('check', 13)} Delivery: [${wx}, ${wy}]`;
+                        showToast(`Delivery ditetapkan: (${wx}, ${wy})`, 'info');
                     }
                 }
             ]
         );
-    });
+    };
 
-    // Animation loop
     function animate() {
+        if (!document.getElementById('delivery-map-canvas')) return;
         drawMap(canvas, ctx, {
             showRobot: true,
             showWaypoints: true,
             showTaskQueue: true,
-            interactive: true,
         });
         deliveryMapAnimFrame = requestAnimationFrame(animate);
     }
     animate();
 }
 
-// ====================== MONITOR MAP ======================
-let monitorMapAnimFrame = null;
-
+// ====================== MONITOR & OVERVIEW MAP ======================
 async function initMonitorMap(canvasId = 'monitor-map-canvas') {
     const canvas = document.getElementById(canvasId);
     if (!canvas) return;
@@ -309,17 +328,20 @@ async function initMonitorMap(canvasId = 'monitor-map-canvas') {
     const ok = await loadMapData();
     if (!ok) {
         const container = canvas.parentElement;
-        container.innerHTML = '<div class="flex-center" style="height:150px; color:var(--text-muted); font-size:0.82rem;">Peta tidak tersedia</div>';
+        if (container) {
+            container.innerHTML = '<div class="flex-center mono" style="height:160px; color:var(--text-muted); font-size:0.76rem;">DATA PETA SLAM TIDAK TERSEDIA</div>';
+        }
         return;
     }
 
     const ctx = canvas.getContext('2d');
 
     function animate() {
+        if (!document.getElementById(canvasId)) return;
         drawMap(canvas, ctx, {
             showRobot: true,
             showWaypoints: true,
-            showTaskQueue: false,
+            showTaskQueue: true,
         });
         monitorMapAnimFrame = requestAnimationFrame(animate);
     }
@@ -342,54 +364,7 @@ function startMonitoringPolling() {
         if (typeof updateCockpitData === 'function') {
             updateCockpitData(data);
         }
-
-        // Update monitoring UI
-        const monX = document.getElementById('mon-x');
-        const monY = document.getElementById('mon-y');
-        const monYaw = document.getElementById('mon-yaw');
-        const monHuman = document.getElementById('mon-human');
-        const monPhase = document.getElementById('mon-phase');
-        const monElapsed = document.getElementById('mon-elapsed');
-        const monBadge = document.getElementById('mon-status-badge');
-        const monProgress = document.getElementById('mon-progress');
-        const monProgressText = document.getElementById('mon-progress-text');
-
-        if (monX) monX.textContent = APP.pose.x.toFixed(3);
-        if (monY) monY.textContent = APP.pose.y.toFixed(3);
-        if (monYaw) monYaw.textContent = (APP.pose.yaw * 180 / Math.PI).toFixed(1) + '°';
-        if (monHuman) {
-            monHuman.textContent = APP.humanStatus;
-            monHuman.className = 'mon-value ' + (
-                APP.humanStatus === 'DISTURBING' || APP.humanStatus === 'CALLING' ? 'mon-danger' :
-                APP.humanStatus === 'WALKING' ? 'mon-warning' : 'mon-success'
-            );
-        }
-
-        const phaseLabels = {
-            idle: 'Idle', navigating_pickup: 'Menuju Pickup', at_pickup: 'Di Pickup',
-            navigating_delivery: 'Menuju Tujuan', at_delivery: 'Di Tujuan'
-        };
-        if (monPhase) monPhase.textContent = phaseLabels[APP.delivery.current_phase] || APP.delivery.current_phase;
-
-        if (monElapsed && APP.delivery.elapsed_time) {
-            const sec = Math.floor(APP.delivery.elapsed_time);
-            const min = Math.floor(sec / 60);
-            monElapsed.textContent = min > 0 ? `${min}m ${sec % 60}s` : `${sec}s`;
-        }
-
-        if (monBadge) {
-            monBadge.textContent = (APP.delivery.status || 'idle').toUpperCase();
-            monBadge.className = `status-badge status-${APP.delivery.status || 'idle'}`;
-        }
-
-        if (monProgress && APP.delivery.total_tasks > 0) {
-            const pct = Math.round((APP.delivery.completed_tasks / APP.delivery.total_tasks) * 100);
-            monProgress.style.width = `${pct}%`;
-        }
-
-        if (monProgressText && APP.delivery.total_tasks > 0) {
-            monProgressText.textContent =
-                `Task ${(APP.delivery.current_task_index || 0) + 1}/${APP.delivery.total_tasks} — ${phaseLabels[APP.delivery.current_phase] || ''}`;
-        }
     }, 500);
 }
+
+window.stopAllMapLoops = stopAllMapLoops;
