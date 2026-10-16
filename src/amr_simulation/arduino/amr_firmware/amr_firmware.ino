@@ -30,13 +30,13 @@ const int PIN_R_LEN  = 12;
 const int PIN_ENC_L_A = 2;   // Hardware Interrupt 0 (INT0)
 const int PIN_ENC_L_B = 4;
 const int PIN_ENC_R_A = 3;   // Hardware Interrupt 1 (INT1)
-const int PIN_ENC_R_B = 13;  // Sesuai referensi (ubah ke A0 jika kabel fisik di A0)
+const int PIN_ENC_R_B = A1;  // Menggunakan Pin Analog A1 sebagai Digital Input
 
 // --- OPSI PEMBALIK ARAH (Ubah ke true jika arah roda/encoder terbalik) ---
 const bool INVERT_MOTOR_L = false;
-const bool INVERT_MOTOR_R = false;
-const bool INVERT_ENC_L   = false;
-const bool INVERT_ENC_R   = false;
+const bool INVERT_MOTOR_R = true;
+const bool INVERT_ENC_L   = true;
+const bool INVERT_ENC_R   = true;
 
 // --- VARIABEL ENCODER ---
 volatile long enc_left_ticks  = 0;
