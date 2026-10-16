@@ -59,11 +59,15 @@ class ArduinoBridgeNode(Node):
         self.prev_left_ticks = None
         self.prev_right_ticks = None
         self.prev_odom_time = self.get_clock().now()
+        self.rx_buffer = ""
 
         # --- STATE TARGET KECEPATAN ---
         self.target_pwm_l = 0
         self.target_pwm_r = 0
+        self.last_sent_pwm_l = None
+        self.last_sent_pwm_r = None
         self.last_cmd_vel_time = self.get_clock().now()
+        self.last_tx_time = self.get_clock().now()
 
         # --- INISIALISASI SERIAL ARDUINO ---
         self.ser = None
@@ -74,7 +78,7 @@ class ArduinoBridgeNode(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
         self.cmd_sub = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
 
-        # Timer 50 Hz untuk baca serial & kirim perintah motor
+        # Timer 50 Hz untuk baca serial & menjaga heartbeat motor
         self.timer = self.create_timer(0.02, self.update_loop)
         self.get_logger().info(
             f"Arduino Bridge aktif di {self.port} ({self.baud} baud) | "
@@ -83,10 +87,10 @@ class ArduinoBridgeNode(Node):
 
     def connect_serial(self):
         try:
-            self.ser = serial.Serial(self.port, self.baud, timeout=0.01)
+            self.ser = serial.Serial(self.port, self.baud, timeout=0)
             time.sleep(2.0)  # Tunggu bootloader Arduino Uno selesai auto-reset
             self.ser.reset_input_buffer()
-            self.ser.write(b"RST\n")
+            self.ser.write(b"0,0\n")
             self.get_logger().info(f"Berhasil terhubung ke Arduino di {self.port}")
         except Exception as e:
             self.get_logger().error(f"Gagal membuka port Arduino {self.port}: {e}")
@@ -100,6 +104,18 @@ class ArduinoBridgeNode(Node):
         pwm = int(self.min_pwm + ratio * (self.max_pwm - self.min_pwm))
         return pwm if speed_mps > 0 else -pwm
 
+    def send_pwm(self, pwm_l: int, pwm_r: int, now):
+        if self.ser is None or not self.ser.is_open:
+            return
+        try:
+            cmd_str = f"{pwm_l},{pwm_r}\n"
+            self.ser.write(cmd_str.encode('ascii'))
+            self.last_sent_pwm_l = pwm_l
+            self.last_sent_pwm_r = pwm_r
+            self.last_tx_time = now
+        except Exception as e:
+            self.get_logger().warn(f"Serial write error: {e}")
+
     def cmd_vel_callback(self, msg: Twist):
         v = msg.linear.x
         w = msg.angular.z
@@ -110,7 +126,12 @@ class ArduinoBridgeNode(Node):
 
         self.target_pwm_l = self.speed_to_pwm(v_left)
         self.target_pwm_r = self.speed_to_pwm(v_right)
-        self.last_cmd_vel_time = self.get_clock().now()
+        now = self.get_clock().now()
+        self.last_cmd_vel_time = now
+
+        # Langsung kirim jika nilai PWM berubah agar respons instan
+        if (self.target_pwm_l != self.last_sent_pwm_l) or (self.target_pwm_r != self.last_sent_pwm_r):
+            self.send_pwm(self.target_pwm_l, self.target_pwm_r, now)
 
     def update_loop(self):
         if self.ser is None or not self.ser.is_open:
@@ -124,23 +145,28 @@ class ArduinoBridgeNode(Node):
             self.target_pwm_l = 0
             self.target_pwm_r = 0
 
-        # 2. Kirim PWM ke Arduino
-        try:
-            cmd_str = f"{self.target_pwm_l},{self.target_pwm_r}\n"
-            self.ser.write(cmd_str.encode('ascii'))
-        except Exception as e:
-            self.get_logger().warn(f"Serial write error: {e}")
+        # 2. Kirim PWM ke Arduino maksimal tiap 150ms (atau saat berubah) agar tidak membanjiri buffer RX Arduino
+        dt_tx = (now - self.last_tx_time).nanoseconds / 1e9
+        pwm_changed = (self.target_pwm_l != self.last_sent_pwm_l) or (self.target_pwm_r != self.last_sent_pwm_r)
+        if pwm_changed or (self.target_pwm_l != 0 or self.target_pwm_r != 0) and dt_tx >= 0.15:
+            self.send_pwm(self.target_pwm_l, self.target_pwm_r, now)
 
-        # 3. Baca data encoder dari Arduino ("ENC:<left>,<right>")
+        # 3. Baca data encoder dari Arduino secara Non-Blocking menggunakan buffer
         try:
-            while self.ser.in_waiting > 0:
-                line = self.ser.readline().decode('ascii', errors='ignore').strip()
-                if line.startswith("ENC:"):
-                    parts = line[4:].split(",")
-                    if len(parts) == 2:
-                        left_ticks = int(parts[0])
-                        right_ticks = int(parts[1])
-                        self.process_odometry(left_ticks, right_ticks, now)
+            waiting = self.ser.in_waiting
+            if waiting > 0:
+                raw_bytes = self.ser.read(waiting)
+                self.rx_buffer += raw_bytes.decode('ascii', errors='ignore')
+
+                while '\n' in self.rx_buffer:
+                    line, self.rx_buffer = self.rx_buffer.split('\n', 1)
+                    line = line.strip()
+                    if line.startswith("ENC:"):
+                        parts = line[4:].split(",")
+                        if len(parts) == 2:
+                            left_ticks = int(parts[0])
+                            right_ticks = int(parts[1])
+                            self.process_odometry(left_ticks, right_ticks, now)
         except Exception as e:
             self.get_logger().warn(f"Serial read error: {e}")
 
