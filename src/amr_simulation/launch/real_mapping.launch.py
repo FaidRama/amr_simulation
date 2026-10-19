@@ -37,7 +37,7 @@ def generate_launch_description():
         parameters=[{
             'serial_port': '/dev/ttyACM0',
             'baudrate': 115200,
-            'wheel_diameter': 0.133,
+            'wheel_diameter': 0.127,
             'wheel_separation': 0.442,
             'ticks_per_rev': 537.0,
             'odom_frame': 'odom',

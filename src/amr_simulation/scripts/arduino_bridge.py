@@ -2,6 +2,7 @@
 """
 ROS 2 Arduino Serial Bridge Node (Jetson AGX Xavier <-> Arduino Uno)
 - Mengubah /cmd_vel (Twist) menjadi perintah PWM "<PWM_L>,<PWM_R>\n" ke Arduino
+- Dilengkapi Smooth Acceleration Ramp & Heartbeat 10Hz agar gerakan halus (anti patah-patah)
 - Membaca "ENC:<left>,<right>" dari Arduino dan mem-publish /odom + TF (odom -> base_link)
 """
 
@@ -31,9 +32,11 @@ class ArduinoBridgeNode(Node):
         self.declare_parameter('wheel_diameter', 0.133)      # meter (sesuai URDF: 13.3 cm)
         self.declare_parameter('wheel_separation', 0.442)    # meter (sesuai URDF: 44.2 cm)
         self.declare_parameter('ticks_per_rev', 537.0)       # PG36 rata-rata ~500-600 ticks/putaran roda
-        self.declare_parameter('max_speed_mps', 0.5)         # Kecepatan pada PWM 255 (m/s)
+        self.declare_parameter('max_speed_mps', 0.5)         # Kecepatan pada PWM maksimal (m/s)
         self.declare_parameter('min_pwm', 45)                # Deadzone minimum PWM agar motor mulai berputar
-        self.declare_parameter('max_pwm', 220)               # Batas aman PWM maksimal
+        self.declare_parameter('max_pwm', 200)               # Batas aman PWM maksimal
+        self.declare_parameter('cmd_vel_timeout', 2.5)       # detik (agar teleop keyboard tidak putus-putus)
+        self.declare_parameter('pwm_ramp_step', 30)          # Akselerasi halus per 50ms
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('publish_tf', True)
@@ -46,6 +49,8 @@ class ArduinoBridgeNode(Node):
         self.max_speed_mps = float(self.get_parameter('max_speed_mps').value)
         self.min_pwm = int(self.get_parameter('min_pwm').value)
         self.max_pwm = int(self.get_parameter('max_pwm').value)
+        self.cmd_vel_timeout = float(self.get_parameter('cmd_vel_timeout').value)
+        self.pwm_ramp_step = int(self.get_parameter('pwm_ramp_step').value)
         self.odom_frame = self.get_parameter('odom_frame').value
         self.base_frame = self.get_parameter('base_frame').value
         self.publish_tf = bool(self.get_parameter('publish_tf').value)
@@ -61,11 +66,11 @@ class ArduinoBridgeNode(Node):
         self.prev_odom_time = self.get_clock().now()
         self.rx_buffer = ""
 
-        # --- STATE TARGET KECEPATAN ---
+        # --- STATE TARGET & CURRENT PWM ---
         self.target_pwm_l = 0
         self.target_pwm_r = 0
-        self.last_sent_pwm_l = None
-        self.last_sent_pwm_r = None
+        self.current_pwm_l = 0
+        self.current_pwm_r = 0
         self.last_cmd_vel_time = self.get_clock().now()
         self.last_tx_time = self.get_clock().now()
 
@@ -82,7 +87,7 @@ class ArduinoBridgeNode(Node):
         self.timer = self.create_timer(0.02, self.update_loop)
         self.get_logger().info(
             f"Arduino Bridge aktif di {self.port} ({self.baud} baud) | "
-            f"D={self.wheel_diameter}m, L={self.wheel_separation}m, Ticks/Rev={self.ticks_per_rev}"
+            f"D={self.wheel_diameter}m, L={self.wheel_separation}m, Timeout={self.cmd_vel_timeout}s"
         )
 
     def connect_serial(self):
@@ -104,14 +109,25 @@ class ArduinoBridgeNode(Node):
         pwm = int(self.min_pwm + ratio * (self.max_pwm - self.min_pwm))
         return pwm if speed_mps > 0 else -pwm
 
+    @staticmethod
+    def ramp_value(current: int, target: int, step: int, min_pwm: int) -> int:
+        """Akselerasi halus menuju target, namun langsung berhenti instan jika target == 0."""
+        if target == 0:
+            return 0
+        # Lompati deadzone saat baru mulai bergerak
+        if current == 0 and abs(target) >= min_pwm:
+            current = min_pwm if target > 0 else -min_pwm
+        diff = target - current
+        if abs(diff) <= step:
+            return target
+        return current + step if diff > 0 else current - step
+
     def send_pwm(self, pwm_l: int, pwm_r: int, now):
         if self.ser is None or not self.ser.is_open:
             return
         try:
             cmd_str = f"{pwm_l},{pwm_r}\n"
             self.ser.write(cmd_str.encode('ascii'))
-            self.last_sent_pwm_l = pwm_l
-            self.last_sent_pwm_r = pwm_r
             self.last_tx_time = now
         except Exception as e:
             self.get_logger().warn(f"Serial write error: {e}")
@@ -124,14 +140,18 @@ class ArduinoBridgeNode(Node):
         v_left = v - (w * self.wheel_separation / 2.0)
         v_right = v + (w * self.wheel_separation / 2.0)
 
-        self.target_pwm_l = self.speed_to_pwm(v_left)
-        self.target_pwm_r = self.speed_to_pwm(v_right)
+        new_l = self.speed_to_pwm(v_left)
+        new_r = self.speed_to_pwm(v_right)
         now = self.get_clock().now()
         self.last_cmd_vel_time = now
 
-        # Langsung kirim jika nilai PWM berubah agar respons instan
-        if (self.target_pwm_l != self.last_sent_pwm_l) or (self.target_pwm_r != self.last_sent_pwm_r):
-            self.send_pwm(self.target_pwm_l, self.target_pwm_r, now)
+        # Jika berubah (terutama perintah STOP 'k'), langsung kirim instan
+        if new_l != self.target_pwm_l or new_r != self.target_pwm_r:
+            self.target_pwm_l = new_l
+            self.target_pwm_r = new_r
+            self.current_pwm_l = self.ramp_value(self.current_pwm_l, self.target_pwm_l, self.pwm_ramp_step, self.min_pwm)
+            self.current_pwm_r = self.ramp_value(self.current_pwm_r, self.target_pwm_r, self.pwm_ramp_step, self.min_pwm)
+            self.send_pwm(self.current_pwm_l, self.current_pwm_r, now)
 
     def update_loop(self):
         if self.ser is None or not self.ser.is_open:
@@ -139,17 +159,22 @@ class ArduinoBridgeNode(Node):
 
         now = self.get_clock().now()
 
-        # 1. Timeout /cmd_vel: jika > 0.5 detik tidak ada perintah baru, hentikan roda
+        # 1. Timeout /cmd_vel: hentikan roda jika melebihi cmd_vel_timeout (default 2.5 detik)
         dt_cmd = (now - self.last_cmd_vel_time).nanoseconds / 1e9
-        if dt_cmd > 0.5:
-            self.target_pwm_l = 0
-            self.target_pwm_r = 0
+        if dt_cmd > self.cmd_vel_timeout:
+            if self.target_pwm_l != 0 or self.target_pwm_r != 0:
+                self.target_pwm_l = 0
+                self.target_pwm_r = 0
+                self.current_pwm_l = 0
+                self.current_pwm_r = 0
+                self.send_pwm(0, 0, now)
 
-        # 2. Kirim PWM ke Arduino maksimal tiap 150ms (atau saat berubah) agar tidak membanjiri buffer RX Arduino
+        # 2. Kirim Heartbeat PWM tiap 80ms (12.5 Hz) selama roda bergerak agar Watchdog Arduino (500ms) tidak memutus motor
         dt_tx = (now - self.last_tx_time).nanoseconds / 1e9
-        pwm_changed = (self.target_pwm_l != self.last_sent_pwm_l) or (self.target_pwm_r != self.last_sent_pwm_r)
-        if pwm_changed or (self.target_pwm_l != 0 or self.target_pwm_r != 0) and dt_tx >= 0.15:
-            self.send_pwm(self.target_pwm_l, self.target_pwm_r, now)
+        if (self.target_pwm_l != 0 or self.target_pwm_r != 0) and dt_tx >= 0.08:
+            self.current_pwm_l = self.ramp_value(self.current_pwm_l, self.target_pwm_l, self.pwm_ramp_step, self.min_pwm)
+            self.current_pwm_r = self.ramp_value(self.current_pwm_r, self.target_pwm_r, self.pwm_ramp_step, self.min_pwm)
+            self.send_pwm(self.current_pwm_l, self.current_pwm_r, now)
 
         # 3. Baca data encoder dari Arduino secara Non-Blocking menggunakan buffer
         try:
