@@ -48,7 +48,7 @@ uint8_t buf_idx = 0;
 
 // --- SAFETY & TIMING ---
 unsigned long last_cmd_time = 0;
-const unsigned long TIMEOUT_MS = 500;        // Fail-safe: Stop motor jika >0.5s tanpa perintah
+const unsigned long TIMEOUT_MS = 1500;        // Fail-safe: Stop motor jika >0.5s tanpa perintah
 
 unsigned long last_report_time = 0;
 const unsigned long REPORT_INTERVAL_MS = 50; // Kirim odometry setiap 50ms (20 Hz)
@@ -197,9 +197,9 @@ void loop() {
   }
 
   // --- 2. SAFETY WATCHDOG TIMEOUT ---
-  if (now - last_cmd_time > TIMEOUT_MS) {
-    setMotors(0, 0);
-  }
+//  if (now - last_cmd_time > TIMEOUT_MS) {
+//    setMotors(0, 0);
+//  }
 
   // --- 3. KIRIM DATA ENCODER KE JETSON (20 Hz) ---
   if (now - last_report_time >= REPORT_INTERVAL_MS) {

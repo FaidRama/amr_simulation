@@ -36,7 +36,7 @@ class ArduinoBridgeNode(Node):
         self.declare_parameter('max_speed_mps', 0.5)         # Kecepatan pada PWM maksimal (m/s)
         self.declare_parameter('min_pwm', 45)                # Deadzone minimum PWM agar motor mulai berputar
         self.declare_parameter('max_pwm', 200)               # Batas aman PWM maksimal
-        self.declare_parameter('cmd_vel_timeout', 0.4)       # 0.4s agar klik biasa berhenti cepat & responsif
+        self.declare_parameter('cmd_vel_timeout', 0.8)       # 0.8s untuk meng-cover jeda auto-repeat keyboard OS (500ms)
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('publish_tf', True)
