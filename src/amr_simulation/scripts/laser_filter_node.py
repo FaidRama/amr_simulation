@@ -29,6 +29,9 @@ class LaserFilterNode(Node):
         )
 
     def scan_callback(self, msg: LaserScan):
+        # Update range_min agar node SLAM / Costmap otomatis mengabaikan objek di bawah threshold
+        msg.range_min = max(msg.range_min, self.min_range)
+
         # Gandakan array ranges dan ganti objek di dalam sasis (< min_range) menjadi NaN
         filtered_ranges = []
         for r in msg.ranges:
