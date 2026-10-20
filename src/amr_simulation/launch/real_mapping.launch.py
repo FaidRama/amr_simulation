@@ -61,6 +61,12 @@ def generate_launch_description():
         arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'laser']
     )
 
+    tf_base_to_footprint = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
+    )
+
     # 3. Otak SLAM Toolbox
     slam_config_path = os.path.join(
         get_package_share_directory('amr_simulation'),
@@ -110,6 +116,7 @@ def generate_launch_description():
         start_arduino_bridge,
         tf_odom_to_base,
         tf_base_to_laser,
+        tf_base_to_footprint,
         start_slam_toolbox,
         start_rviz2
     ])
