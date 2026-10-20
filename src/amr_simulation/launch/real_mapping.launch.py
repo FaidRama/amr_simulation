@@ -82,6 +82,13 @@ def generate_launch_description():
         arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
     )
 
+    tf_base_to_camera = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['0.2', '0', '0.15', '0', '0', '0', 'base_link', 'camera_link'],
+        condition=IfCondition(LaunchConfiguration('camera'))
+    )
+
     # 3. Filter Laser Sasis (Memotong pantulan 4 tiang aluminium sasis)
     start_laser_filter = Node(
         package='amr_simulation',
@@ -114,7 +121,7 @@ def generate_launch_description():
                 'odom_frame': 'odom',
                 'map_frame': 'map',
                 'scan_topic': '/scan_filtered',
-                'min_laser_range': 0.32,
+                'min_laser_range': 0.34,
                 'minimum_travel_distance': 0.0,
                 'minimum_travel_heading': 0.0,
                 'map_update_interval': 1.0
@@ -148,6 +155,7 @@ def generate_launch_description():
         tf_odom_to_base,
         tf_base_to_laser,
         tf_base_to_footprint,
+        tf_base_to_camera,
         start_slam_toolbox,
         start_rviz2
     ])
