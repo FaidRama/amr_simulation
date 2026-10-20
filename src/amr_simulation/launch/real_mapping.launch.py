@@ -38,8 +38,8 @@ def generate_launch_description():
             'serial_port': '/dev/ttyACM0',
             'baudrate': 115200,
             'wheel_diameter': 0.127,
-            'wheel_separation': 0.442,
-            'ticks_per_rev': 537.0,
+            'wheel_separation': 0.458,
+            'ticks_per_rev': 350.7,
             'odom_frame': 'odom',
             'base_frame': 'base_link',
             'publish_tf': True
@@ -63,7 +63,7 @@ def generate_launch_description():
 
     # 3. Otak SLAM Toolbox
     slam_config_path = os.path.join(
-        get_package_share_directory('slam_toolbox'),
+        get_package_share_directory('amr_simulation'),
         'config',
         'mapper_params_online_async.yaml'
     )
