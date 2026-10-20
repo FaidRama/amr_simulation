@@ -67,20 +67,16 @@ def generate_launch_description():
         arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
     )
 
-    # 3. Filter Laser Sasis (Memotong pantulan 4 tiang aluminium)
+    # 3. Filter Laser Sasis (Memotong pantulan 4 tiang aluminium sasis)
     start_laser_filter = Node(
-        package='laser_filters',
-        executable='scan_to_scan_filter_chain',
-        name='scan_to_scan_filter_chain',
+        package='amr_simulation',
+        executable='laser_filter_node.py',
+        name='laser_filter',
         output='screen',
-        parameters=[
-            os.path.join(get_package_share_directory('amr_simulation'), 'config', 'laser_filter_config.yaml'),
-            {'use_sim_time': False}
-        ],
-        remappings=[
-            ('scan', '/scan'),
-            ('scan_filtered', '/scan_filtered')
-        ]
+        parameters=[{
+            'min_range': 0.34,
+            'max_range': 12.0
+        }]
     )
 
     # 4. Otak SLAM Toolbox
