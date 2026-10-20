@@ -67,7 +67,23 @@ def generate_launch_description():
         arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
     )
 
-    # 3. Otak SLAM Toolbox
+    # 3. Filter Laser Sasis (Memotong pantulan 4 tiang aluminium)
+    start_laser_filter = Node(
+        package='laser_filters',
+        executable='scan_to_scan_filter_chain',
+        name='scan_to_scan_filter_chain',
+        output='screen',
+        parameters=[
+            os.path.join(get_package_share_directory('amr_simulation'), 'config', 'laser_filter_config.yaml'),
+            {'use_sim_time': False}
+        ],
+        remappings=[
+            ('scan', '/scan'),
+            ('scan_filtered', '/scan_filtered')
+        ]
+    )
+
+    # 4. Otak SLAM Toolbox
     slam_config_path = os.path.join(
         get_package_share_directory('amr_simulation'),
         'config',
@@ -86,7 +102,7 @@ def generate_launch_description():
                 'base_frame': 'base_link',
                 'odom_frame': 'odom',
                 'map_frame': 'map',
-                'scan_topic': '/scan',
+                'scan_topic': '/scan_filtered',
                 'min_laser_range': 0.32,
                 'minimum_travel_distance': 0.0,
                 'minimum_travel_heading': 0.0,
@@ -97,7 +113,7 @@ def generate_launch_description():
 
     rviz_arg = DeclareLaunchArgument('rviz', default_value='False', description='Jalankan RViz2')
 
-    # 4. RViz2 untuk melihat hasil
+    # 5. RViz2 untuk melihat hasil
     rviz_config_dir = os.path.join(get_package_share_directory('amr_simulation'), 'rviz', 'slam_config.rviz')
     
     start_rviz2 = Node(
@@ -114,6 +130,7 @@ def generate_launch_description():
         use_arduino_arg,
         rviz_arg,
         start_rplidar,
+        start_laser_filter,
         start_arduino_bridge,
         tf_odom_to_base,
         tf_base_to_laser,
