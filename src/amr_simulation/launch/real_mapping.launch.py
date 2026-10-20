@@ -87,9 +87,10 @@ def generate_launch_description():
                 'odom_frame': 'odom',
                 'map_frame': 'map',
                 'scan_topic': '/scan',
+                'min_laser_range': 0.32,
                 'minimum_travel_distance': 0.0,
                 'minimum_travel_heading': 0.0,
-                'map_update_interval': 2.0
+                'map_update_interval': 1.0
             }
         ]
     )
