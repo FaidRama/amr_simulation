@@ -13,6 +13,12 @@ def generate_launch_description():
         default_value='True',
         description='Gunakan Arduino untuk Odometry & Motor Control'
     )
+
+    camera_arg = DeclareLaunchArgument(
+        'camera',
+        default_value='False',
+        description='Aktifkan streaming kamera USB untuk pantau jarak jauh'
+    )
     
     # 1. Node RPLidar A1 (Membaca sensor fisik)
     start_rplidar = Node(
@@ -26,6 +32,15 @@ def generate_launch_description():
             'inverted': False,
             'angle_compensate': True,
         }],
+    )
+
+    # 1B. Node Kamera USB (Streaming Ringan JPEG untuk Pantau Jarak Jauh)
+    start_camera = Node(
+        package='amr_simulation',
+        executable='camera_publisher.py',
+        name='camera_publisher',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('camera'))
     )
 
     # 2A. Node Arduino Bridge (Odometry Asli & Motor Control via /dev/ttyACM0)
@@ -124,8 +139,10 @@ def generate_launch_description():
 
     return LaunchDescription([
         use_arduino_arg,
+        camera_arg,
         rviz_arg,
         start_rplidar,
+        start_camera,
         start_laser_filter,
         start_arduino_bridge,
         tf_odom_to_base,
