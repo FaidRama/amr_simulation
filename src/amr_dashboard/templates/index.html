@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/style.css?v=1.3">
     <script>
         (function() {
             const saved = localStorage.getItem('amr_theme') || 'nordic-slate';
@@ -118,6 +118,10 @@
         </div>
 
         <div class="topbar-right">
+            <button class="topbar-voice-btn" id="btn-topbar-voice" onclick="openVoiceModal()" title="Perintah Suara AI (Gemini)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+                <span>Voice AI</span>
+            </button>
             <button class="topbar-theme-btn" onclick="cycleTheme()" title="Ganti Tema Warna Cepat (Atau buka Config)">
                 <span class="theme-dot-indicator"></span>
                 <span id="topbar-theme-label">Nordic Slate</span>
@@ -173,6 +177,47 @@
         </div>
     </div>
 
+    <!-- ============ VOICE AI ASSISTANT MODAL ============ -->
+    <div id="voice-modal-overlay" class="hidden" onclick="closeVoiceModalOnBackdrop(event)">
+        <div id="voice-modal-box">
+            <div class="voice-modal-header">
+                <div class="voice-status-pill" id="voice-status-pill">
+                    <span class="voice-status-dot"></span>
+                    <span id="voice-status-text">Siap Mendengarkan</span>
+                </div>
+                <button class="voice-close-btn" onclick="closeVoiceModal()">&times;</button>
+            </div>
+            
+            <div class="voice-visualizer-wrap">
+                <button class="voice-mic-circle" id="voice-mic-main-btn" onclick="toggleVoiceRecording()" title="Klik untuk Mulai/Berhenti Bicara">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+                </button>
+                <div class="voice-waves" id="voice-waves"></div>
+            </div>
+
+            <div class="voice-transcript-card">
+                <div class="voice-card-label">PERINTAH ANDA:</div>
+                <div class="voice-user-text" id="voice-user-transcript">Klik ikon mikrofon di atas, lalu bicaralah...</div>
+            </div>
+
+            <div class="voice-response-card" id="voice-response-card">
+                <div class="voice-card-label">RESPON AI ROBOT:</div>
+                <div class="voice-robot-text" id="voice-robot-response">—</div>
+            </div>
+
+            <div class="voice-input-row" style="display:flex; gap:8px; margin-top:2px;">
+                <input type="text" class="input-field" id="voice-text-input"
+                       placeholder="Atau ketik perintah di sini lalu Enter..."
+                       onkeydown="if(event.key === 'Enter') submitVoiceText()">
+                <button type="button" class="btn btn-primary" onclick="submitVoiceText()" style="padding:0 16px; font-weight:600;">Kirim</button>
+            </div>
+
+            <div class="voice-modal-tips">
+                <span>💡 Contoh: <em>"Ambil barang di Rak 1A dan antar ke Meja 2"</em> • <em>"Kembali ke home"</em> • <em>"Stop robot"</em></span>
+            </div>
+        </div>
+    </div>
+
     <!-- ============ MOBILE BOTTOM NAV (Mobile Screens) ============ -->
     <nav id="mobile-nav">
         <button class="mobile-nav-item" data-page="home" onclick="navigateTo('home')">
@@ -198,10 +243,10 @@
     </nav>
 
     <!-- ============ JAVASCRIPT ============ -->
-    <script src="/static/js/icons.js"></script>
-    <script src="/static/js/app.js"></script>
-    <script src="/static/js/map.js"></script>
-    <script src="/static/js/joystick.js"></script>
-    <script src="/static/js/monitoring.js"></script>
+    <script src="/static/js/icons.js?v=1.3"></script>
+    <script src="/static/js/app.js?v=1.3"></script>
+    <script src="/static/js/map.js?v=1.3"></script>
+    <script src="/static/js/joystick.js?v=1.3"></script>
+    <script src="/static/js/monitoring.js?v=1.3"></script>
 </body>
 </html>
