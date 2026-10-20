@@ -382,9 +382,35 @@ app = Flask(__name__,
 ros_node = None
 
 # Load waypoints config
+def load_env_file():
+    """Load variabel lingkungan dari file .env lokal."""
+    ws_root = os.environ.get('AMR_WS', os.path.expanduser('~/Documents/amr_ws'))
+    env_paths = [
+        os.path.join(PKG_PATH, 'config', '.env'),
+        os.path.join(os.path.dirname(__file__), '..', 'config', '.env'),
+        os.path.join(ws_root, 'src', 'amr_dashboard', 'config', '.env'),
+        os.path.join(ws_root, 'build', 'amr_dashboard', 'config', '.env'),
+        os.path.join(ws_root, '.env'),
+    ]
+    for path in env_paths:
+        if os.path.exists(path):
+            try:
+                with open(path, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#') and '=' in line:
+                            k, v = line.split('=', 1)
+                            os.environ[k.strip()] = v.strip().strip('"\'')
+                print(f'[CONFIG] Loaded environment variables dari {path}')
+                return
+            except Exception as e:
+                print(f'[WARN] Gagal membaca {path}: {e}')
+
+
 waypoints_config = {}
 def load_waypoints_config():
     global waypoints_config
+    load_env_file()
     config_paths = [
         os.path.join(PKG_PATH, 'config', 'waypoints.yaml'),
         os.path.join(os.path.dirname(__file__), '..', 'config', 'waypoints.yaml'),
@@ -392,7 +418,7 @@ def load_waypoints_config():
     for path in config_paths:
         if os.path.exists(path):
             with open(path, 'r') as f:
-                waypoints_config = yaml.safe_load(f)
+                waypoints_config = yaml.safe_load(f) or {}
             print(f'[CONFIG] Loaded waypoints dari {path}')
             return
     print('[WARN] waypoints.yaml tidak ditemukan, menggunakan default.')
@@ -658,6 +684,305 @@ def api_tts():
     except Exception as e:
         print(f'[WARN] Gagal mengunduh audio Google TTS: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+# =====================================================================
+# GEMINI AI & VOICE COMMAND INTEGRATION
+# =====================================================================
+def get_gemini_api_key():
+    """Dapatkan API Key Gemini dari env, file .env, atau settings."""
+    key = os.environ.get('GEMINI_API_KEY', '').strip()
+    if key:
+        return key
+    
+    load_env_file()
+    key = os.environ.get('GEMINI_API_KEY', '').strip()
+    if key:
+        return key
+
+    return waypoints_config.get('settings', {}).get('gemini_api_key', '').strip()
+
+
+def save_gemini_api_key(key):
+    """Simpan API Key ke file .env lokal."""
+    key = key.strip()
+    ws_root = os.environ.get('AMR_WS', os.path.expanduser('~/Documents/amr_ws'))
+    env_paths = [
+        os.path.join(PKG_PATH, 'config', '.env'),
+        os.path.join(ws_root, 'src', 'amr_dashboard', 'config', '.env'),
+        os.path.join(ws_root, '.env'),
+    ]
+    for env_path in env_paths:
+        try:
+            os.makedirs(os.path.dirname(env_path), exist_ok=True)
+            with open(env_path, 'w') as f:
+                f.write(f'GEMINI_API_KEY="{key}"\n')
+            print(f'[CONFIG] Gemini API Key disimpan ke {env_path}')
+        except Exception as e:
+            print(f'[WARN] Gagal menyimpan API Key ke {env_path}: {e}')
+    os.environ['GEMINI_API_KEY'] = key
+
+
+def call_gemini_api(user_text, system_instruction, api_key):
+    """Panggil Gemini Flash API via HTTP POST (urllib) dengan fallback model cepat."""
+    models = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]
+    last_err = None
+
+    for model in models:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            payload = {
+                "contents": [{"role": "user", "parts": [{"text": user_text}]}],
+                "systemInstruction": {"parts": [{"text": system_instruction}]},
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "responseMimeType": "application/json"
+                }
+            }
+            data = json.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'AMR-Delivery-Bot/1.0'
+                }
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                res_data = json.loads(resp.read().decode('utf-8'))
+                candidates = res_data.get('candidates', [])
+                if candidates and 'content' in candidates[0]:
+                    parts = candidates[0]['content'].get('parts', [])
+                    for part in reversed(parts):
+                        if 'text' in part and not part.get('thought'):
+                            raw_text = part['text'].strip()
+                            if raw_text.startswith('```json'):
+                                raw_text = raw_text[7:]
+                            if raw_text.startswith('```'):
+                                raw_text = raw_text[3:]
+                            if raw_text.endswith('```'):
+                                raw_text = raw_text[:-3]
+                            return json.loads(raw_text.strip())
+        except Exception as e:
+            print(f'[GEMINI WARN] Model {model} gagal: {e}')
+            last_err = e
+            continue
+    raise last_err or ValueError("Gagal menghubungi model Gemini")
+
+
+def find_point_by_name(name, points, point_type=None):
+    """Cari titik di list waypoints secara fleksibel (exact atau substring)."""
+    if not name:
+        return None
+    name_clean = name.strip().lower()
+    for p in points:
+        if p.get('name', '').strip().lower() == name_clean:
+            return p
+    for p in points:
+        p_name = p.get('name', '').strip().lower()
+        if name_clean in p_name or p_name in name_clean:
+            return p
+    if point_type:
+        for p in points:
+            if p.get('type') == point_type:
+                return p
+    return None
+
+
+@app.route('/api/gemini/status')
+def api_gemini_status():
+    """Cek status konfigurasi Gemini API Key."""
+    key = get_gemini_api_key()
+    configured = bool(key)
+    masked = ''
+    if configured:
+        masked = key[:6] + '...' + key[-4:] if len(key) > 10 else '******'
+    return jsonify({'configured': configured, 'masked_key': masked})
+
+
+@app.route('/api/gemini/save_key', methods=['POST'])
+def api_gemini_save_key():
+    """Simpan API Key ke .env lokal."""
+    data = request.get_json() or {}
+    key = data.get('api_key', '').strip()
+    if not key:
+        return jsonify({'success': False, 'error': 'API Key kosong'}), 400
+    save_gemini_api_key(key)
+    return jsonify({'success': True, 'message': 'API Key berhasil disimpan di konfigurasi lokal!'})
+
+
+@app.route('/api/gemini/test', methods=['POST'])
+def api_gemini_test():
+    """Uji koneksi Gemini API."""
+    data = request.get_json() or {}
+    key = data.get('api_key', '').strip() or get_gemini_api_key()
+    if not key:
+        return jsonify({'success': False, 'error': 'API Key belum diisi'}), 400
+    try:
+        res = call_gemini_api(
+            "Uji koneksi robot AMR.",
+            "Jawab dalam JSON: {\"status\": \"ok\", \"reply\": \"Koneksi Gemini AI Berhasil! AMR siap menerima perintah suara.\"}",
+            key
+        )
+        return jsonify({'success': True, 'message': res.get('reply', 'Koneksi Gemini AI Berhasil!')})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/voice_command', methods=['POST'])
+def api_voice_command():
+    """Memproses perintah suara operator menggunakan Gemini AI."""
+    data = request.get_json() or {}
+    text = data.get('text', '').strip()
+    if not text:
+        return jsonify({'success': False, 'error': 'Teks perintah kosong'}), 400
+
+    print(f'[VOICE] Menerima voice command: "{text}"')
+    text_lower = text.lower()
+
+    # Rule-based offline fast path untuk perintah stop / darurat
+    if any(k in text_lower for k in ['stop', 'berhenti', 'batal', 'emergency']):
+        if ros_node:
+            ros_node.send_control('cancel')
+        return jsonify({
+            'success': True,
+            'action': 'cancel',
+            'spoken_response': 'Misi dibatalkan dan robot segera dihentikan.',
+            'text': text
+        })
+
+    # Cek API Key
+    api_key = get_gemini_api_key()
+    if not api_key:
+        msg = 'API Key Gemini belum dikonfigurasi. Silakan masukkan API Key di menu Setting.'
+        return jsonify({
+            'success': False,
+            'error': msg,
+            'spoken_response': msg,
+            'text': text
+        }), 400
+
+    points = waypoints_config.get('predefined_points', [])
+    home = waypoints_config.get('home_position', {'x': 0.0, 'y': 0.0, 'yaw': 0.0})
+
+    points_desc = "\n".join([
+        f"- {p.get('name')} (tipe: {p.get('type')}, x={p.get('x')}, y={p.get('y')})"
+        for p in points
+    ])
+    if not points_desc:
+        points_desc = "(Belum ada titik tersimpan di peta)"
+
+    system_instruction = f"""
+Kamu adalah asisten AI pengendali Autonomous Mobile Robot (AMR) Delivery.
+Tugasmu adalah menganalisis ucapan perintah operator manusia dan mengubahnya menjadi keputusan tindakan robot.
+
+DAFTAR TITIK LOKASI DI PETA:
+{points_desc}
+Titik Home/Docking: (x={home.get('x')}, y={home.get('y')})
+
+FORMAT OUTPUT WAJIB BERUPA JSON VALID dengan struktur:
+{{
+  "action": "delivery" | "return_home" | "cancel" | "status" | "chat",
+  "pickup": "<nama titik pickup persis dari daftar, atau null>",
+  "delivery": "<nama titik delivery persis dari daftar, atau null>",
+  "spoken_response": "<kalimat balasan singkat, ramah, dan jelas dalam Bahasa Indonesia untuk diucapkan robot>"
+}}
+
+PANDUAN:
+1. Jika operator meminta mengambil barang, mengantar barang, atau mengantar ke lokasi tertentu:
+   - action: "delivery"
+   - Pilih nama titik pickup dan delivery yang paling sesuai dari daftar lokasi.
+   - Jika titik pickup tidak disebutkan jelas, gunakan titik pickup pertama yang tersedia.
+   - Contoh spoken_response: "Baik, saya segera mengambil barang di [pickup] dan mengantarkannya ke [delivery]."
+2. Jika operator meminta robot pulang, kembali ke home, atau docking:
+   - action: "return_home"
+   - spoken_response: "Baik, saya segera kembali ke titik awal."
+3. Jika operator meminta robot berhenti / batalkan:
+   - action: "cancel"
+   - spoken_response: "Perintah diterima, pergerakan dihentikan."
+4. Jika operator menanyakan posisi, kondisi, atau sedang apa:
+   - action: "status"
+   - spoken_response: "Saat ini saya standby siap menerima tugas."
+5. Jika sapaan atau percakapan umum:
+   - action: "chat"
+   - spoken_response: respon ramah dan tawarkan bantuan pengantaran barang.
+"""
+
+    try:
+        decision = call_gemini_api(text, system_instruction, api_key)
+        action = decision.get('action', 'chat')
+        spoken_response = decision.get('spoken_response', 'Perintah diterima.')
+
+        execution_info = {}
+
+        if action in ['delivery', 'pick_and_deliver', 'pickup', 'deliver'] or 'deliver' in action or 'pick' in action:
+            pickup_name = decision.get('pickup')
+            delivery_name = decision.get('delivery')
+
+            pickup_pt = find_point_by_name(pickup_name, points, 'pickup')
+            delivery_pt = find_point_by_name(delivery_name, points, 'delivery')
+
+            if not pickup_pt:
+                pickup_pt = next((p for p in points if p.get('type') == 'pickup'), None)
+            if not delivery_pt:
+                delivery_pt = next((p for p in points if p.get('type') == 'delivery'), None)
+
+            if pickup_pt and delivery_pt and ros_node:
+                task = {
+                    'pickup': {
+                        'name': pickup_pt.get('name'),
+                        'x': float(pickup_pt.get('x', 0)),
+                        'y': float(pickup_pt.get('y', 0)),
+                        'yaw': float(pickup_pt.get('yaw', 0.0))
+                    },
+                    'delivery': {
+                        'name': delivery_pt.get('name'),
+                        'x': float(delivery_pt.get('x', 0)),
+                        'y': float(delivery_pt.get('y', 0)),
+                        'yaw': float(delivery_pt.get('yaw', 0.0))
+                    }
+                }
+                ros_node.send_delivery_tasks([task])
+                execution_info = {'task': task, 'executed': True}
+            else:
+                if not points:
+                    spoken_response = "Maaf, belum ada titik lokasi yang tersimpan di peta. Silakan tambahkan titik di menu Setting."
+                else:
+                    spoken_response = "Maaf, saya tidak dapat menemukan lokasi yang dimaksud di dalam daftar titik peta."
+
+        elif action == 'return_home':
+            if ros_node:
+                ros_node.send_control('cancel')
+            execution_info = {'action': 'return_home', 'executed': True}
+
+        elif action == 'cancel':
+            if ros_node:
+                ros_node.send_control('cancel')
+            execution_info = {'action': 'cancel', 'executed': True}
+
+        elif action == 'status':
+            if ros_node:
+                with ros_node.lock:
+                    st = ros_node.delivery_status.get('current_phase', 'idle')
+                    pose = ros_node.pose
+                    spoken_response = f"Status robot saat ini {st}, berada di koordinat x {pose.get('x', 0):.1f} dan y {pose.get('y', 0):.1f}."
+
+        return jsonify({
+            'success': True,
+            'decision': decision,
+            'execution': execution_info,
+            'spoken_response': spoken_response,
+            'text': text
+        })
+
+    except Exception as e:
+        print(f'[ERROR] voice_command error: {e}')
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'spoken_response': 'Maaf, terjadi gangguan saat memproses perintah ke AI Gemini.',
+            'text': text
+        }), 500
 
 
 _placeholder_jpeg_cache = None

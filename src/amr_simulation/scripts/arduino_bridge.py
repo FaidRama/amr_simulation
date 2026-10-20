@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """
 ROS 2 Arduino Serial Bridge Node (Jetson AGX Xavier <-> Arduino Uno)
-- Mengubah /cmd_vel (Twist) menjadi perintah PWM "<PWM_L>,<PWM_R>\n" ke Arduino
-- Membaca "ENC:<left>,<right>" dari Arduino dan mem-publish /odom + TF (odom -> base_link)
+- Menerima /cmd_vel (Twist) dari Teleop / Nav2
+- Mengirim perintah kecepatan linear dan angular "V,<v>,<w>\n" ke Arduino Uno
+  (Arduino melakukan Inverse Kinematics & Kendali PID-PSO kecepatan roda secara internal)
+- Watchdog & Heartbeat 20Hz (tiap 50ms) agar pergerakan motor halus dan aman
+- Membaca stream "ENC:<left>,<right>" dari Arduino dan mem-publish /odom + TF (odom -> base_link)
+- Auto-reconnect otomatis jika koneksi USB serial terputus / izin port baru diberikan
+- Siar TF kontinu pada 50Hz agar SLAM & RViz tidak pernah drop laser message
 """
 
 import math
@@ -28,12 +33,10 @@ class ArduinoBridgeNode(Node):
         # --- PARAMETER KONFIGURASI ROBOT ---
         self.declare_parameter('serial_port', '/dev/ttyACM0')
         self.declare_parameter('baudrate', 115200)
-        self.declare_parameter('wheel_diameter', 0.133)      # meter (sesuai URDF: 13.3 cm)
-        self.declare_parameter('wheel_separation', 0.442)    # meter (sesuai URDF: 44.2 cm)
-        self.declare_parameter('ticks_per_rev', 537.0)       # PG36 rata-rata ~500-600 ticks/putaran roda
-        self.declare_parameter('max_speed_mps', 0.5)         # Kecepatan pada PWM 255 (m/s)
-        self.declare_parameter('min_pwm', 45)                # Deadzone minimum PWM agar motor mulai berputar
-        self.declare_parameter('max_pwm', 220)               # Batas aman PWM maksimal
+        self.declare_parameter('wheel_diameter', 0.127)      # 5 inci = 0.127 meter
+        self.declare_parameter('wheel_separation', 0.458)    # 45.8 cm = 0.458 meter
+        self.declare_parameter('ticks_per_rev', 350.7)       # 7 PPR * 50.1 gearbox = 350.7 ticks/rev
+        self.declare_parameter('cmd_vel_timeout', 0.8)       # Timeout stop
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('publish_tf', True)
@@ -43,9 +46,7 @@ class ArduinoBridgeNode(Node):
         self.wheel_diameter = float(self.get_parameter('wheel_diameter').value)
         self.wheel_separation = float(self.get_parameter('wheel_separation').value)
         self.ticks_per_rev = float(self.get_parameter('ticks_per_rev').value)
-        self.max_speed_mps = float(self.get_parameter('max_speed_mps').value)
-        self.min_pwm = int(self.get_parameter('min_pwm').value)
-        self.max_pwm = int(self.get_parameter('max_pwm').value)
+        self.cmd_vel_timeout = float(self.get_parameter('cmd_vel_timeout').value)
         self.odom_frame = self.get_parameter('odom_frame').value
         self.base_frame = self.get_parameter('base_frame').value
         self.publish_tf = bool(self.get_parameter('publish_tf').value)
@@ -56,18 +57,21 @@ class ArduinoBridgeNode(Node):
         self.x = 0.0
         self.y = 0.0
         self.yaw = 0.0
+        self.vx = 0.0
+        self.wz = 0.0
         self.prev_left_ticks = None
         self.prev_right_ticks = None
         self.prev_odom_time = self.get_clock().now()
         self.rx_buffer = ""
 
-        # --- STATE TARGET KECEPATAN ---
-        self.target_pwm_l = 0
-        self.target_pwm_r = 0
-        self.last_sent_pwm_l = None
-        self.last_sent_pwm_r = None
+        # --- STATE TARGET KECEPATAN (v: m/s, w: rad/s) ---
+        self.target_v = 0.0
+        self.target_w = 0.0
+        self.last_sent_v = None
+        self.last_sent_w = None
         self.last_cmd_vel_time = self.get_clock().now()
         self.last_tx_time = self.get_clock().now()
+        self.last_reconnect_time = self.get_clock().now()
 
         # --- INISIALISASI SERIAL ARDUINO ---
         self.ser = None
@@ -78,80 +82,78 @@ class ArduinoBridgeNode(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
         self.cmd_sub = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
 
-        # Timer 50 Hz untuk baca serial & menjaga heartbeat motor
+        # Timer 50 Hz (tiap 20ms) untuk pembacaan serial, TF broadcast & heartbeat
         self.timer = self.create_timer(0.02, self.update_loop)
         self.get_logger().info(
-            f"Arduino Bridge aktif di {self.port} ({self.baud} baud) | "
-            f"D={self.wheel_diameter}m, L={self.wheel_separation}m, Ticks/Rev={self.ticks_per_rev}"
+            f"Arduino Bridge PID aktif di {self.port} ({self.baud} baud) | "
+            f"D={self.wheel_diameter}m, L={self.wheel_separation}m, CPR={self.ticks_per_rev}"
         )
 
     def connect_serial(self):
         try:
             self.ser = serial.Serial(self.port, self.baud, timeout=0)
-            time.sleep(2.0)  # Tunggu bootloader Arduino Uno selesai auto-reset
+            time.sleep(1.0)  # Tunggu bootloader Arduino Uno selesai auto-reset
             self.ser.reset_input_buffer()
-            self.ser.write(b"0,0\n")
-            self.get_logger().info(f"Berhasil terhubung ke Arduino di {self.port}")
+            self.ser.write(b"V,0.0,0.0\n")
+            self.get_logger().info(f"✅ Berhasil terhubung ke Arduino di {self.port}")
         except Exception as e:
-            self.get_logger().error(f"Gagal membuka port Arduino {self.port}: {e}")
+            self.get_logger().warn(f"⚠️ Menunggu koneksi port Arduino {self.port} ({e})")
             self.ser = None
 
-    def speed_to_pwm(self, speed_mps: float) -> int:
-        """Konversi kecepatan roda (m/s) ke nilai PWM (-255 s/d 255) dengan kompensasi deadzone."""
-        if abs(speed_mps) < 0.01:
-            return 0
-        ratio = min(abs(speed_mps) / self.max_speed_mps, 1.0)
-        pwm = int(self.min_pwm + ratio * (self.max_pwm - self.min_pwm))
-        return pwm if speed_mps > 0 else -pwm
-
-    def send_pwm(self, pwm_l: int, pwm_r: int, now):
+    def send_cmd(self, v: float, w: float, now):
+        """Kirim perintah kecepatan 'V,<v>,<w>\n' ke Arduino."""
         if self.ser is None or not self.ser.is_open:
             return
         try:
-            cmd_str = f"{pwm_l},{pwm_r}\n"
+            cmd_str = f"V,{v:.3f},{w:.3f}\n"
             self.ser.write(cmd_str.encode('ascii'))
-            self.last_sent_pwm_l = pwm_l
-            self.last_sent_pwm_r = pwm_r
+            self.last_sent_v = v
+            self.last_sent_w = w
             self.last_tx_time = now
         except Exception as e:
             self.get_logger().warn(f"Serial write error: {e}")
+            self.ser = None
 
     def cmd_vel_callback(self, msg: Twist):
         v = msg.linear.x
         w = msg.angular.z
-
-        # Kinematika Differential Drive
-        v_left = v - (w * self.wheel_separation / 2.0)
-        v_right = v + (w * self.wheel_separation / 2.0)
-
-        self.target_pwm_l = self.speed_to_pwm(v_left)
-        self.target_pwm_r = self.speed_to_pwm(v_right)
         now = self.get_clock().now()
-        self.last_cmd_vel_time = now
 
-        # Langsung kirim jika nilai PWM berubah agar respons instan
-        if (self.target_pwm_l != self.last_sent_pwm_l) or (self.target_pwm_r != self.last_sent_pwm_r):
-            self.send_pwm(self.target_pwm_l, self.target_pwm_r, now)
+        self.last_cmd_vel_time = now
+        self.target_v = v
+        self.target_w = w
+
+        # Kirim langsung jika ada perubahan nilai kecepatan agar respon instan
+        if self.last_sent_v is None or abs(v - self.last_sent_v) > 0.005 or abs(w - self.last_sent_w) > 0.005:
+            self.send_cmd(self.target_v, self.target_w, now)
 
     def update_loop(self):
-        if self.ser is None or not self.ser.is_open:
-            return
-
         now = self.get_clock().now()
 
-        # 1. Timeout /cmd_vel: jika > 0.5 detik tidak ada perintah baru, hentikan roda
+        # 0. Auto-reconnect jika serial belum terbuka / terputus
+        if self.ser is None or not self.ser.is_open:
+            dt_reconnect = (now - self.last_reconnect_time).nanoseconds / 1e9
+            if dt_reconnect >= 2.0:
+                self.last_reconnect_time = now
+                self.connect_serial()
+            # Tetap broadcast TF saat disconnected agar TF tree tidak broken
+            self.broadcast_tf_and_odom(now)
+            return
+
+        # 1. Timeout /cmd_vel: jika > cmd_vel_timeout tidak ada perintah baru, otomatis kirim stop
         dt_cmd = (now - self.last_cmd_vel_time).nanoseconds / 1e9
-        if dt_cmd > 0.5:
-            self.target_pwm_l = 0
-            self.target_pwm_r = 0
+        if dt_cmd > self.cmd_vel_timeout:
+            if self.target_v != 0.0 or self.target_w != 0.0:
+                self.target_v = 0.0
+                self.target_w = 0.0
+                self.send_cmd(0.0, 0.0, now)
 
-        # 2. Kirim PWM ke Arduino maksimal tiap 150ms (atau saat berubah) agar tidak membanjiri buffer RX Arduino
+        # 2. Heartbeat: selama robot bergerak, kirim ulang perintah kecepatan tiap 50ms
         dt_tx = (now - self.last_tx_time).nanoseconds / 1e9
-        pwm_changed = (self.target_pwm_l != self.last_sent_pwm_l) or (self.target_pwm_r != self.last_sent_pwm_r)
-        if pwm_changed or (self.target_pwm_l != 0 or self.target_pwm_r != 0) and dt_tx >= 0.15:
-            self.send_pwm(self.target_pwm_l, self.target_pwm_r, now)
+        if (self.target_v != 0.0 or self.target_w != 0.0) and dt_tx >= 0.05:
+            self.send_cmd(self.target_v, self.target_w, now)
 
-        # 3. Baca data encoder dari Arduino secara Non-Blocking menggunakan buffer
+        # 3. Baca serial non-blocking dari Arduino
         try:
             waiting = self.ser.in_waiting
             if waiting > 0:
@@ -166,26 +168,28 @@ class ArduinoBridgeNode(Node):
                         if len(parts) == 2:
                             left_ticks = int(parts[0])
                             right_ticks = int(parts[1])
-                            self.process_odometry(left_ticks, right_ticks, now)
+                            self.process_encoder_ticks(left_ticks, right_ticks, now)
+                    elif line.startswith("LOG:"):
+                        self.get_logger().debug(f"Arduino PID Log: {line}")
         except Exception as e:
             self.get_logger().warn(f"Serial read error: {e}")
+            self.ser = None
 
-    def process_odometry(self, left_ticks: int, right_ticks: int, now):
+        # 4. Kontinu broadcast TF & Odometry pada 50Hz (mencegah SLAM/RViz drop message)
+        self.broadcast_tf_and_odom(now)
+
+    def process_encoder_ticks(self, left_ticks: int, right_ticks: int, now):
         if self.prev_left_ticks is None:
             self.prev_left_ticks = left_ticks
             self.prev_right_ticks = right_ticks
             self.prev_odom_time = now
             self.get_logger().info(
-                f"Paket Encoder pertama diterima (L={left_ticks}, R={right_ticks}) -> Topik /odom mulai dipublish!"
+                f"Paket Encoder pertama diterima (L={left_ticks}, R={right_ticks}) -> Topik /odom aktif!"
             )
+            return
 
         dt = (now - self.prev_odom_time).nanoseconds / 1e9
-        if dt <= 0.0001:
-            d_left = 0.0
-            d_right = 0.0
-            vx = 0.0
-            wz = 0.0
-        else:
+        if dt > 0.0001:
             d_left = (left_ticks - self.prev_left_ticks) * self.meters_per_tick
             d_right = (right_ticks - self.prev_right_ticks) * self.meters_per_tick
             self.prev_left_ticks = left_ticks
@@ -202,9 +206,10 @@ class ArduinoBridgeNode(Node):
             self.y += d_center * math.sin(mid_yaw)
             self.yaw = math.atan2(math.sin(self.yaw + d_yaw), math.cos(self.yaw + d_yaw))
 
-            vx = d_center / dt
-            wz = d_yaw / dt
+            self.vx = d_center / dt
+            self.wz = d_yaw / dt
 
+    def broadcast_tf_and_odom(self, now):
         qx, qy, qz, qw = euler_to_quaternion(self.yaw)
         stamp = now.to_msg()
 
@@ -235,8 +240,8 @@ class ArduinoBridgeNode(Node):
         odom.pose.pose.orientation.y = qy
         odom.pose.pose.orientation.z = qz
         odom.pose.pose.orientation.w = qw
-        odom.twist.twist.linear.x = vx
-        odom.twist.twist.angular.z = wz
+        odom.twist.twist.linear.x = self.vx
+        odom.twist.twist.angular.z = self.wz
         self.odom_pub.publish(odom)
 
 
@@ -249,8 +254,11 @@ def main(args=None):
         pass
     finally:
         if node.ser and node.ser.is_open:
-            node.ser.write(b"0,0\n")
-            node.ser.close()
+            try:
+                node.ser.write(b"V,0.0,0.0\n")
+                node.ser.close()
+            except Exception:
+                pass
         node.destroy_node()
         rclpy.shutdown()
 

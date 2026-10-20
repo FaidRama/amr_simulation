@@ -1,188 +1,214 @@
-/*
- * =====================================================================
- * FIRMWARE UTAMA AMR ARDUINO UNO - BTS7960 + PG36 ENCODER
- * Terintegrasi Penuh dengan ROS 2 Bridge (Jetson AGX Xavier)
- * =====================================================================
- * Protokol Serial (115200 baud):
- *   Input  (Jetson -> Arduino):
- *     - "<PWM_KIRI>,<PWM_KANAN>\n"  (Contoh: "120,120\n" atau "-100,100\n")
- *     - "RST\n"                     (Reset hitungan pulsa encoder ke 0)
- *   Output (Arduino -> Jetson):
- *     - "ENC:<PULSA_KIRI>,<PULSA_KANAN>\n" (Dikirim rutin setiap 50ms / 20Hz)
- * =====================================================================
- */
+/* =========================================================================
+ * FIRMWARE AMR DIFFERENTIAL DRIVE: ROS 2 + PID VELOCITY CONTROLLER
+ * Integrasi Skripsi Divala Zahra Oktavia & ROS 2 Navigation Stack
+ * =========================================================================
+ * Format Input Serial (dari Jetson):
+ *   1) "V,<v_linear>,<v_angular>\n"  (Contoh: "V,0.30,0.00\n" dari Nav2/Teleop)
+ *   2) "1" s/d "5"                   (Menu Uji Mandiri Skripsi: Lurus, Belok, Persegi)
+ *   3) "0"                           (Stop Darurat)
+ *   4) "RST\n"                       (Reset Encoder & Odometri)
+ *
+ * Format Output Serial (ke Jetson):
+ *   - "ENC:<pulsa_total_L>,<pulsa_total_R>\n" (Untuk ROS 2 /odom - 20 Hz)
+ *   - "LOG:<time>,<rpm_L>,<rpm_R>,<pwm_L>,<pwm_R>,<x>,<y>,<theta>\n" (Untuk Skripsi)
+ * ========================================================================= */
 
 #include <Arduino.h>
 
-// --- PIN DRIVER MOTOR KIRI (BTS7960) ---
-const int PIN_L_RPWM = 5;
-const int PIN_L_LPWM = 6;
-const int PIN_L_REN  = 7;
-const int PIN_L_LEN  = 8;
+// ====================== 1. PIN HARDWARE ==================================
+const byte PIN_RPWM_L = 5;
+const byte PIN_LPWM_L = 6;
+const byte PIN_REN_L  = 7;
+const byte PIN_LEN_L  = 8;
 
-// --- PIN DRIVER MOTOR KANAN (BTS7960) ---
-const int PIN_R_RPWM = 9;
-const int PIN_R_LPWM = 10;
-const int PIN_R_REN  = 11;
-const int PIN_R_LEN  = 12;
+const byte PIN_RPWM_R = 9;
+const byte PIN_LPWM_R = 10;
+const byte PIN_REN_R  = 11;
+const byte PIN_LEN_R  = 12;
 
-// --- PIN ENCODER MOTOR PG36 ---
-const int PIN_ENC_L_A = 2;   // Hardware Interrupt 0 (INT0)
-const int PIN_ENC_L_B = 4;
-const int PIN_ENC_R_A = 3;   // Hardware Interrupt 1 (INT1)
-const int PIN_ENC_R_B = A1;  // Menggunakan Pin Analog A1 sebagai Digital Input
+const byte PIN_ENCA_L = 2; // Interrupt INT0
+const byte PIN_ENCB_L = 4;
+const byte PIN_ENCA_R = 3; // Interrupt INT1
+const byte PIN_ENCB_R = A1;
 
-// --- OPSI PEMBALIK ARAH (Ubah ke true jika arah roda/encoder terbalik) ---
+// ====================== 2. OPSI INVERT ARAH ==============================
+// Sesuaikan dengan hasil validasi fisik roda kamu sebelumnya
 const bool INVERT_MOTOR_L = false;
 const bool INVERT_MOTOR_R = true;
 const bool INVERT_ENC_L   = true;
 const bool INVERT_ENC_R   = true;
 
-// --- VARIABEL ENCODER ---
-volatile long enc_left_ticks  = 0;
-volatile long enc_right_ticks = 0;
+// ====================== 3. PARAMETER FISIK ROBOT =========================
+const float WHEEL_DIAMETER = 0.127; // meter (5 inci = 0.127 meter sesuai Proposal Skripsi)
+const float WHEEL_BASE_B   = 0.458; // meter (45.8 cm sesuai Proposal Skripsi)
+const float CPR_WHEEL      = 350.7; // Ticks per revolusi PG36 (7 PPR * 50.1 gearbox)
 
-// --- BUFFER KOMUNIKASI NON-BLOCKING ---
-char serial_buf[32];
+// ====================== 4. PARAMETER KENDALI PID-PSO =====================
+const float KP_L = 3.0, KI_L = 3.0, KD_L = 0.0;
+const float KP_R = 3.0, KI_R = 3.0, KD_R = 0.0;
+
+const unsigned long SAMPLING_MS = 50; 
+const float DT = SAMPLING_MS / 1000.0; // 0.05 s (20 Hz)
+
+// ====================== 5. VARIABEL ENCODER & ODOMETRI ===================
+volatile long totalPulsa_L = 0, totalPulsa_R = 0;
+volatile long deltaPulsa_L = 0, deltaPulsa_R = 0;
+
+float odom_x = 0.0, odom_y = 0.0, odom_theta = 0.0;
+
+float setpoint_L = 0.0, setpoint_R = 0.0; // Target RPM
+float rpm_L = 0.0, rpm_R = 0.0;           // Aktual RPM
+float error_L = 0.0, prev_error_L = 0.0, integral_L = 0.0, pwm_L = 0.0;
+float error_R = 0.0, prev_error_R = 0.0, integral_R = 0.0, pwm_R = 0.0;
+
+unsigned long waktuSebelumnya = 0;
+
+// State Uji Mandiri Skripsi
+int modePengujian = 0; 
+int stepPersegi = 0;
+float targetJarak = 0.0, targetSudut = 0.0;
+
+// Buffer Serial Non-Blocking
+char serial_buf[48];
 uint8_t buf_idx = 0;
 
-// --- SAFETY & TIMING ---
-unsigned long last_cmd_time = 0;
-const unsigned long TIMEOUT_MS = 500;        // Fail-safe: Stop motor jika >0.5s tanpa perintah
+// ====================== 6. INVERSE KINEMATICS ============================
+void hitungInverseKinematics(float v, float omega) {
+  // v_R = v + (B/2)*w
+  // v_L = v - (B/2)*w
+  float v_R = v + (WHEEL_BASE_B / 2.0) * omega; // m/s
+  float v_L = v - (WHEEL_BASE_B / 2.0) * omega; // m/s
 
-unsigned long last_report_time = 0;
-const unsigned long REPORT_INTERVAL_MS = 50; // Kirim odometry setiap 50ms (20 Hz)
+  // RPM = (v / (PI * D)) * 60
+  setpoint_R = (v_R / (PI * WHEEL_DIAMETER)) * 60.0;
+  setpoint_L = (v_L / (PI * WHEEL_DIAMETER)) * 60.0;
+}
 
-// =====================================================================
-// INTERRUPT SERVICE ROUTINES (ISR) - Membaca Putaran Roda
-// =====================================================================
-void isr_encoder_left() {
-  bool b_state = digitalRead(PIN_ENC_L_B);
-  if (INVERT_ENC_L) b_state = !b_state;
+// ====================== 7. ISR ENCODER ===================================
+void isrL() {
+  bool b = digitalRead(PIN_ENCB_L);
+  if (INVERT_ENC_L) b = !b;
+  if (b == HIGH) { totalPulsa_L++; deltaPulsa_L++; }
+  else           { totalPulsa_L--; deltaPulsa_L--; }
+}
 
-  if (b_state == HIGH) {
-    enc_left_ticks++;
+void isrR() {
+  bool b = digitalRead(PIN_ENCB_R);
+  if (INVERT_ENC_R) b = !b;
+  if (b == HIGH) { totalPulsa_R--; deltaPulsa_R--; }
+  else           { totalPulsa_R++; deltaPulsa_R++; }
+}
+
+// ====================== 8. DRIVER MOTOR (BTS7960) ========================
+void setMotorDriver(byte rpwmPin, byte lpwmPin, float valPWM, bool invert) {
+  if (invert) valPWM = -valPWM;
+  int pwm = constrain(abs((int)valPWM), 0, 255);
+  bool arahMaju = (valPWM > 0);
+
+  if (pwm == 0) {
+    analogWrite(rpwmPin, 0); analogWrite(lpwmPin, 0);
+  } else if (arahMaju) {
+    analogWrite(rpwmPin, pwm); analogWrite(lpwmPin, 0);
   } else {
-    enc_left_ticks--;
+    analogWrite(rpwmPin, 0); analogWrite(lpwmPin, pwm);
   }
 }
 
-void isr_encoder_right() {
-  bool b_state = digitalRead(PIN_ENC_R_B);
-  if (INVERT_ENC_R) b_state = !b_state;
-
-  // Motor kanan dipasang berlawanan sisi dengan motor kiri
-  if (b_state == HIGH) {
-    enc_right_ticks--;
-  } else {
-    enc_right_ticks++;
-  }
+void driveMotors(float pwmL, float pwmR) {
+  setMotorDriver(PIN_RPWM_L, PIN_LPWM_L, pwmL, INVERT_MOTOR_L);
+  setMotorDriver(PIN_RPWM_R, PIN_LPWM_R, pwmR, INVERT_MOTOR_R);
 }
 
-// =====================================================================
-// FUNGSI PENGGERAK MOTOR (BTS7960)
-// =====================================================================
-void setMotors(int pwm_left, int pwm_right) {
-  if (INVERT_MOTOR_L) pwm_left  = -pwm_left;
-  if (INVERT_MOTOR_R) pwm_right = -pwm_right;
-
-  pwm_left  = constrain(pwm_left, -255, 255);
-  pwm_right = constrain(pwm_right, -255, 255);
-
-  // --- KONTROL MOTOR KIRI ---
-  if (pwm_left > 0) {
-    analogWrite(PIN_L_RPWM, pwm_left);
-    analogWrite(PIN_L_LPWM, 0);
-  } else if (pwm_left < 0) {
-    analogWrite(PIN_L_RPWM, 0);
-    analogWrite(PIN_L_LPWM, -pwm_left);
-  } else {
-    analogWrite(PIN_L_RPWM, 0);
-    analogWrite(PIN_L_LPWM, 0);
-  }
-
-  // --- KONTROL MOTOR KANAN ---
-  if (pwm_right > 0) {
-    analogWrite(PIN_R_RPWM, pwm_right);
-    analogWrite(PIN_R_LPWM, 0);
-  } else if (pwm_right < 0) {
-    analogWrite(PIN_R_RPWM, 0);
-    analogWrite(PIN_R_LPWM, -pwm_right);
-  } else {
-    analogWrite(PIN_R_RPWM, 0);
-    analogWrite(PIN_R_LPWM, 0);
-  }
-}
-
-// =====================================================================
-// PARSER PERINTAH SERIAL (NON-BLOCKING, 0ms DELAY)
-// =====================================================================
+// ====================== 9. PARSER SERIAL NON-BLOCKING ====================
 void processCommand(char* cmd) {
-  // Perintah Reset Encoder dari ROS 2
-  if (strncmp(cmd, "RST", 3) == 0) {
-    noInterrupts();
-    enc_left_ticks = 0;
-    enc_right_ticks = 0;
-    interrupts();
-    setMotors(0, 0);
+  // 1. Perintah Kecepatan dari ROS 2: "V,<linear_v>,<angular_w>"
+  if (cmd[0] == 'V' || cmd[0] == 'v') {
+    char* comma1 = strchr(cmd, ',');
+    if (comma1 != NULL) {
+      float v_lin = atof(comma1 + 1);
+      char* comma2 = strchr(comma1 + 1, ',');
+      float v_ang = 0.0;
+      if (comma2 != NULL) {
+        v_ang = atof(comma2 + 1);
+      }
+      modePengujian = 99; // Mode Navigasi ROS 2
+      hitungInverseKinematics(v_lin, v_ang);
+    }
     return;
   }
 
-  // Perintah PWM: "<PWM_L>,<PWM_R>"
-  int pwm_l = 0;
-  int pwm_r = 0;
-  if (sscanf(cmd, "%d,%d", &pwm_l, &pwm_r) == 2) {
-    setMotors(pwm_l, pwm_r);
-    last_cmd_time = millis();
+  // 2. Perintah Reset
+  if (strncmp(cmd, "RST", 3) == 0) {
+    noInterrupts();
+    totalPulsa_L = 0; totalPulsa_R = 0;
+    deltaPulsa_L = 0; deltaPulsa_R = 0;
+    interrupts();
+    odom_x = 0; odom_y = 0; odom_theta = 0;
+    hitungInverseKinematics(0, 0);
+    return;
+  }
+
+  // 3. Menu Uji Mandiri Skripsi (Hanya jika input tepat 1 karakter: '0' s/d '5')
+  if (strlen(cmd) == 1) {
+    char m = cmd[0];
+    if (m == '1') {
+      odom_x = 0; odom_y = 0; odom_theta = 0;
+      targetJarak = 2.0;
+      hitungInverseKinematics(0.33, 0.0);
+      modePengujian = 1;
+    } else if (m == '2') {
+      odom_x = 0; odom_y = 0; odom_theta = 0;
+      targetSudut = 90.0 * (PI / 180.0);
+      hitungInverseKinematics(0.0, 0.8);
+      modePengujian = 2;
+    } else if (m == '3') {
+      odom_x = 0; odom_y = 0; odom_theta = 0;
+      targetSudut = 180.0 * (PI / 180.0);
+      hitungInverseKinematics(0.0, 0.8);
+      modePengujian = 3;
+    } else if (m == '4') {
+      odom_x = 0; odom_y = 0; odom_theta = 0;
+      targetSudut = 360.0 * (PI / 180.0);
+      hitungInverseKinematics(0.0, 0.8);
+      modePengujian = 4;
+    } else if (m == '5') {
+      odom_x = 0; odom_y = 0; odom_theta = 0;
+      stepPersegi = 1;
+      targetJarak = 2.0;
+      hitungInverseKinematics(0.33, 0.0);
+      modePengujian = 5;
+    } else if (m == '0') {
+      modePengujian = 0;
+      hitungInverseKinematics(0.0, 0.0);
+    }
   }
 }
 
-// =====================================================================
-// SETUP SISTEM
-// =====================================================================
+// ====================== 10. SETUP =======================================
 void setup() {
   Serial.begin(115200);
 
-  // Inisialisasi Pin Driver Motor Kiri
-  pinMode(PIN_L_RPWM, OUTPUT);
-  pinMode(PIN_L_LPWM, OUTPUT);
-  pinMode(PIN_L_REN,  OUTPUT);
-  pinMode(PIN_L_LEN,  OUTPUT);
-  digitalWrite(PIN_L_REN, HIGH);
-  digitalWrite(PIN_L_LEN, HIGH);
+  pinMode(PIN_RPWM_L, OUTPUT); pinMode(PIN_LPWM_L, OUTPUT);
+  pinMode(PIN_REN_L, OUTPUT);  pinMode(PIN_LEN_L, OUTPUT);
+  digitalWrite(PIN_REN_L, HIGH); digitalWrite(PIN_LEN_L, HIGH);
 
-  // Inisialisasi Pin Driver Motor Kanan
-  pinMode(PIN_R_RPWM, OUTPUT);
-  pinMode(PIN_R_LPWM, OUTPUT);
-  pinMode(PIN_R_REN,  OUTPUT);
-  pinMode(PIN_R_LEN,  OUTPUT);
-  digitalWrite(PIN_R_REN, HIGH);
-  digitalWrite(PIN_R_LEN, HIGH);
+  pinMode(PIN_RPWM_R, OUTPUT); pinMode(PIN_LPWM_R, OUTPUT);
+  pinMode(PIN_REN_R, OUTPUT);  pinMode(PIN_LEN_R, OUTPUT);
+  digitalWrite(PIN_REN_R, HIGH); digitalWrite(PIN_LEN_R, HIGH);
 
-  // Pastikan motor berhenti saat baru nyala
-  setMotors(0, 0);
+  pinMode(PIN_ENCA_L, INPUT_PULLUP); pinMode(PIN_ENCB_L, INPUT_PULLUP);
+  pinMode(PIN_ENCA_R, INPUT_PULLUP); pinMode(PIN_ENCB_R, INPUT_PULLUP);
 
-  // Inisialisasi Pin Encoder
-  pinMode(PIN_ENC_L_A, INPUT_PULLUP);
-  pinMode(PIN_ENC_L_B, INPUT_PULLUP);
-  pinMode(PIN_ENC_R_A, INPUT_PULLUP);
-  pinMode(PIN_ENC_R_B, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(PIN_ENCA_L), isrL, FALLING);
+  attachInterrupt(digitalPinToInterrupt(PIN_ENCA_R), isrR, FALLING);
 
-  // Pasang Hardware Interrupt
-  attachInterrupt(digitalPinToInterrupt(PIN_ENC_L_A), isr_encoder_left, FALLING);
-  attachInterrupt(digitalPinToInterrupt(PIN_ENC_R_A), isr_encoder_right, FALLING);
-
-  last_cmd_time = millis();
-  last_report_time = millis();
+  driveMotors(0, 0);
+  waktuSebelumnya = millis();
 }
 
-// =====================================================================
-// LOOP UTAMA
-// =====================================================================
+// ====================== 11. LOOP UTAMA (20 Hz) ==========================
 void loop() {
-  unsigned long now = millis();
-
-  // --- 1. BACA SERIAL SECARA NON-BLOCKING ---
+  // A. BACA SERIAL NON-BLOCKING
   while (Serial.available() > 0) {
     char c = Serial.read();
     if (c == '\n' || c == '\r') {
@@ -196,23 +222,100 @@ void loop() {
     }
   }
 
-  // --- 2. SAFETY WATCHDOG TIMEOUT ---
-  if (now - last_cmd_time > TIMEOUT_MS) {
-    setMotors(0, 0);
-  }
+  // B. SAMPLING PID & ODOMETRI (50 ms / 20 Hz)
+  unsigned long waktuSekarang = millis();
+  if (waktuSekarang - waktuSebelumnya >= SAMPLING_MS) {
+    waktuSebelumnya = waktuSekarang;
 
-  // --- 3. KIRIM DATA ENCODER KE JETSON (20 Hz) ---
-  if (now - last_report_time >= REPORT_INTERVAL_MS) {
-    last_report_time = now;
-
+    // Salin Pulsa Atomik
     noInterrupts();
-    long current_left  = enc_left_ticks;
-    long current_right = enc_right_ticks;
+    long dC_L = deltaPulsa_L; deltaPulsa_L = 0;
+    long dC_R = deltaPulsa_R; deltaPulsa_R = 0;
+    long tot_L = totalPulsa_L;
+    long tot_R = totalPulsa_R;
     interrupts();
 
+    // Hitung RPM Aktual
+    rpm_L = ((float)dC_L / CPR_WHEEL) * (60.0 / DT);
+    rpm_R = ((float)dC_R / CPR_WHEEL) * (60.0 / DT);
+
+    // Hitung Odometri Lokal
+    float ds_L = ((float)dC_L / CPR_WHEEL) * (PI * WHEEL_DIAMETER);
+    float ds_R = ((float)dC_R / CPR_WHEEL) * (PI * WHEEL_DIAMETER);
+    float dx_robot = (ds_R + ds_L) / 2.0;
+    float dtheta   = (ds_R - ds_L) / WHEEL_BASE_B;
+
+    float theta_mid = odom_theta + (dtheta / 2.0);
+    odom_theta += dtheta;
+    odom_x += dx_robot * cos(theta_mid);
+    odom_y += dx_robot * sin(theta_mid);
+
+    // Penghentian Otomatis Mode Uji Skripsi
+    if (modePengujian == 1) { // Lurus
+      float dist = sqrt(odom_x * odom_x + odom_y * odom_y);
+      if (dist >= targetJarak) { hitungInverseKinematics(0, 0); modePengujian = 0; }
+    } else if (modePengujian >= 2 && modePengujian <= 4) { // Rotasi
+      if (abs(odom_theta) >= targetSudut) { hitungInverseKinematics(0, 0); modePengujian = 0; }
+    } else if (modePengujian == 5) { // Persegi
+      static float markX = 0, markY = 0, markTheta = 0;
+      if (stepPersegi % 2 == 1) {
+        float dSegmen = sqrt(pow(odom_x - markX, 2) + pow(odom_y - markY, 2));
+        if (dSegmen >= targetJarak) {
+          markTheta = odom_theta;
+          hitungInverseKinematics(0.0, 0.8);
+          stepPersegi++;
+        }
+      } else {
+        if (abs(odom_theta - markTheta) >= (90.0 * PI / 180.0)) {
+          markX = odom_x; markY = odom_y;
+          if (stepPersegi >= 8) { hitungInverseKinematics(0, 0); modePengujian = 0; }
+          else { hitungInverseKinematics(0.33, 0.0); stepPersegi++; }
+        }
+      }
+    }
+
+    // Perhitungan Loop PID
+    // Motor Kiri
+    if (fabs(setpoint_L) < 0.05) {
+      pwm_L = 0.0;
+      integral_L = 0.0;
+      prev_error_L = 0.0;
+    } else {
+      error_L = setpoint_L - rpm_L;
+      integral_L = constrain(integral_L + (KI_L * error_L * DT), -200.0, 200.0);
+      pwm_L = constrain((KP_L * error_L) + integral_L + (KD_L * (error_L - prev_error_L) / DT), -255.0, 255.0);
+      prev_error_L = error_L;
+    }
+
+    // Motor Kanan
+    if (fabs(setpoint_R) < 0.05) {
+      pwm_R = 0.0;
+      integral_R = 0.0;
+      prev_error_R = 0.0;
+    } else {
+      error_R = setpoint_R - rpm_R;
+      integral_R = constrain(integral_R + (KI_R * error_R * DT), -200.0, 200.0);
+      pwm_R = constrain((KP_R * error_R) + integral_R + (KD_R * (error_R - prev_error_R) / DT), -255.0, 255.0);
+      prev_error_R = error_R;
+    }
+
+    driveMotors(pwm_L, pwm_R);
+
+    // Output Serial untuk ROS 2 /odom
     Serial.print("ENC:");
-    Serial.print(current_left);
+    Serial.print(tot_L);
     Serial.print(",");
-    Serial.println(current_right);
+    Serial.println(tot_R);
+
+    // Output Serial Tambahan untuk Logging Skripsi
+    Serial.print("LOG:");
+    Serial.print((float)waktuSekarang / 1000.0, 2); Serial.print(",");
+    Serial.print(rpm_L, 1); Serial.print(",");
+    Serial.print(rpm_R, 1); Serial.print(",");
+    Serial.print(pwm_L, 0); Serial.print(",");
+    Serial.print(pwm_R, 0); Serial.print(",");
+    Serial.print(odom_x, 3); Serial.print(",");
+    Serial.print(odom_y, 3); Serial.print(",");
+    Serial.println(odom_theta * 180.0 / PI, 1);
   }
 }

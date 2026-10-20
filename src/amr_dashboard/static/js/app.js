@@ -153,11 +153,15 @@ async function apiPost(url, data) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await res.json();
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+            if (json) return json;
+            throw new Error(`HTTP ${res.status}`);
+        }
+        return json;
     } catch (e) {
         console.error(`API POST ${url}:`, e);
-        return null;
+        return { success: false, error: e.message || 'Gagal menghubungi server' };
     }
 }
 
@@ -1064,23 +1068,33 @@ function playChimeSound(type = 'waiting_pickup') {
     }
 }
 
-let _currentAudio = null;
+let _sharedAudio = null;
+
+function primeAudio() {
+    try {
+        if (!_sharedAudio) {
+            _sharedAudio = new Audio();
+        }
+        // Audio singkat untuk membuka izin autoplay di browser HP
+        _sharedAudio.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+        _sharedAudio.play().catch(() => {});
+    } catch (e) {}
+}
 
 function speakHumanVoice(text) {
     if (!text) return;
 
     try {
-        if (_currentAudio) {
-            _currentAudio.pause();
-            _currentAudio.currentTime = 0;
-            _currentAudio = null;
+        if (!_sharedAudio) {
+            _sharedAudio = new Audio();
         }
+        _sharedAudio.pause();
+        _sharedAudio.currentTime = 0;
 
         const audioUrl = `/api/tts?text=${encodeURIComponent(text)}`;
-        const audio = new Audio(audioUrl);
-        _currentAudio = audio;
+        _sharedAudio.src = audioUrl;
 
-        audio.play().catch(err => {
+        _sharedAudio.play().catch(err => {
             console.warn('Gagal memutar audio /api/tts, mencoba fallback Web Speech:', err);
             fallbackWebSpeech(text);
         });
@@ -1805,12 +1819,49 @@ function renderSettings() {
                         </div>
                     </div>
                 </div>
+
+                <div class="page-section">
+                    <div class="section-title">
+                        <span>04 // INTEGRASI AI GEMINI</span>
+                        <span>VOICE ASSISTANT</span>
+                    </div>
+                    <div class="panel">
+                        <div class="setting-row">
+                            <div>
+                                <div class="setting-label">Status Koneksi AI</div>
+                                <div class="setting-desc">Model cerdas pemroses perintah suara (Gemini Flash)</div>
+                            </div>
+                            <div id="gemini-status-badge" class="badge badge-offline">
+                                <span class="badge-dot"></span>
+                                <span class="badge-text" id="gemini-status-text">Memeriksa...</span>
+                            </div>
+                        </div>
+                        <div class="setting-row" style="flex-direction:column; align-items:flex-start; gap:8px;">
+                            <div style="width:100%; display:flex; justify-content:space-between; align-items:center;">
+                                <div class="setting-label">Gemini API Key</div>
+                                <a href="https://aistudio.google.com/app/apikey" target="_blank" style="font-size:0.72rem; color:var(--accent); text-decoration:none; font-weight:600;">Ambil Key Gratis &rarr;</a>
+                            </div>
+                            <div style="width:100%; display:flex; gap:8px;">
+                                <input type="password" class="input-field mono" id="set-gemini-key" placeholder="Masukkan API Key (AIzaSy...)" style="flex:1;">
+                                <button type="button" class="btn btn-outline btn-sm" onclick="toggleApiKeyVisibility()" id="btn-toggle-key-eye" title="Lihat/Sembunyikan Key">👁️</button>
+                            </div>
+                        </div>
+                        <div style="display:flex; gap:8px; margin-top:10px;">
+                            <button type="button" class="btn btn-primary btn-sm" style="flex:1;" onclick="saveGeminiKey()">
+                                ${getIcon('save', 14)} Simpan Key
+                            </button>
+                            <button type="button" class="btn btn-outline btn-sm" style="flex:1;" onclick="testGeminiConnection()">
+                                ⚡ Uji Koneksi AI
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div>
                 <div class="page-section">
                     <div class="section-title">
-                        <span>04 // DATABASE WAYPOINT</span>
+                        <span>05 // DATABASE WAYPOINT</span>
                         <span>${APP.savedPoints.length} TITIK</span>
                     </div>
                     <div class="panel">
@@ -1822,7 +1873,7 @@ function renderSettings() {
                 </div>
 
                 <div class="page-section">
-                    <div class="section-title">05 // INFORMASI SISTEM ROS2</div>
+                    <div class="section-title">06 // INFORMASI SISTEM ROS2</div>
                     <div class="panel">
                         <div class="setting-row">
                             <div class="setting-label">ROS2 Distribution</div>
@@ -1845,6 +1896,7 @@ function renderSettings() {
     setTimeout(() => {
         renderSavedPointsList();
         updateSystemInfo();
+        checkGeminiStatus();
     }, 50);
 
     return div;
@@ -2112,6 +2164,290 @@ function startLiveClock() {
     };
     update();
     setInterval(update, 1000);
+}
+
+// ====================== GEMINI AI & VOICE ASSISTANT ======================
+async function checkGeminiStatus() {
+    const badge = document.getElementById('gemini-status-badge');
+    const text = document.getElementById('gemini-status-text');
+    const input = document.getElementById('set-gemini-key');
+    if (!badge || !text) return;
+
+    try {
+        const res = await apiGet('/api/gemini/status');
+        if (res && res.configured) {
+            badge.className = 'badge badge-online';
+            text.textContent = `Aktif (${res.masked_key})`;
+            if (input && !input.value) {
+                input.placeholder = `Tersimpan: ${res.masked_key}`;
+            }
+        } else {
+            badge.className = 'badge badge-offline';
+            text.textContent = 'Belum Dikonfigurasi';
+        }
+    } catch (e) {
+        badge.className = 'badge badge-offline';
+        text.textContent = 'Error Cek Status';
+    }
+}
+
+async function saveGeminiKey() {
+    const input = document.getElementById('set-gemini-key');
+    if (!input) return;
+    const key = input.value.trim();
+    if (!key) {
+        showToast('Masukkan API Key terlebih dahulu', 'error');
+        return;
+    }
+    const res = await apiPost('/api/gemini/save_key', { api_key: key });
+    if (res && res.success) {
+        showToast('API Key Gemini berhasil disimpan!', 'success');
+        input.value = '';
+        checkGeminiStatus();
+    } else {
+        showToast(res ? res.error : 'Gagal menyimpan key', 'error');
+    }
+}
+
+async function testGeminiConnection() {
+    const input = document.getElementById('set-gemini-key');
+    const key = input ? input.value.trim() : '';
+    showToast('Menguji koneksi ke Google Gemini AI...', 'info');
+
+    const res = await apiPost('/api/gemini/test', { api_key: key });
+    if (res && res.success) {
+        showToast(res.message || 'Koneksi Gemini AI Berhasil!', 'success');
+        checkGeminiStatus();
+    } else {
+        showToast('Uji gagal: ' + (res ? res.error : 'Tidak ada respon'), 'error');
+    }
+}
+
+function toggleApiKeyVisibility() {
+    const input = document.getElementById('set-gemini-key');
+    const btn = document.getElementById('btn-toggle-key-eye');
+    if (!input) return;
+    if (input.type === 'password') {
+        input.type = 'text';
+        if (btn) btn.textContent = '🔒';
+    } else {
+        input.type = 'password';
+        if (btn) btn.textContent = '👁️';
+    }
+}
+
+// ====================== VOICE ASSISTANT MODAL & RECOGNITION ======================
+let _voiceRecognition = null;
+let _isVoiceListening = false;
+let _currentSpokenText = '';
+
+function getSpeechRecognition() {
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) return null;
+    if (!_voiceRecognition) {
+        _voiceRecognition = new SpeechRec();
+        _voiceRecognition.lang = 'id-ID';
+        _voiceRecognition.continuous = false;
+        _voiceRecognition.interimResults = true;
+
+        _voiceRecognition.onstart = () => {
+            _isVoiceListening = true;
+            _currentSpokenText = '';
+            primeAudio();
+            updateVoiceUiState('listening');
+        };
+
+        _voiceRecognition.onresult = (event) => {
+            let fullText = '';
+            for (let i = 0; i < event.results.length; ++i) {
+                fullText += event.results[i][0].transcript;
+            }
+            _currentSpokenText = fullText.trim();
+            const userEl = document.getElementById('voice-user-transcript');
+            if (userEl && _currentSpokenText) {
+                userEl.textContent = `"${_currentSpokenText}"`;
+            }
+        };
+
+        _voiceRecognition.onerror = (event) => {
+            console.warn('Speech recognition error:', event.error);
+            _isVoiceListening = false;
+            const userEl = document.getElementById('voice-user-transcript');
+            if (event.error === 'not-allowed') {
+                showToast('Izin mikrofon ditolak / dibatasi oleh browser di HTTP', 'error');
+                if (userEl) userEl.textContent = 'Izin mikrofon diblokir di HTTP. Gunakan kolom ketik di bawah atau izinkan mic via chrome://flags.';
+            } else if (event.error === 'no-speech') {
+                showToast('Suara tidak terdengar. Coba bicara lebih dekat ke mic.', 'info');
+                if (userEl) userEl.textContent = 'Suara tidak terdengar. Coba klik mic lagi dan bicara lebih dekat.';
+            } else {
+                showToast(`Speech error: ${event.error}`, 'error');
+                if (userEl) userEl.textContent = `Error mic: ${event.error}. Silakan gunakan kolom ketik di bawah.`;
+            }
+            updateVoiceUiState('idle');
+        };
+
+        _voiceRecognition.onend = () => {
+            _isVoiceListening = false;
+            const textToRun = _currentSpokenText.trim();
+            if (textToRun) {
+                _currentSpokenText = '';
+                executeVoiceCommand(textToRun);
+            } else {
+                const userEl = document.getElementById('voice-user-transcript');
+                if (userEl && userEl.textContent.includes('Mendengarkan')) {
+                    userEl.textContent = 'Suara tidak terdeteksi. Silakan klik mic lagi atau ketik di kolom bawah.';
+                }
+                updateVoiceUiState('idle');
+            }
+        };
+    }
+    return _voiceRecognition;
+}
+
+function updateVoiceUiState(state) {
+    const pill = document.getElementById('voice-status-pill');
+    const text = document.getElementById('voice-status-text');
+    const btn = document.getElementById('voice-mic-main-btn');
+
+    if (!pill || !text || !btn) return;
+
+    pill.className = 'voice-status-pill ' + (state === 'listening' ? 'listening' : state === 'processing' ? 'processing' : '');
+    btn.className = 'voice-mic-circle ' + (state === 'listening' ? 'recording' : '');
+
+    if (state === 'listening') {
+        text.textContent = 'Mendengarkan...';
+    } else if (state === 'processing') {
+        text.textContent = 'Memproses dengan Gemini AI...';
+    } else {
+        text.textContent = 'Siap Mendengarkan';
+    }
+}
+
+function openVoiceModal() {
+    primeAudio();
+    const overlay = document.getElementById('voice-modal-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('hidden');
+
+    const userEl = document.getElementById('voice-user-transcript');
+    const botEl = document.getElementById('voice-robot-response');
+    const textInput = document.getElementById('voice-text-input');
+
+    if (getSpeechRecognition()) {
+        if (userEl) userEl.textContent = 'Mendengarkan suara Anda... (Bicaralah sekarang)';
+        if (botEl) botEl.textContent = '—';
+        startVoiceRecording();
+    } else {
+        if (userEl) userEl.textContent = 'Browser ini belum mendukung Web Speech mic. Silakan ketik perintah di bawah atau gunakan Chrome.';
+        if (botEl) botEl.textContent = '—';
+        if (textInput) {
+            setTimeout(() => textInput.focus(), 150);
+        }
+    }
+}
+
+function closeVoiceModal() {
+    stopVoiceRecording();
+    const overlay = document.getElementById('voice-modal-overlay');
+    if (overlay) overlay.classList.add('hidden');
+}
+
+function closeVoiceModalOnBackdrop(e) {
+    if (e.target.id === 'voice-modal-overlay') {
+        closeVoiceModal();
+    }
+}
+
+function toggleVoiceRecording() {
+    primeAudio();
+    if (_isVoiceListening) {
+        stopVoiceRecording();
+    } else {
+        startVoiceRecording();
+    }
+}
+
+function startVoiceRecording() {
+    primeAudio();
+    const rec = getSpeechRecognition();
+    if (!rec) {
+        showToast('Browser tidak mendukung Speech Recognition bawaan. Ketik perintah di bawah.', 'warning');
+        const userEl = document.getElementById('voice-user-transcript');
+        if (userEl) userEl.textContent = 'Browser belum mendukung mic. Silakan ketik perintah di bawah.';
+        const textInput = document.getElementById('voice-text-input');
+        if (textInput) textInput.focus();
+        return;
+    }
+    try {
+        rec.start();
+    } catch (e) {
+        // Recognition mungkin sedang berjalan
+    }
+}
+
+function submitVoiceText() {
+    primeAudio();
+    const input = document.getElementById('voice-text-input');
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+
+    const userEl = document.getElementById('voice-user-transcript');
+    if (userEl) userEl.textContent = `"${text}"`;
+
+    input.value = '';
+    executeVoiceCommand(text);
+}
+
+function stopVoiceRecording() {
+    if (_voiceRecognition && _isVoiceListening) {
+        try {
+            _voiceRecognition.stop();
+        } catch (e) {}
+    }
+    _isVoiceListening = false;
+    const textToRun = _currentSpokenText.trim();
+    if (textToRun) {
+        _currentSpokenText = '';
+        executeVoiceCommand(textToRun);
+    } else {
+        updateVoiceUiState('idle');
+    }
+}
+
+async function executeVoiceCommand(text) {
+    if (!text || !text.trim()) return;
+    primeAudio();
+    updateVoiceUiState('processing');
+    const botEl = document.getElementById('voice-robot-response');
+    if (botEl) botEl.textContent = 'Menganalisis perintah dengan Gemini Flash...';
+
+    try {
+        const res = await apiPost('/api/voice_command', { text });
+        if (res && res.success) {
+            const spoken = res.spoken_response || 'Perintah diterima.';
+            if (botEl) botEl.textContent = spoken;
+
+            speakHumanVoice(spoken);
+
+            if (res.action === 'delivery') {
+                showToast('Misi delivery dimulai dari perintah suara!', 'success');
+                updateMissionControlVisibility();
+            } else if (res.action === 'cancel') {
+                showToast('Misi dihentikan atas perintah suara', 'info');
+            }
+        } else {
+            const errMsg = res ? (res.spoken_response || res.error) : 'Gagal memproses';
+            if (botEl) botEl.textContent = errMsg;
+            speakHumanVoice(errMsg);
+            showToast(res ? res.error : 'Gagal', 'error');
+        }
+    } catch (e) {
+        if (botEl) botEl.textContent = 'Terjadi kesalahan jaringan.';
+        showToast('Gagal menghubungi server', 'error');
+    } finally {
+        updateVoiceUiState('idle');
+    }
 }
 
 // ====================== INIT ======================
