@@ -63,6 +63,10 @@ float error_R = 0.0, prev_error_R = 0.0, integral_R = 0.0, pwm_R = 0.0;
 
 unsigned long waktuSebelumnya = 0;
 
+// Watchdog Failsafe (Anti-Runaway jika Jetson mati / kabel serial lepas)
+const unsigned long SERIAL_WATCHDOG_TIMEOUT_MS = 600; // 0.6 detik
+unsigned long lastSerialCmdTime = 0;
+
 // State Uji Mandiri Skripsi
 int modePengujian = 0; 
 int stepPersegi = 0;
@@ -123,6 +127,7 @@ void driveMotors(float pwmL, float pwmR) {
 void processCommand(char* cmd) {
   // 1. Perintah Kecepatan dari ROS 2: "V,<linear_v>,<angular_w>"
   if (cmd[0] == 'V' || cmd[0] == 'v') {
+    lastSerialCmdTime = millis(); // Refresh watchdog heartbeat dari Jetson
     char* comma1 = strchr(cmd, ',');
     if (comma1 != NULL) {
       float v_lin = atof(comma1 + 1);
@@ -204,6 +209,7 @@ void setup() {
 
   driveMotors(0, 0);
   waktuSebelumnya = millis();
+  lastSerialCmdTime = millis();
 }
 
 // ====================== 11. LOOP UTAMA (20 Hz) ==========================
@@ -272,6 +278,19 @@ void loop() {
           else { hitungInverseKinematics(0.33, 0.0); stepPersegi++; }
         }
       }
+    }
+
+    // 0. FAILSAFE WATCHDOG: Jika mode Navigasi ROS 2 (99) dan tidak ada heartbeat > 0.6 detik (Jetson mati/kabel putus)
+    if (modePengujian == 99 && (waktuSekarang - lastSerialCmdTime > SERIAL_WATCHDOG_TIMEOUT_MS)) {
+      setpoint_L = 0.0;
+      setpoint_R = 0.0;
+      integral_L = 0.0;
+      integral_R = 0.0;
+      prev_error_L = 0.0;
+      prev_error_R = 0.0;
+      pwm_L = 0.0;
+      pwm_R = 0.0;
+      driveMotors(0, 0);
     }
 
     // Perhitungan Loop PID
