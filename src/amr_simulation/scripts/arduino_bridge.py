@@ -2,10 +2,12 @@
 """
 ROS 2 Arduino Serial Bridge Node (Jetson AGX Xavier <-> Arduino Uno)
 - Menerima /cmd_vel (Twist) dari Teleop / Nav2
-- Mengirim perintah kecepatan linear dan angular "V,<v>,<w>\\n" ke Arduino Uno
+- Mengirim perintah kecepatan linear dan angular "V,<v>,<w>\n" ke Arduino Uno
   (Arduino melakukan Inverse Kinematics & Kendali PID-PSO kecepatan roda secara internal)
 - Watchdog & Heartbeat 20Hz (tiap 50ms) agar pergerakan motor halus dan aman
 - Membaca stream "ENC:<left>,<right>" dari Arduino dan mem-publish /odom + TF (odom -> base_link)
+- Auto-reconnect otomatis jika koneksi USB serial terputus / izin port baru diberikan
+- Siar TF kontinu pada 50Hz agar SLAM & RViz tidak pernah drop laser message
 """
 
 import math
@@ -31,10 +33,10 @@ class ArduinoBridgeNode(Node):
         # --- PARAMETER KONFIGURASI ROBOT ---
         self.declare_parameter('serial_port', '/dev/ttyACM0')
         self.declare_parameter('baudrate', 115200)
-        self.declare_parameter('wheel_diameter', 0.127)      # 5 inci = 0.127 meter (sesuai Proposal Skripsi)
-        self.declare_parameter('wheel_separation', 0.458)    # 45.8 cm = 0.458 meter (sesuai Proposal Skripsi)
+        self.declare_parameter('wheel_diameter', 0.127)      # 5 inci = 0.127 meter
+        self.declare_parameter('wheel_separation', 0.458)    # 45.8 cm = 0.458 meter
         self.declare_parameter('ticks_per_rev', 350.7)       # 7 PPR * 50.1 gearbox = 350.7 ticks/rev
-        self.declare_parameter('cmd_vel_timeout', 0.8)       # Timeout stop (0.8s aman dari lag keyboard)
+        self.declare_parameter('cmd_vel_timeout', 0.8)       # Timeout stop
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('publish_tf', True)
@@ -55,6 +57,8 @@ class ArduinoBridgeNode(Node):
         self.x = 0.0
         self.y = 0.0
         self.yaw = 0.0
+        self.vx = 0.0
+        self.wz = 0.0
         self.prev_left_ticks = None
         self.prev_right_ticks = None
         self.prev_odom_time = self.get_clock().now()
@@ -67,6 +71,7 @@ class ArduinoBridgeNode(Node):
         self.last_sent_w = None
         self.last_cmd_vel_time = self.get_clock().now()
         self.last_tx_time = self.get_clock().now()
+        self.last_reconnect_time = self.get_clock().now()
 
         # --- INISIALISASI SERIAL ARDUINO ---
         self.ser = None
@@ -77,7 +82,7 @@ class ArduinoBridgeNode(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
         self.cmd_sub = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
 
-        # Timer 50 Hz (tiap 20ms) untuk pembacaan serial & heartbeat
+        # Timer 50 Hz (tiap 20ms) untuk pembacaan serial, TF broadcast & heartbeat
         self.timer = self.create_timer(0.02, self.update_loop)
         self.get_logger().info(
             f"Arduino Bridge PID aktif di {self.port} ({self.baud} baud) | "
@@ -87,16 +92,16 @@ class ArduinoBridgeNode(Node):
     def connect_serial(self):
         try:
             self.ser = serial.Serial(self.port, self.baud, timeout=0)
-            time.sleep(2.0)  # Tunggu bootloader Arduino Uno selesai auto-reset
+            time.sleep(1.0)  # Tunggu bootloader Arduino Uno selesai auto-reset
             self.ser.reset_input_buffer()
             self.ser.write(b"V,0.0,0.0\n")
-            self.get_logger().info(f"Berhasil terhubung ke Arduino di {self.port}")
+            self.get_logger().info(f"✅ Berhasil terhubung ke Arduino di {self.port}")
         except Exception as e:
-            self.get_logger().error(f"Gagal membuka port Arduino {self.port}: {e}")
+            self.get_logger().warn(f"⚠️ Menunggu koneksi port Arduino {self.port} ({e})")
             self.ser = None
 
     def send_cmd(self, v: float, w: float, now):
-        """Kirim perintah kecepatan 'V,<v>,<w>\\n' ke Arduino."""
+        """Kirim perintah kecepatan 'V,<v>,<w>\n' ke Arduino."""
         if self.ser is None or not self.ser.is_open:
             return
         try:
@@ -107,6 +112,7 @@ class ArduinoBridgeNode(Node):
             self.last_tx_time = now
         except Exception as e:
             self.get_logger().warn(f"Serial write error: {e}")
+            self.ser = None
 
     def cmd_vel_callback(self, msg: Twist):
         v = msg.linear.x
@@ -122,10 +128,17 @@ class ArduinoBridgeNode(Node):
             self.send_cmd(self.target_v, self.target_w, now)
 
     def update_loop(self):
-        if self.ser is None or not self.ser.is_open:
-            return
-
         now = self.get_clock().now()
+
+        # 0. Auto-reconnect jika serial belum terbuka / terputus
+        if self.ser is None or not self.ser.is_open:
+            dt_reconnect = (now - self.last_reconnect_time).nanoseconds / 1e9
+            if dt_reconnect >= 2.0:
+                self.last_reconnect_time = now
+                self.connect_serial()
+            # Tetap broadcast TF saat disconnected agar TF tree tidak broken
+            self.broadcast_tf_and_odom(now)
+            return
 
         # 1. Timeout /cmd_vel: jika > cmd_vel_timeout tidak ada perintah baru, otomatis kirim stop
         dt_cmd = (now - self.last_cmd_vel_time).nanoseconds / 1e9
@@ -155,13 +168,17 @@ class ArduinoBridgeNode(Node):
                         if len(parts) == 2:
                             left_ticks = int(parts[0])
                             right_ticks = int(parts[1])
-                            self.process_odometry(left_ticks, right_ticks, now)
+                            self.process_encoder_ticks(left_ticks, right_ticks, now)
                     elif line.startswith("LOG:"):
                         self.get_logger().debug(f"Arduino PID Log: {line}")
         except Exception as e:
             self.get_logger().warn(f"Serial read error: {e}")
+            self.ser = None
 
-    def process_odometry(self, left_ticks: int, right_ticks: int, now):
+        # 4. Kontinu broadcast TF & Odometry pada 50Hz (mencegah SLAM/RViz drop message)
+        self.broadcast_tf_and_odom(now)
+
+    def process_encoder_ticks(self, left_ticks: int, right_ticks: int, now):
         if self.prev_left_ticks is None:
             self.prev_left_ticks = left_ticks
             self.prev_right_ticks = right_ticks
@@ -169,14 +186,10 @@ class ArduinoBridgeNode(Node):
             self.get_logger().info(
                 f"Paket Encoder pertama diterima (L={left_ticks}, R={right_ticks}) -> Topik /odom aktif!"
             )
+            return
 
         dt = (now - self.prev_odom_time).nanoseconds / 1e9
-        if dt <= 0.0001:
-            d_left = 0.0
-            d_right = 0.0
-            vx = 0.0
-            wz = 0.0
-        else:
+        if dt > 0.0001:
             d_left = (left_ticks - self.prev_left_ticks) * self.meters_per_tick
             d_right = (right_ticks - self.prev_right_ticks) * self.meters_per_tick
             self.prev_left_ticks = left_ticks
@@ -193,9 +206,10 @@ class ArduinoBridgeNode(Node):
             self.y += d_center * math.sin(mid_yaw)
             self.yaw = math.atan2(math.sin(self.yaw + d_yaw), math.cos(self.yaw + d_yaw))
 
-            vx = d_center / dt
-            wz = d_yaw / dt
+            self.vx = d_center / dt
+            self.wz = d_yaw / dt
 
+    def broadcast_tf_and_odom(self, now):
         qx, qy, qz, qw = euler_to_quaternion(self.yaw)
         stamp = now.to_msg()
 
@@ -226,8 +240,8 @@ class ArduinoBridgeNode(Node):
         odom.pose.pose.orientation.y = qy
         odom.pose.pose.orientation.z = qz
         odom.pose.pose.orientation.w = qw
-        odom.twist.twist.linear.x = vx
-        odom.twist.twist.angular.z = wz
+        odom.twist.twist.linear.x = self.vx
+        odom.twist.twist.angular.z = self.wz
         self.odom_pub.publish(odom)
 
 
@@ -240,8 +254,11 @@ def main(args=None):
         pass
     finally:
         if node.ser and node.ser.is_open:
-            node.ser.write(b"V,0.0,0.0\n")
-            node.ser.close()
+            try:
+                node.ser.write(b"V,0.0,0.0\n")
+                node.ser.close()
+            except Exception:
+                pass
         node.destroy_node()
         rclpy.shutdown()
 
