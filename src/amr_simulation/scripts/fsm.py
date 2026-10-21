@@ -6,6 +6,8 @@ Sesuai Dokumen Metode Penelitian:
   - 3 Zona Kedekatan: FAR, MEDIUM, NEAR (ditambah NONE jika tidak ada orang)
   - Menggabungkan Hysteresis (T_ENTER > T_EXIT) dan Debounce temporal
     agar robot tidak berosilasi saat manusia berada di batas zona.
+  - Dilengkapi Miss Tolerance agar memori hysteresis tidak langsung hilang
+    akibat detector flicker sesaat (1-3 frame).
 """
 
 from enum import Enum
@@ -36,18 +38,31 @@ class ProximityClassifier:
     Klasifikasi zona kedekatan dengan Hysteresis (T_ENTER > T_EXIT).
     Mencegah zona melompat-lompat akibat fluktuasi bounding box di perbatasan ambang.
     """
-    def __init__(self, t_near_enter=0.80, t_near_exit=0.70,
-                 t_med_enter=0.45, t_med_exit=0.38):
+    def __init__(self, t_near_enter=0.75, t_near_exit=0.65,
+                 t_med_enter=0.45, t_med_exit=0.38, miss_tolerance: int = 3):
         self.t_near_enter = t_near_enter
         self.t_near_exit = t_near_exit
         self.t_med_enter = t_med_enter
         self.t_med_exit = t_med_exit
+        self.miss_tolerance = miss_tolerance
+        
         self.current_zone = Zone.NONE
+        self._miss_count = 0
+
+    def reset(self):
+        self.current_zone = Zone.NONE
+        self._miss_count = 0
 
     def update(self, ratio: float | None, force_near: bool = False) -> Zone:
         if ratio is None:
-            self.current_zone = Zone.NONE
+            self._miss_count += 1
+            # Pertahankan zona terakhir selama miss_count belum melewati batas toleransi
+            if self._miss_count >= self.miss_tolerance:
+                self.current_zone = Zone.NONE
             return self.current_zone
+
+        # Reset hitungan miss saat target terdeteksi kembali
+        self._miss_count = 0
 
         if force_near:
             self.current_zone = Zone.NEAR
