@@ -114,22 +114,22 @@ controller_server:
       debug_trajectory_details: True
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.7
+      max_vel_x: 0.30
       max_vel_y: 0.0
-      max_vel_theta: 0.9
+      max_vel_theta: 0.50
       min_speed_xy: 0.0
-      max_speed_xy: 0.7
+      max_speed_xy: 0.30
       min_speed_theta: 0.0
-      acc_lim_x: 2.5
+      acc_lim_x: 0.8
       acc_lim_y: 0.0
-      acc_lim_theta: 3.2
-      decel_lim_x: -2.5
+      acc_lim_theta: 1.0
+      decel_lim_x: -1.0
       decel_lim_y: 0.0
-      decel_lim_theta: -3.2
+      decel_lim_theta: -1.2
       vx_samples: 30
       vy_samples: 1
       vtheta_samples: 24
-      sim_time: 1.0
+      sim_time: 1.2
       linear_granularity: 0.03
       angular_granularity: 0.02
       transform_tolerance: 0.2
@@ -147,13 +147,13 @@ controller_server:
           "PathDist",
           "GoalDist",
         ]
-      BaseObstacle.scale: 0.03
-      PathAlign.scale: 64.0
+      BaseObstacle.scale: 1.5
+      PathAlign.scale: 32.0
       PathAlign.forward_point_distance: 0.05
-      GoalAlign.scale: 32.0
+      GoalAlign.scale: 24.0
       GoalAlign.forward_point_distance: 0.05
-      PathDist.scale: 48.0
-      GoalDist.scale: 32.0
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
       RotateToGoal.scale: 24.0
       RotateToGoal.slowing_factor: 4.0
       RotateToGoal.lookahead_time: -1.0
@@ -291,9 +291,9 @@ recoveries_server:
     transform_timeout: 0.1
     use_sim_time: False
     simulate_ahead_time: 2.0
-    max_rotational_vel: 1.0
-    min_rotational_vel: 0.4
-    rotational_acc_lim: 3.2
+    max_rotational_vel: 0.6
+    min_rotational_vel: 0.3
+    rotational_acc_lim: 1.2
 
 recoveries_server_rclcpp_node:
   ros__parameters:
