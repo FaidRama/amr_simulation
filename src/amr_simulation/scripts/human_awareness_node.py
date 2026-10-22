@@ -1,17 +1,13 @@
+#!/usr/bin/env python3
 """
-main.py (Versi Lengkap / Full Feature)
-Mencakup:
-  - Deteksi YOLO11n (person)
-  - Fitur Utama TINGGI bbox (h/H), LEBAR (w/W), dan AUTO
-  - Estimasi jarak empiris d = a*(1/r) + b
-  - ProximityClassifier dengan Hysteresis (T_ENTER > T_EXIT)
-  - FSM dengan Debounce temporal
-  - Visualisasi HUD lengkap: Top Bar, Info Panel Transparan, Proximity Gauge Bar
-  - Perekaman Video Output (--save-video) & Logging CSV komprehensif
+human_awareness_node.py
+Modul Human-Aware Behavior AMR terintegrasi ROS 2.
+Mempublikasikan state (NORMAL, REDUCED_SPEED, SAFE_STOP) ke topik /human_state.
 """
 
 import argparse
 import csv
+import sys
 import time
 from pathlib import Path
 
@@ -19,8 +15,12 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-from fsm import HumanAwareFSM, ProximityClassifier, Zone, State
+# ROS 2 Integration
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import String
 
+from fsm import HumanAwareFSM, ProximityClassifier, Zone, State
 
 # ---------------------------------------------------------------- Visual & Palet
 GREEN = (80, 200, 80)
@@ -40,13 +40,10 @@ STATE_RESPONSE = {
 }
 
 FEAT_NAME = {"w": "LEBAR (w/W)", "h": "TINGGI (h/H)"}
-
-# Data empiris awal sesuai dokumen penelitian (jarak m : rasio)
 DEFAULT_CALIB_H = "2.0:0.80,3.0:0.55,4.0:0.42"
 DEFAULT_CALIB_W = "1.0:0.55,2.0:0.28,3.0:0.19"
 
 
-# ---------------------------------------------------------------- Estimasi Jarak
 class DistanceEstimator:
     def __init__(self, calib_str: str, alpha: float = 0.3):
         pairs = []
@@ -87,7 +84,6 @@ class DistanceEstimator:
         self._ema = None
 
 
-# ---------------------------------------------------------------- Ekstraksi Objek
 def extract_persons(result, frame_w: int, frame_h: int, edge_margin: int = 6):
     persons = []
     for box in result.boxes:
@@ -114,13 +110,11 @@ def pick_feature(p, mode: str) -> str:
         return "w"
     if mode == "height":
         return "h"
-    # Mode auto: gunakan tinggi jika vertikal utuh; jika terpotong, beralih ke lebar
     if not p["cut_h"]:
         return "h"
     return "w"
 
 
-# ---------------------------------------------------------------- Helper Gambar & HUD
 def put_text(img, text, org, scale=0.6, color=WHITE, thick=1):
     cv2.putText(img, text, org, FONT, scale, BLACK, thick + 2, cv2.LINE_AA)
     cv2.putText(img, text, org, FONT, scale, color, thick, cv2.LINE_AA)
@@ -228,54 +222,46 @@ def draw_proximity_bar(frame, ratio, t_medium, t_near, s):
         cv2.polylines(frame, [tri], True, BLACK, 1, cv2.LINE_AA)
 
 
-# ---------------------------------------------------------------- Main Program
 def main():
     parser = argparse.ArgumentParser(description="Human-Aware AMR Modul Deployment")
     parser.add_argument("--source", default="0", help="Kamera index atau path file video")
     parser.add_argument("--model", default="yolo11n.pt", help="File model (yolo11n.pt atau yolo11n.engine)")
     parser.add_argument("--imgsz", type=int, default=640, help="Resolusi input inferensi YOLO")
     parser.add_argument("--conf", type=float, default=0.5, help="Confidence threshold deteksi person")
-    parser.add_argument("--feature", choices=["height", "width", "auto"], default="height",
-                        help="Fitur indikator kedekatan: height (default), width, atau auto")
-
-    # Ambang Hysteresis (T_ENTER > T_EXIT)
-    parser.add_argument("--t-near-enter", type=float, default=0.75, help="Ambang MASUK zona NEAR")
-    parser.add_argument("--t-near-exit", type=float, default=0.65, help="Ambang KELUAR zona NEAR")
-    parser.add_argument("--t-med-enter", type=float, default=0.45, help="Ambang MASUK zona MEDIUM")
-    parser.add_argument("--t-med-exit", type=float, default=0.38, help="Ambang KELUAR zona MEDIUM")
-
-    parser.add_argument("--debounce", type=int, default=8, help="Frame delay saat transisi melonggar")
-    parser.add_argument("--calib-h", default=DEFAULT_CALIB_H, help="Kalibrasi TINGGI (meter:rasio)")
-    parser.add_argument("--calib-w", default=DEFAULT_CALIB_W, help="Kalibrasi LEBAR (meter:rasio)")
-    parser.add_argument("--smooth", type=float, default=0.3, help="Faktor EMA penghalus jarak")
-    parser.add_argument("--true-distance", type=float, default=None, help="Jarak ground truth fisik (m)")
-    parser.add_argument("--log", default="experiment_log.csv", help="Path CSV pencatatan")
-    parser.add_argument("--save-video", default=None, help="Path output file video (mis. out.mp4)")
-    parser.add_argument("--no-display", action="store_true", help="Nonaktifkan GUI (wajib untuk run mandiri di Jetson)")
+    parser.add_argument("--feature", choices=["height", "width", "auto"], default="height")
+    parser.add_argument("--t-near-enter", type=float, default=0.75)
+    parser.add_argument("--t-near-exit", type=float, default=0.65)
+    parser.add_argument("--t-med-enter", type=float, default=0.45)
+    parser.add_argument("--t-med-exit", type=float, default=0.38)
+    parser.add_argument("--debounce", type=int, default=8)
+    parser.add_argument("--calib-h", default=DEFAULT_CALIB_H)
+    parser.add_argument("--calib-w", default=DEFAULT_CALIB_W)
+    parser.add_argument("--smooth", type=float, default=0.3)
+    parser.add_argument("--true-distance", type=float, default=None)
+    parser.add_argument("--log", default="experiment_log.csv")
+    parser.add_argument("--save-video", default=None)
+    parser.add_argument("--no-display", action="store_true")
     args = parser.parse_args()
 
-    if not (args.t_near_enter > args.t_near_exit > args.t_med_enter > args.t_med_exit > 0):
-        parser.error("Aturan Hysteresis harus dipenuhi: T_NEAR_ENTER > T_NEAR_EXIT > T_MED_ENTER > T_MED_EXIT > 0")
+    # Inisialisasi ROS 2 Node & Publisher
+    rclpy.init()
+    ros_node = Node('human_awareness_node')
+    state_pub = ros_node.create_publisher(String, '/human_state', 10)
 
-    # Estimator Jarak
     est_h = DistanceEstimator(args.calib_h, alpha=args.smooth)
     est_w = DistanceEstimator(args.calib_w, alpha=args.smooth)
     estimators = {"h": est_h, "w": est_w}
     calibrated_by = {"h": args.calib_h != DEFAULT_CALIB_H, "w": args.calib_w != DEFAULT_CALIB_W}
 
-    # Classifier & FSM
     classifier = ProximityClassifier(
         t_near_enter=args.t_near_enter, t_near_exit=args.t_near_exit,
         t_med_enter=args.t_med_enter, t_med_exit=args.t_med_exit
     )
     fsm = HumanAwareFSM(debounce_frames=args.debounce)
 
-    # YOLO Detector
     model = YOLO(args.model)
     person_id = [k for k, v in model.names.items() if v == "person"][0]
 
-    # Video Source (Cross-Platform: Windows pakai DSHOW, Linux/Jetson pakai V4L2)
-    import sys
     source = int(args.source) if args.source.isdigit() else args.source
     if isinstance(source, int):
         if sys.platform.startswith("linux"):
@@ -288,7 +274,6 @@ def main():
     else:
         cap = cv2.VideoCapture(source)
 
-    # CSV Logging Setup
     log_path = Path(args.log)
     log_file = open(log_path, "w", newline="")
     writer = csv.writer(log_file)
@@ -306,14 +291,13 @@ def main():
     last_feat = None
     t_start = time.time()
 
-    print(f"Modul Human-Aware berjalan [Fitur Utama: {args.feature.upper()}].")
+    print("Modul Human-Aware berjalan terintegrasi ke ROS 2 (/human_state).")
 
     try:
         while True:
             t_frame = time.perf_counter()
             ret, frame = cap.read()
             if not ret:
-                print("Stream selesai atau tidak terbaca.")
                 break
 
             frame_count += 1
@@ -332,14 +316,14 @@ def main():
                 p["r"] = p["ratio_h"] if p["feat"] == "h" else p["ratio_w"]
                 p["dist"], p["in_range"] = estimators[p["feat"]].estimate(p["r"])
 
-            # 3. Pemilihan Target (Terdekat)
+            # 3. Pemilihan Target
             target = None
             if persons:
                 if args.feature == "height":
                     target = max(persons, key=lambda p: p["h"])
                 elif args.feature == "width":
                     target = max(persons, key=lambda p: p["w"])
-                else:  # auto
+                else:
                     target = max(persons, key=lambda p: p["w"] * p["h"])
 
             # 4. Proximity & Jarak Smoothing
@@ -371,7 +355,12 @@ def main():
             zone = classifier.update(active_ratio, force_near=force_near)
             state = fsm.update(zone)
 
-            # 6. Perhitungan FPS
+            # PUBLISH STATE KE ROS 2
+            state_msg = String()
+            state_msg.data = state.value
+            state_pub.publish(state_msg)
+
+            # 6. FPS
             inst_fps = 1.0 / max(time.perf_counter() - t_frame, 1e-6)
             fps_ema = inst_fps if fps_ema is None else 0.9 * fps_ema + 0.1 * inst_fps
 
@@ -391,7 +380,7 @@ def main():
                 args.true_distance if args.true_distance is not None else ""
             ])
 
-            # 8. Render Visualisasi & Simpan Video
+            # 8. Render Visualisasi
             if not args.no_display or args.save_video:
                 for p in persons:
                     if p is not target:
@@ -425,7 +414,6 @@ def main():
                     ]
                 rows.append(("FPS / Inferensi", f"{fps_ema:.1f} / {infer_ms:.0f} ms", WHITE))
                 draw_info_panel(frame, top, rows, s)
-
                 draw_proximity_bar(frame, active_ratio, args.t_med_enter, args.t_near_enter, s)
 
                 if args.save_video:
@@ -444,10 +432,11 @@ def main():
             video_writer.release()
         cv2.destroyAllWindows()
         log_file.close()
+        ros_node.destroy_node()
+        rclpy.shutdown()
         elapsed = time.time() - t_start
         fps_avg = frame_count / elapsed if elapsed > 0 else 0
         print(f"Selesai. {frame_count} frame diproses dalam {elapsed:.1f} detik (~{fps_avg:.1f} FPS).")
-        print(f"Log tersimpan di: {log_path.resolve()}")
 
 
 if __name__ == "__main__":
