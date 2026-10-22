@@ -1,7 +1,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -12,7 +12,7 @@ def generate_launch_description():
     pkg_amr = get_package_share_directory('amr_simulation')
     pkg_nav2 = get_package_share_directory('nav2_bringup')
 
-    default_map_path = os.path.join(pkg_amr, 'maps', 'peta_1b.yaml')
+    default_map_path = os.path.join(pkg_amr, 'maps', 'peta_l1_ddc.yaml')
     default_params_path = os.path.join(pkg_amr, 'config', 'nav2_params.yaml')
     default_rviz_config = os.path.join(pkg_amr, 'rviz', 'slam_config.rviz')
 
@@ -65,7 +65,9 @@ def generate_launch_description():
             'frame_id': 'laser',
             'inverted': False,
             'angle_compensate': True,
-        }]
+        }],
+        respawn=True,
+        respawn_delay=2.0
     )
 
     # 2. Filter Laser Sasis (Memotong pantulan 4 tiang aluminium di dalam 34 cm)
@@ -77,7 +79,9 @@ def generate_launch_description():
         parameters=[{
             'min_range': 0.34,
             'max_range': 12.0
-        }]
+        }],
+        respawn=True,
+        respawn_delay=2.0
     )
 
     # 3. Arduino Bridge (Odometry Asli & Motor Control via /dev/ttyACM0)
@@ -96,6 +100,8 @@ def generate_launch_description():
             'base_frame': 'base_link',
             'publish_tf': True
         }],
+        respawn=True,
+        respawn_delay=2.0,
         condition=IfCondition(LaunchConfiguration('use_arduino'))
     )
 
@@ -120,6 +126,7 @@ def generate_launch_description():
     )
 
     # 5. Nav2 Bringup (AMCL + Costmaps + Planner + Controller + Lifecycle)
+    # Diberi delay 3 detik agar sensor hardware (LiDAR & Arduino) stabil terlebih dahulu
     start_nav2 = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_nav2, 'launch', 'bringup_launch.py')
@@ -130,6 +137,11 @@ def generate_launch_description():
             'params_file': LaunchConfiguration('params_file'),
             'autostart': LaunchConfiguration('autostart')
         }.items()
+    )
+
+    delayed_nav2 = TimerAction(
+        period=3.0,
+        actions=[start_nav2]
     )
 
     # 6. RViz2 (Opsional di laptop)
@@ -156,6 +168,6 @@ def generate_launch_description():
         tf_base_to_laser,
         tf_base_to_footprint,
         tf_odom_to_base,
-        start_nav2,
+        delayed_nav2,
         start_rviz2
     ])
