@@ -53,6 +53,13 @@ class AdaptiveVelocityNode(Node):
             self.current_state = msg.data
             self.get_logger().info(f"[ADAPTIF] Perubahan State: {self.current_state}")
 
+            # Jika masuk SAFE_STOP, langsung kirim rem darurat instan ke motor
+            if self.current_state == "SAFE_STOP":
+                stop_cmd = Twist()
+                stop_cmd.linear.x = 0.0
+                stop_cmd.angular.z = 0.0
+                self.pub_final_cmd.publish(stop_cmd)
+
     def cmd_callback(self, in_cmd: Twist):
         out_cmd = Twist()
         out_cmd.linear.x = in_cmd.linear.x

@@ -360,6 +360,12 @@ def main():
             state_msg.data = state.value
             state_pub.publish(state_msg)
 
+            # PUBLISH STATE KE ROS 2
+            state_msg = String()
+            state_msg.data = state.value
+            state_pub.publish(state_msg)
+            rclpy.spin_once(ros_node, timeout_sec=0.001)  # <-- Tambahkan ini agar komunikasi ROS 2 langsung terproses
+
             # 6. FPS
             inst_fps = 1.0 / max(time.perf_counter() - t_frame, 1e-6)
             fps_ema = inst_fps if fps_ema is None else 0.9 * fps_ema + 0.1 * inst_fps
