@@ -28,6 +28,12 @@ profiles:
     predefined_points:
     - *id001
     - *id002
+    settings:
+      arrival_sound_mode: human
+      max_angular_speed: 0.5
+      max_linear_speed: 0.35
+      theme: nordic-slate
+      waypoint_pause_duration: 3
   sim:
     home_position:
       x: 0.0
@@ -47,4 +53,9 @@ profiles:
       type: delivery
       x: -17.0
       y: 3.0
-settings: {}
+settings:
+  arrival_sound_mode: human
+  max_angular_speed: 0.5
+  max_linear_speed: 0.35
+  theme: nordic-slate
+  waypoint_pause_duration: 3
