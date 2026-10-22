@@ -11,6 +11,7 @@ Sesuai Dokumen Metode Penelitian:
 """
 
 from enum import Enum
+from typing import Optional
 
 
 class Zone(Enum):
@@ -53,7 +54,7 @@ class ProximityClassifier:
         self.current_zone = Zone.NONE
         self._miss_count = 0
 
-    def update(self, ratio: float | None, force_near: bool = False) -> Zone:
+    def update(self, ratio: Optional[float], force_near: bool = False) -> Zone:
         if ratio is None:
             self._miss_count += 1
             # Pertahankan zona terakhir selama miss_count belum melewati batas toleransi
