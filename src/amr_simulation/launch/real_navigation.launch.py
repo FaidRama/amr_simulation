@@ -12,7 +12,7 @@ def generate_launch_description():
     pkg_amr = get_package_share_directory('amr_simulation')
     pkg_nav2 = get_package_share_directory('nav2_bringup')
 
-    default_map_path = os.path.join(pkg_amr, 'maps', 'peta_1b.yaml')
+    default_map_path = os.path.join(pkg_amr, 'maps', 'peta_l1_ddc.yaml')
     default_params_path = os.path.join(pkg_amr, 'config', 'nav2_params.yaml')
     default_rviz_config = os.path.join(pkg_amr, 'rviz', 'slam_config.rviz')
 

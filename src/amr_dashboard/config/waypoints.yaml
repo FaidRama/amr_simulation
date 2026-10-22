@@ -22,7 +22,7 @@ profiles:
       x: 0.0
       y: 0.0
       yaw: 0.0
-    map_file: peta_rumah.yaml (Peta Rumah)
+    map_file: peta_l1_ddc.yaml
     max_angular_speed: 0.6
     max_linear_speed: 0.35
     predefined_points:
