@@ -32,7 +32,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import String
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CompressedImage, Image
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -560,9 +560,13 @@ def main():
     )
 
     annotated_pub = None
+    annotated_raw_pub = None
     if args.publish_annotated:
         annotated_pub = ros_node.create_publisher(
             CompressedImage, args.annotated_topic, 1
+        )
+        annotated_raw_pub = ros_node.create_publisher(
+            Image, "/camera/image_annotated", 1
         )
 
     use_ros_camera = args.source.lower() in ("ros", "topic")
@@ -1027,6 +1031,22 @@ def main():
                         img_msg.format = "jpeg"
                         img_msg.data = enc_bytes.tobytes()
                         annotated_pub.publish(img_msg)
+
+                # Publish juga ke topik raw Image (/camera/image_annotated)
+                if annotated_raw_pub is not None:
+                    try:
+                        raw_msg = Image()
+                        raw_msg.header.stamp = ros_node.get_clock().now().to_msg()
+                        raw_msg.header.frame_id = "camera_link"
+                        raw_msg.height = height
+                        raw_msg.width = width
+                        raw_msg.encoding = "bgr8"
+                        raw_msg.is_bigendian = 0
+                        raw_msg.step = width * 3
+                        raw_msg.data = frame.tobytes()
+                        annotated_raw_pub.publish(raw_msg)
+                    except Exception:
+                        pass
 
                 if args.save_video:
                     if video_writer is None:
