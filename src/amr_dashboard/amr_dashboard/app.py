@@ -22,7 +22,7 @@ from io import BytesIO
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from sensor_msgs.msg import Image, CompressedImage
 from std_msgs.msg import String
@@ -82,33 +82,100 @@ os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
 MAP_PGM_PATH = None
 MAP_YAML_PATH = None
 MAP_METADATA = {}
+ACTIVE_MAP_FILE = 'peta_1b.yaml'
 
-def find_map_files():
-    """Cari file peta dari amr_simulation package."""
-    global MAP_PGM_PATH, MAP_YAML_PATH, MAP_METADATA
-    
-    # Coba dari ament index
+
+def get_maps_directories():
+    """Dapatkan daftar direktori maps/ dari source workspace dan installed share."""
+    dirs = []
+    ws_root = os.environ.get('AMR_WS', os.path.expanduser('~/Documents/amr_ws'))
+    src_maps = os.path.join(ws_root, 'src', 'amr_simulation', 'maps')
+    if os.path.isdir(src_maps):
+        dirs.append(src_maps)
     try:
         from ament_index_python.packages import get_package_share_directory
-        sim_path = get_package_share_directory('amr_simulation')
-        MAP_PGM_PATH = os.path.join(sim_path, 'maps', 'peta_dc.pgm')
-        MAP_YAML_PATH = os.path.join(sim_path, 'maps', 'peta_dc.yaml')
+        sim_maps = os.path.join(get_package_share_directory('amr_simulation'), 'maps')
+        if os.path.isdir(sim_maps) and sim_maps not in dirs:
+            dirs.append(sim_maps)
     except Exception:
         pass
-    
-    # Fallback: cari di workspace
-    if not MAP_PGM_PATH or not os.path.exists(MAP_PGM_PATH):
-        ws_root = os.environ.get('AMR_WS', os.path.expanduser('~/Documents/amr_ws'))
-        MAP_PGM_PATH = os.path.join(ws_root, 'src', 'amr_simulation', 'maps', 'peta_dc.pgm')
-        MAP_YAML_PATH = os.path.join(ws_root, 'src', 'amr_simulation', 'maps', 'peta_dc.yaml')
-    
-    # Parse YAML metadata
-    if MAP_YAML_PATH and os.path.exists(MAP_YAML_PATH):
+    return dirs
+
+
+def list_available_maps():
+    """Kembalikan daftar file peta (.yaml) yang tersedia + opsi live ROS2 /map."""
+    found = {}
+    labels = {
+        'peta_1b.yaml': 'peta_1b.yaml (Real Navigation Default)',
+        'peta_kampus.yaml': 'peta_kampus.yaml (Peta Kampus)',
+        'peta_rumah.yaml': 'peta_rumah.yaml (Peta Rumah)',
+        'peta_dc.yaml': 'peta_dc.yaml (Simulasi Gazebo Gudang)',
+    }
+    for d in get_maps_directories():
+        try:
+            for fname in sorted(os.listdir(d)):
+                if fname.endswith('.yaml') and fname not in found:
+                    found[fname] = {
+                        'id': fname,
+                        'name': labels.get(fname, fname),
+                        'type': 'sim' if fname == 'peta_dc.yaml' else 'real'
+                    }
+        except Exception:
+            pass
+    res = list(found.values())
+    res.append({
+        'id': 'live',
+        'name': 'Live ROS2 /map Topic (SLAM Real-Time / Map Server)',
+        'type': 'live'
+    })
+    return res
+
+
+def find_map_files(map_yaml_name=None):
+    """Cari dan muat file peta dari amr_simulation package sesuai nama peta aktif."""
+    global MAP_PGM_PATH, MAP_YAML_PATH, MAP_METADATA, ACTIVE_MAP_FILE
+
+    if map_yaml_name:
+        ACTIVE_MAP_FILE = map_yaml_name
+
+    if ACTIVE_MAP_FILE == 'live':
+        print('[MAP] Mode peta diset ke LIVE ROS2 /map topic')
+        if MAP_PGM_PATH and os.path.exists(MAP_PGM_PATH):
+            return
+        target_yaml = 'peta_1b.yaml'
+    else:
+        target_yaml = ACTIVE_MAP_FILE or 'peta_1b.yaml'
+
+    yaml_candidate = None
+    for d in get_maps_directories():
+        cand = os.path.join(d, target_yaml)
+        if os.path.exists(cand):
+            yaml_candidate = cand
+            break
+
+    if not yaml_candidate:
+        for d in get_maps_directories():
+            for fallback in ('peta_1b.yaml', 'peta_dc.yaml'):
+                cand = os.path.join(d, fallback)
+                if os.path.exists(cand):
+                    yaml_candidate = cand
+                    break
+            if yaml_candidate:
+                break
+
+    if yaml_candidate and os.path.exists(yaml_candidate):
+        MAP_YAML_PATH = yaml_candidate
         with open(MAP_YAML_PATH, 'r') as f:
-            MAP_METADATA = yaml.safe_load(f)
-        print(f'[MAP] Loaded: {MAP_PGM_PATH}')
-        print(f'[MAP] Resolution: {MAP_METADATA.get("resolution", 0.05)} m/px')
-        print(f'[MAP] Origin: {MAP_METADATA.get("origin", [0, 0, 0])}')
+            MAP_METADATA = yaml.safe_load(f) or {}
+
+        img_field = MAP_METADATA.get('image', target_yaml.replace('.yaml', '.pgm'))
+        map_dir = os.path.dirname(MAP_YAML_PATH)
+        cand_pgm = os.path.join(map_dir, img_field)
+        if not os.path.exists(cand_pgm):
+            cand_pgm = os.path.join(map_dir, os.path.basename(img_field))
+        MAP_PGM_PATH = cand_pgm
+        print(f'[MAP] Loaded ({ACTIVE_MAP_FILE}): {MAP_PGM_PATH}')
+        print(f'[MAP] Resolution: {MAP_METADATA.get("resolution", 0.05)} m/px | Origin: {MAP_METADATA.get("origin", [0, 0, 0])}')
 
 
 # =====================================================================
@@ -174,10 +241,15 @@ class DashboardNode(Node):
     
     def __init__(self):
         super().__init__('dashboard_server')
+        self.declare_parameter('initial_mode', '')
         
         # === DATA STORE (thread-safe) ===
         self.lock = threading.Lock()
         self.robot_pose = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+        self.pose_source = 'NONE'  # 'AMCL', 'ODOM', atau 'NONE'
+        self.last_amcl_time = 0.0
+        self.live_map_png = None
+        self.live_map_meta = None
         self.delivery_status = {'status': 'idle', 'current_phase': 'idle'}
         self.human_status = 'NO_HUMAN'
         self.latest_frame = None  # JPEG bytes terakhir dari kamera
@@ -193,6 +265,17 @@ class DashboardNode(Node):
             PoseWithCovarianceStamped,
             '/amcl_pose', 
             self.on_pose, qos)
+        
+        # Live OccupancyGrid dari /map (nav2_map_server / slam_toolbox)
+        map_qos_tl = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL
+        )
+        self.map_sub_tl = self.create_subscription(
+            OccupancyGrid, '/map', self.on_map_grid, map_qos_tl)
+        self.map_sub_vol = self.create_subscription(
+            OccupancyGrid, '/map', self.on_map_grid, 1)
         
         # Status delivery dari waypoint_manager
         self.status_sub = self.create_subscription(
@@ -211,10 +294,13 @@ class DashboardNode(Node):
         # === PUBLISHERS ===
         # Task delivery ke waypoint_manager
         self.task_pub = self.create_publisher(String, '/amr/delivery_tasks', 10)
-        # Kontrol delivery (cancel, pause, resume)
+        # Kontrol delivery (cancel, pause, resume, reload_config)
         self.control_pub = self.create_publisher(String, '/amr/delivery_control', 10)
         # Manual velocity
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        # Initial pose AMCL (/initialpose)
+        self.initialpose_pub = self.create_publisher(
+            PoseWithCovarianceStamped, '/initialpose', 10)
         
         # === CAMERA SUBSCRIBER ===
         if HAS_CAMERA:
@@ -238,13 +324,14 @@ class DashboardNode(Node):
     def on_pose(self, msg):
         """Callback posisi AMR dari AMCL."""
         p = msg.pose.pose
-        # Extract yaw dari quaternion
         q = p.orientation
         siny = 2.0 * (q.w * q.z + q.x * q.y)
         cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         yaw = math.atan2(siny, cosy)
         
         with self.lock:
+            self.last_amcl_time = time.time()
+            self.pose_source = 'AMCL'
             self.robot_pose = {
                 'x': round(p.position.x, 3),
                 'y': round(p.position.y, 3),
@@ -260,7 +347,12 @@ class DashboardNode(Node):
             }
 
     def on_odom(self, msg):
-        """Callback monitor kecepatan aktual odometry robot."""
+        """Callback monitor kecepatan aktual & fallback posisi odometry robot."""
+        p = msg.pose.pose
+        q = p.orientation
+        siny = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        yaw = math.atan2(siny, cosy)
         with self.lock:
             lin = math.hypot(msg.twist.twist.linear.x, msg.twist.twist.linear.y)
             ang = msg.twist.twist.angular.z
@@ -268,6 +360,51 @@ class DashboardNode(Node):
                 'linear': round(lin, 3),
                 'angular': round(ang, 3)
             }
+            # Fallback ke posisi Odometry jika /amcl_pose belum aktif (>4 detik)
+            if time.time() - self.last_amcl_time > 4.0:
+                self.pose_source = 'ODOM'
+                self.robot_pose = {
+                    'x': round(p.position.x, 3),
+                    'y': round(p.position.y, 3),
+                    'yaw': round(yaw, 3)
+                }
+
+    def on_map_grid(self, msg):
+        """Callback OccupancyGrid dari /map untuk mode Live ROS Map (SLAM / Nav2)."""
+        try:
+            w = msg.info.width
+            h = msg.info.height
+            res = round(float(msg.info.resolution), 5)
+            ox = round(float(msg.info.origin.position.x), 4)
+            oy = round(float(msg.info.origin.position.y), 4)
+            if w == 0 or h == 0 or not HAS_PIL:
+                return
+            arr = np.array(msg.data, dtype=np.int16).reshape((h, w))
+            # Standar PGM: 254 = free (0), 0 = occupied (100), 205 = unknown (-1)
+            img_arr = np.full((h, w), 205, dtype=np.uint8)
+            img_arr[arr == 0] = 254
+            img_arr[arr >= 50] = 0
+            mask_mid = (arr > 0) & (arr < 50)
+            if np.any(mask_mid):
+                img_arr[mask_mid] = (254 - (arr[mask_mid] * 254 // 100)).astype(np.uint8)
+            # Flip vertikal agar baris 0 di atas (sesuai konvensi PGM & map.js)
+            img_arr = np.flipud(img_arr)
+            pil_img = PILImage.fromarray(img_arr, mode='L')
+            buf = BytesIO()
+            pil_img.save(buf, format='PNG')
+            png_bytes = buf.getvalue()
+            meta = {
+                'resolution': res,
+                'origin': [ox, oy, 0.0],
+                'width': w,
+                'height': h,
+                'source': 'live_ros_topic'
+            }
+            with self.lock:
+                self.live_map_png = png_bytes
+                self.live_map_meta = meta
+        except Exception as e:
+            self.get_logger().warn(f'Gagal memproses /map OccupancyGrid: {e}')
     
     def on_delivery_status(self, msg):
         """Callback status delivery dari waypoint_manager."""
@@ -370,6 +507,31 @@ class DashboardNode(Node):
         with self.lock:
             self.cmd_vel_current = {'linear': linear, 'angular': angular}
 
+    def send_initial_pose(self, x, y, yaw=0.0):
+        """Publish 2D Pose Estimate ke /initialpose untuk lokalisasi AMCL."""
+        msg = PoseWithCovarianceStamped()
+        msg.header.frame_id = 'map'
+        msg.header.stamp = rclpy.time.Time().to_msg()
+        msg.pose.pose.position.x = float(x)
+        msg.pose.pose.position.y = float(y)
+        msg.pose.pose.position.z = 0.0
+        msg.pose.pose.orientation.z = math.sin(float(yaw) / 2.0)
+        msg.pose.pose.orientation.w = math.cos(float(yaw) / 2.0)
+        # Covariance standar AMCL (x, y, yaw)
+        cov = [0.0] * 36
+        cov[0] = 0.25
+        cov[7] = 0.25
+        cov[35] = 0.0685
+        msg.pose.covariance = cov
+        self.initialpose_pub.publish(msg)
+        with self.lock:
+            self.robot_pose = {
+                'x': round(float(x), 3),
+                'y': round(float(y), 3),
+                'yaw': round(float(yaw), 3)
+            }
+        self.get_logger().info(f'Initial Pose dikirim ke /initialpose: ({x:.2f}, {y:.2f}, yaw={yaw:.2f})')
+
 
 # =====================================================================
 # FLASK APPLICATION
@@ -408,30 +570,98 @@ def load_env_file():
 
 
 waypoints_config = {}
-def load_waypoints_config():
+
+def save_waypoints_config():
+    """Simpan waypoints_config ke install share dan src agar persisten."""
+    ws_root = os.environ.get('AMR_WS', os.path.expanduser('~/Documents/amr_ws'))
+    paths = [
+        os.path.join(PKG_PATH, 'config', 'waypoints.yaml'),
+        os.path.join(ws_root, 'src', 'amr_dashboard', 'config', 'waypoints.yaml'),
+    ]
+    saved_any = False
+    for cfg_path in paths:
+        try:
+            if os.path.exists(os.path.dirname(cfg_path)):
+                with open(cfg_path, 'w') as f:
+                    yaml.dump(waypoints_config, f, default_flow_style=False, allow_unicode=True)
+                saved_any = True
+        except Exception as e:
+            print(f'[WARN] Gagal menyimpan waypoints.yaml ke {cfg_path}: {e}')
+    return saved_any
+
+
+def apply_mode_profile(mode, custom_map_file=None, save=True):
+    """Aktifkan profil mode ('sim' atau 'real') dan muat peta yang sesuai."""
+    global waypoints_config
+    mode = 'sim' if str(mode).lower() == 'sim' else 'real'
+    waypoints_config['operation_mode'] = mode
+
+    if 'profiles' not in waypoints_config or not isinstance(waypoints_config['profiles'], dict):
+        waypoints_config['profiles'] = {}
+
+    default_map = 'peta_dc.yaml' if mode == 'sim' else 'peta_1b.yaml'
+    if mode not in waypoints_config['profiles']:
+        waypoints_config['profiles'][mode] = {
+            'map_file': default_map,
+            'home_position': dict(waypoints_config.get('home_position', {'x': 0.0, 'y': 0.0, 'yaw': 0.0})),
+            'predefined_points': list(waypoints_config.get('predefined_points', [])),
+            'settings': dict(waypoints_config.get('settings', {
+                'max_linear_speed': 1.0 if mode == 'sim' else 0.35,
+                'max_angular_speed': 1.2 if mode == 'sim' else 0.8,
+                'waypoint_pause_duration': 3,
+                'auto_return_home': True
+            }))
+        }
+
+    prof = waypoints_config['profiles'][mode]
+    if custom_map_file:
+        prof['map_file'] = custom_map_file
+
+    map_to_load = prof.get('map_file', default_map)
+    waypoints_config['predefined_points'] = list(prof.get('predefined_points', []))
+    waypoints_config['home_position'] = dict(prof.get('home_position', {'x': 0.0, 'y': 0.0, 'yaw': 0.0}))
+    waypoints_config['settings'] = dict(prof.get('settings', {}))
+
+    find_map_files(map_to_load)
+    if save:
+        save_waypoints_config()
+    if ros_node is not None:
+        ros_node.send_control('reload_config')
+    print(f'[MODE] Aktif: {mode.upper()} | Peta: {ACTIVE_MAP_FILE} | Titik: {len(waypoints_config["predefined_points"])}')
+
+
+def load_waypoints_config(override_mode=None):
     global waypoints_config
     load_env_file()
+    ws_root = os.environ.get('AMR_WS', os.path.expanduser('~/Documents/amr_ws'))
     config_paths = [
+        os.path.join(ws_root, 'src', 'amr_dashboard', 'config', 'waypoints.yaml'),
         os.path.join(PKG_PATH, 'config', 'waypoints.yaml'),
         os.path.join(os.path.dirname(__file__), '..', 'config', 'waypoints.yaml'),
     ]
+    loaded = False
     for path in config_paths:
         if os.path.exists(path):
             with open(path, 'r') as f:
                 waypoints_config = yaml.safe_load(f) or {}
             print(f'[CONFIG] Loaded waypoints dari {path}')
-            return
-    print('[WARN] waypoints.yaml tidak ditemukan, menggunakan default.')
-    waypoints_config = {
-        'predefined_points': [],
-        'home_position': {'x': 0.0, 'y': 0.0, 'yaw': 0.0},
-        'settings': {
-            'max_linear_speed': 0.7,
-            'max_angular_speed': 0.9,
-            'waypoint_pause_duration': 3,
-            'auto_return_home': True
+            loaded = True
+            break
+    if not loaded:
+        print('[WARN] waypoints.yaml tidak ditemukan, menggunakan default.')
+        waypoints_config = {
+            'operation_mode': 'real',
+            'predefined_points': [],
+            'home_position': {'x': 0.0, 'y': 0.0, 'yaw': 0.0},
+            'settings': {
+                'max_linear_speed': 0.35,
+                'max_angular_speed': 0.8,
+                'waypoint_pause_duration': 3,
+                'auto_return_home': True
+            }
         }
-    }
+    active_mode = override_mode if override_mode in ('sim', 'real') else waypoints_config.get('operation_mode', 'real')
+    apply_mode_profile(active_mode, save=bool(override_mode))
 
 
 # --- ROUTES ---
@@ -444,22 +674,25 @@ def index():
 
 @app.route('/api/status')
 def api_status():
-    """Status AMR real-time (posisi, delivery status, human status)."""
+    """Status AMR real-time (posisi, delivery status, human status, mode)."""
     if ros_node is None:
         return jsonify({'error': 'ROS2 belum terhubung'}), 503
     
     with ros_node.lock:
         odom = getattr(ros_node, 'odom_speed', {'linear': 0.0, 'angular': 0.0})
         cmd = ros_node.cmd_vel_current
-        # Gunakan odom jika aktif bergerak, jika tidak gunakan cmd_vel
         active_speed = odom if (abs(odom.get('linear', 0.0)) > 0.001 or abs(odom.get('angular', 0.0)) > 0.001) else cmd
         return jsonify({
             'pose': ros_node.robot_pose,
+            'pose_source': ros_node.pose_source,
             'delivery': ros_node.delivery_status,
             'human_status': ros_node.human_status,
             'cmd_vel': cmd,
             'odom_vel': odom,
             'speed': active_speed,
+            'mode': waypoints_config.get('operation_mode', 'real'),
+            'map_file': ACTIVE_MAP_FILE,
+            'has_live_map': ros_node.live_map_png is not None,
             'connected': True,
             'timestamp': time.time()
         })
@@ -467,8 +700,26 @@ def api_status():
 
 @app.route('/api/map')
 def api_map():
-    """Serve gambar peta sebagai PNG."""
+    """Serve gambar peta sebagai PNG (dari topik /map live atau file PGM statis)."""
+    # 1. Jika mode peta adalah 'live' dan data /map tersedia, kirim langsung
+    if ACTIVE_MAP_FILE == 'live' and ros_node is not None:
+        with ros_node.lock:
+            live_png = ros_node.live_map_png
+        if live_png:
+            resp = send_file(BytesIO(live_png), mimetype='image/png')
+            resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+            return resp
+
+    # 2. Fallback ke file PGM statis
     if not MAP_PGM_PATH or not os.path.exists(MAP_PGM_PATH):
+        # Jika file tidak ada tapi ada live map, gunakan live map
+        if ros_node is not None:
+            with ros_node.lock:
+                live_png = ros_node.live_map_png
+            if live_png:
+                resp = send_file(BytesIO(live_png), mimetype='image/png')
+                resp.headers['Cache-Control'] = 'no-store'
+                return resp
         return jsonify({'error': 'File peta tidak ditemukan'}), 404
     
     if HAS_PIL:
@@ -476,20 +727,97 @@ def api_map():
         buf = BytesIO()
         img.save(buf, format='PNG')
         buf.seek(0)
-        return send_file(buf, mimetype='image/png')
+        resp = send_file(buf, mimetype='image/png')
     else:
-        return send_file(MAP_PGM_PATH, mimetype='image/x-portable-graymap')
+        resp = send_file(MAP_PGM_PATH, mimetype='image/x-portable-graymap')
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    return resp
 
 
 @app.route('/api/map/metadata')
 def api_map_metadata():
-    """Metadata peta (resolution, origin, size)."""
+    """Metadata peta (resolution, origin, size, mode, map_file)."""
+    if ACTIVE_MAP_FILE == 'live' and ros_node is not None:
+        with ros_node.lock:
+            live_meta = ros_node.live_map_meta
+        if live_meta:
+            meta = dict(live_meta)
+            meta['map_file'] = 'live'
+            meta['mode'] = waypoints_config.get('operation_mode', 'real')
+            return jsonify(meta)
+
     metadata = dict(MAP_METADATA)
     if MAP_PGM_PATH and os.path.exists(MAP_PGM_PATH) and HAS_PIL:
         img = PILImage.open(MAP_PGM_PATH)
         metadata['width'] = img.size[0]
         metadata['height'] = img.size[1]
+    metadata['map_file'] = ACTIVE_MAP_FILE
+    metadata['mode'] = waypoints_config.get('operation_mode', 'real')
     return jsonify(metadata)
+
+
+@app.route('/api/mode', methods=['GET', 'POST'])
+def api_mode():
+    """Get atau ganti mode operasi ('sim' vs 'real') dan file peta aktif."""
+    if request.method == 'GET':
+        mode = waypoints_config.get('operation_mode', 'real')
+        has_live = False
+        if ros_node is not None:
+            with ros_node.lock:
+                has_live = ros_node.live_map_png is not None
+        return jsonify({
+            'mode': mode,
+            'map_file': ACTIVE_MAP_FILE,
+            'available_maps': list_available_maps(),
+            'has_live_map': has_live,
+            'home': waypoints_config.get('home_position', {'x': 0.0, 'y': 0.0, 'yaw': 0.0}),
+            'points': waypoints_config.get('predefined_points', []),
+            'settings': waypoints_config.get('settings', {})
+        })
+
+    data = request.get_json() or {}
+    new_mode = data.get('mode', waypoints_config.get('operation_mode', 'real'))
+    new_map = data.get('map_file')
+    apply_mode_profile(new_mode, custom_map_file=new_map, save=True)
+    return jsonify({
+        'success': True,
+        'mode': waypoints_config.get('operation_mode', 'real'),
+        'map_file': ACTIVE_MAP_FILE,
+        'home': waypoints_config.get('home_position', {'x': 0.0, 'y': 0.0, 'yaw': 0.0}),
+        'points': waypoints_config.get('predefined_points', []),
+        'settings': waypoints_config.get('settings', {}),
+        'message': f'Mode berhasil diubah ke {"SIMULASI (Gazebo)" if new_mode == "sim" else "REAL ROBOT"} ({ACTIVE_MAP_FILE})'
+    })
+
+
+@app.route('/api/initialpose', methods=['POST'])
+def api_initialpose():
+    """Set posisi awal robot (/initialpose untuk AMCL) dan opsional simpan sebagai Home."""
+    if ros_node is None:
+        return jsonify({'error': 'ROS2 belum terhubung'}), 503
+    data = request.get_json() or {}
+    x = float(data.get('x', 0.0))
+    y = float(data.get('y', 0.0))
+    yaw = float(data.get('yaw', 0.0))
+    set_as_home = bool(data.get('set_as_home', False))
+
+    ros_node.send_initial_pose(x, y, yaw)
+
+    if set_as_home:
+        home_obj = {'x': round(x, 3), 'y': round(y, 3), 'yaw': round(yaw, 3)}
+        waypoints_config['home_position'] = home_obj
+        active_mode = waypoints_config.get('operation_mode', 'real')
+        if 'profiles' in waypoints_config and active_mode in waypoints_config['profiles']:
+            waypoints_config['profiles'][active_mode]['home_position'] = dict(home_obj)
+        save_waypoints_config()
+        ros_node.send_control('reload_config')
+
+    return jsonify({
+        'success': True,
+        'pose': {'x': x, 'y': y, 'yaw': yaw},
+        'set_as_home': set_as_home,
+        'message': f'Initial Pose ({x:.2f}, {y:.2f}) dikirim ke AMCL'
+    })
 
 
 @app.route('/api/delivery/start', methods=['POST'])
@@ -517,7 +845,7 @@ def api_delivery_control():
     data = request.get_json()
     command = data.get('command', '')
     
-    if command not in ('cancel', 'pause', 'resume', 'skip', 'confirm_pickup', 'confirm_delivery'):
+    if command not in ('cancel', 'pause', 'resume', 'skip', 'confirm_pickup', 'confirm_delivery', 'reload_config'):
         return jsonify({'error': f'Perintah tidak valid: {command}'}), 400
     
     ros_node.send_control(command)
@@ -575,55 +903,60 @@ def api_history_clear():
 
 @app.route('/api/saved_points')
 def api_saved_points():
-    """Daftar titik predefined + custom."""
+    """Daftar titik predefined + custom untuk mode aktif."""
     points = waypoints_config.get('predefined_points', [])
     home = waypoints_config.get('home_position', {'x': 0, 'y': 0, 'yaw': 0})
-    return jsonify({'points': points, 'home': home})
+    return jsonify({
+        'points': points,
+        'home': home,
+        'mode': waypoints_config.get('operation_mode', 'real'),
+        'map_file': ACTIVE_MAP_FILE
+    })
 
 
 @app.route('/api/saved_points', methods=['POST'])
 def api_save_point():
-    """Simpan titik baru ke config."""
+    """Simpan titik baru ke config mode aktif."""
     data = request.get_json()
     point = {
         'name': data.get('name', 'Unnamed'),
-        'x': data.get('x', 0),
-        'y': data.get('y', 0),
+        'x': round(float(data.get('x', 0)), 3),
+        'y': round(float(data.get('y', 0)), 3),
         'type': data.get('type', 'pickup'),
         'description': data.get('description', '')
     }
     
     if 'predefined_points' not in waypoints_config:
         waypoints_config['predefined_points'] = []
-    waypoints_config['predefined_points'].append(point)
+    # Update jika nama sama sudah ada, atau tambahkan baru
+    existing_idx = next((i for i, p in enumerate(waypoints_config['predefined_points']) if p.get('name') == point['name']), None)
+    if existing_idx is not None:
+        waypoints_config['predefined_points'][existing_idx] = point
+    else:
+        waypoints_config['predefined_points'].append(point)
     
-    # Simpan ke file
-    config_path = os.path.join(PKG_PATH, 'config', 'waypoints.yaml')
-    try:
-        with open(config_path, 'w') as f:
-            yaml.dump(waypoints_config, f, default_flow_style=False, allow_unicode=True)
-    except Exception:
-        pass
+    active_mode = waypoints_config.get('operation_mode', 'real')
+    if 'profiles' in waypoints_config and active_mode in waypoints_config['profiles']:
+        waypoints_config['profiles'][active_mode]['predefined_points'] = list(waypoints_config['predefined_points'])
     
+    save_waypoints_config()
     return jsonify({'success': True, 'point': point})
 
 
 @app.route('/api/saved_points/delete', methods=['POST'])
 def api_delete_point():
-    """Hapus titik dari config."""
+    """Hapus titik dari config mode aktif."""
     data = request.get_json()
     name = data.get('name', '')
     
     points = waypoints_config.get('predefined_points', [])
     waypoints_config['predefined_points'] = [p for p in points if p['name'] != name]
     
-    config_path = os.path.join(PKG_PATH, 'config', 'waypoints.yaml')
-    try:
-        with open(config_path, 'w') as f:
-            yaml.dump(waypoints_config, f, default_flow_style=False, allow_unicode=True)
-    except Exception:
-        pass
+    active_mode = waypoints_config.get('operation_mode', 'real')
+    if 'profiles' in waypoints_config and active_mode in waypoints_config['profiles']:
+        waypoints_config['profiles'][active_mode]['predefined_points'] = list(waypoints_config['predefined_points'])
     
+    save_waypoints_config()
     return jsonify({'success': True})
 
 
@@ -635,19 +968,21 @@ def api_get_settings():
 
 @app.route('/api/settings', methods=['POST'])
 def api_set_settings():
-    """Update pengaturan."""
+    """Update pengaturan untuk mode aktif."""
     data = request.get_json()
     if 'settings' not in waypoints_config:
         waypoints_config['settings'] = {}
     waypoints_config['settings'].update(data)
     
-    config_path = os.path.join(PKG_PATH, 'config', 'waypoints.yaml')
-    try:
-        with open(config_path, 'w') as f:
-            yaml.dump(waypoints_config, f, default_flow_style=False, allow_unicode=True)
-    except Exception:
-        pass
+    active_mode = waypoints_config.get('operation_mode', 'real')
+    if 'profiles' in waypoints_config and active_mode in waypoints_config['profiles']:
+        if 'settings' not in waypoints_config['profiles'][active_mode]:
+            waypoints_config['profiles'][active_mode]['settings'] = {}
+        waypoints_config['profiles'][active_mode]['settings'].update(data)
     
+    save_waypoints_config()
+    if ros_node is not None:
+        ros_node.send_control('reload_config')
     return jsonify({'success': True, 'settings': waypoints_config['settings']})
 
 
@@ -964,7 +1299,7 @@ PANDUAN:
             if ros_node:
                 with ros_node.lock:
                     st = ros_node.delivery_status.get('current_phase', 'idle')
-                    pose = ros_node.pose
+                    pose = ros_node.robot_pose
                     spoken_response = f"Status robot saat ini {st}, berada di koordinat x {pose.get('x', 0):.1f} dan y {pose.get('y', 0):.1f}."
 
         return jsonify({
@@ -1057,14 +1392,14 @@ def main(args=None):
     print('  Memulai Flask + ROS2...')
     print('='*60)
     
-    # Inisialisasi
-    find_map_files()
-    load_waypoints_config()
-    init_database()
-    
-    # Inisialisasi ROS2
+    # Inisialisasi ROS2 terlebih dahulu agar bisa membaca parameter initial_mode
     rclpy.init(args=args)
     ros_node = DashboardNode()
+    init_mode = ros_node.get_parameter('initial_mode').get_parameter_value().string_value.strip().lower()
+    
+    # Inisialisasi config & database
+    load_waypoints_config(override_mode=init_mode if init_mode in ('sim', 'real') else None)
+    init_database()
     
     # Spin ROS2 di thread terpisah
     def ros_spin():

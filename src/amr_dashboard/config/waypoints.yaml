@@ -2,20 +2,49 @@ home_position:
   x: 0.0
   y: 0.0
   yaw: 0.0
+operation_mode: real
 predefined_points:
-- description: ''
-  name: Rak 1A
+- &id001
+  description: Titik muat barang nyata
+  name: Pickup 1
   type: pickup
-  x: -6
-  y: 10
-- description: ''
-  name: Ruang 1B
+  x: 1.0
+  y: 0.0
+- &id002
+  description: Titik antar barang nyata
+  name: Tujuan 1
   type: delivery
-  x: -17
-  y: 3
-settings:
-  arrival_sound_mode: human
-  auto_return_home: true
-  max_angular_speed: 0.9
-  max_linear_speed: 1.4
-  waypoint_pause_duration: 3
+  x: 2.0
+  y: 0.5
+profiles:
+  real:
+    home_position:
+      x: 0.0
+      y: 0.0
+      yaw: 0.0
+    map_file: peta_rumah.yaml (Peta Rumah)
+    max_angular_speed: 0.6
+    max_linear_speed: 0.35
+    predefined_points:
+    - *id001
+    - *id002
+  sim:
+    home_position:
+      x: 0.0
+      y: 0.0
+      yaw: 0.0
+    map_file: peta_dc.yaml (Simulasi Gazebo Gudang)
+    max_angular_speed: 0.9
+    max_linear_speed: 1.0
+    predefined_points:
+    - description: Titik muat barang simulasi
+      name: Rak 1A
+      type: pickup
+      x: -6.0
+      y: 10.0
+    - description: Titik antar barang simulasi
+      name: Ruang 1B
+      type: delivery
+      x: -17.0
+      y: 3.0
+settings: {}

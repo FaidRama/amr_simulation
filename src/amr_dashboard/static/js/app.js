@@ -121,6 +121,11 @@ window.cycleTheme = cycleTheme;
 const APP = {
     currentPage: 'home',
     connected: false,
+    mode: 'real', // 'real' atau 'sim'
+    mapFile: 'peta_1b.yaml',
+    availableMaps: [],
+    hasLiveMap: false,
+    poseSource: 'NONE',
     pose: { x: 0, y: 0, yaw: 0 },
     delivery: { status: 'idle', current_phase: 'idle' },
     humanStatus: 'NO_HUMAN',
@@ -484,6 +489,14 @@ function renderDelivery() {
     const div = document.createElement('div');
     div.className = 'page-enter';
 
+    const modeBadgeText = APP.mode === 'sim' ? '🎮 MODE SIMULASI (GAZEBO)' : '🤖 MODE REAL ROBOT';
+    const mapOptionsHtml = [
+        `<option value="live" ${APP.mapFile === 'live' ? 'selected' : ''}>📡 Live ROS /map Topic (SLAM / Nav2)</option>`,
+        ...(APP.availableMaps || []).map(m =>
+            `<option value="${m.name}" ${APP.mapFile === m.name ? 'selected' : ''}>🗺️ ${m.name}</option>`
+        )
+    ].join('');
+
     div.innerHTML = `
         <div class="studio-two-col">
             <!-- LEFT COLUMN: Interactive SLAM Map & Active Mission Control -->
@@ -491,15 +504,38 @@ function renderDelivery() {
                 <div class="page-section">
                     <div class="section-title">
                         <span>01 // PETA SLAM & TITIK TUJUAN</span>
-                        <span>KLIK PETA UNTUK SET TITIK</span>
+                        <span class="mono" style="color:var(--accent-bright);">${modeBadgeText}</span>
                     </div>
+
+                    <div class="map-toolbar-strip">
+                        <div class="map-toolbar-group">
+                            <span class="mono" style="font-size:0.7rem; color:var(--text-muted);">PETA:</span>
+                            <select class="input-field" id="delivery-map-select" onchange="onChangeActiveMap(this.value)"
+                                    style="width:auto; min-width:170px; padding:4px 8px; font-size:0.75rem; height:30px;">
+                                ${mapOptionsHtml}
+                            </select>
+                            <button class="btn btn-outline btn-sm" style="padding:4px 8px; font-size:0.7rem;" onclick="refreshActiveMap()" title="Muat Ulang Gambar Peta">
+                                🔄 Refresh Peta
+                            </button>
+                        </div>
+                        <div class="map-toolbar-group">
+                            <button class="btn btn-outline btn-sm" style="padding:4px 9px; font-size:0.7rem;" onclick="openInitialPoseModal()" title="Set 2D Pose Estimate (/initialpose) untuk lokalisasi AMCL">
+                                📍 Set Posisi Awal (AMCL)
+                            </button>
+                        </div>
+                    </div>
+
                     <div class="map-container" id="delivery-map-container">
                         <canvas id="delivery-map-canvas"></canvas>
                         <div class="map-legend">
                             <span class="legend-pickup">Pickup</span>
                             <span class="legend-delivery">Delivery</span>
-                            <span class="legend-robot">AMR-01</span>
+                            <span class="legend-robot">AMR-01 (${APP.poseSource || 'POSE'})</span>
                         </div>
+                    </div>
+                    <div style="margin-top:6px; font-size:0.71rem; color:var(--text-muted); display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px;">
+                        <span>💡 Klik titik mana saja di peta untuk: <strong>Set Pickup / Delivery</strong>, <strong>Set Posisi Awal AMCL</strong>, atau <strong>Simpan Lokasi Baru</strong>.</span>
+                        <span class="mono">Home: (${(APP.homePosition?.x || 0).toFixed(2)}, ${(APP.homePosition?.y || 0).toFixed(2)})</span>
                     </div>
                 </div>
 
@@ -531,7 +567,7 @@ function renderDelivery() {
                     <div class="section-title">03 // KONFIGURASI TASK BARU</div>
                     <div class="panel">
                         <p style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:12px;">
-                            Pilih titik pickup & tujuan dari daftar waypoint atau klik langsung pada peta 2D.
+                            Pilih titik pickup & tujuan dari daftar waypoint (${APP.mode === 'sim' ? 'Profil Simulasi' : 'Profil Real Robot'}) atau klik langsung pada peta 2D.
                         </p>
 
                         <div class="mb-12">
@@ -1705,6 +1741,13 @@ function renderSettings() {
     const currentSoundMode = getSoundMode();
     const activeTheme = getTheme();
 
+    const mapOptionsHtml = [
+        `<option value="live" ${APP.mapFile === 'live' ? 'selected' : ''}>📡 Live ROS /map Topic (SLAM / Nav2)</option>`,
+        ...(APP.availableMaps || []).map(m =>
+            `<option value="${m.name}" ${APP.mapFile === m.name ? 'selected' : ''}>🗺️ ${m.name}</option>`
+        )
+    ].join('');
+
     const themeCardsHtml = STUDIO_THEMES.map(t => `
         <button type="button" class="theme-card ${t.id === activeTheme ? 'active' : ''}"
                 data-theme-id="${t.id}" onclick="applyTheme('${t.id}')">
@@ -1730,6 +1773,52 @@ function renderSettings() {
     `).join('');
 
     div.innerHTML = `
+        <!-- FULL-WIDTH SECTION 00: OPERATION MODE & MAP SWITCHER -->
+        <div class="page-section">
+            <div class="section-title">
+                <span>00 // MODE OPERASI ROBOT & PETA AKTIF</span>
+                <span class="mono" style="color:var(--accent-bright);">${APP.mode === 'sim' ? '🎮 SIMULASI (GAZEBO)' : '🤖 REAL ROBOT'}</span>
+            </div>
+            <div class="panel">
+                <div class="mode-selector-grid">
+                    <button type="button" class="mode-option-card ${APP.mode === 'real' ? 'active-real' : ''}" onclick="setOperationMode('real')">
+                        <div class="mode-option-title">
+                            <span>🤖 MODE REAL ROBOT (NYATA)</span>
+                            ${APP.mode === 'real' ? `<span class="badge badge-online" style="font-size:0.62rem;">AKTIF</span>` : ''}
+                        </div>
+                        <div class="mode-option-desc">
+                            Terhubung ke AMR fisik (RPLiDAR A1 + Arduino PID Odometry + Nav2 / SLAM). Menggunakan profil koordinat dunia nyata & batas kecepatan aman (0.35 m/s).
+                        </div>
+                    </button>
+
+                    <button type="button" class="mode-option-card ${APP.mode === 'sim' ? 'active-sim' : ''}" onclick="setOperationMode('sim')">
+                        <div class="mode-option-title">
+                            <span>🎮 MODE SIMULASI (GAZEBO)</span>
+                            ${APP.mode === 'sim' ? `<span class="badge badge-online" style="font-size:0.62rem;">AKTIF</span>` : ''}
+                        </div>
+                        <div class="mode-option-desc">
+                            Terhubung ke simulasi Gazebo (peta gudang peta_dc.yaml). Menggunakan profil koordinat gudang simulasi & kecepatan simulasi (1.0 m/s).
+                        </div>
+                    </button>
+                </div>
+
+                <div class="setting-row" style="flex-wrap:wrap; gap:10px;">
+                    <div>
+                        <div class="setting-label">Sumber Peta 2D Aktif (${APP.mode.toUpperCase()})</div>
+                        <div class="setting-desc">Pilih file peta .yaml atau gunakan Live ROS <code>/map</code> saat sedang menjalankan <code>real_mapping</code> / <code>real_navigation</code></div>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <select class="input-field" id="settings-map-select" onchange="onChangeActiveMap(this.value)" style="width:auto; min-width:220px;">
+                            ${mapOptionsHtml}
+                        </select>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="openInitialPoseModal()">
+                            📍 Set Initial Pose (AMCL)
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- FULL-WIDTH SECTION 01: VISUAL THEME PICKER -->
         <div class="page-section">
             <div class="section-title">
@@ -1752,7 +1841,7 @@ function renderSettings() {
         <div class="studio-two-col">
             <div>
                 <div class="page-section">
-                    <div class="section-title">02 // PARAMETER KINEMATIKA</div>
+                    <div class="section-title">02 // PARAMETER KINEMATIKA (${APP.mode.toUpperCase()})</div>
                     <div class="panel">
                         <div class="setting-row">
                             <div>
@@ -1760,7 +1849,7 @@ function renderSettings() {
                                 <div class="setting-desc">Kecepatan translasi maksimum maju/mundur (m/s)</div>
                             </div>
                             <input class="setting-input" id="set-max-linear" type="number"
-                                   step="0.1" min="0.1" max="2.0" value="${s.max_linear_speed || 0.7}">
+                                   step="0.05" min="0.1" max="2.0" value="${s.max_linear_speed || 0.35}">
                         </div>
                         <div class="setting-row">
                             <div>
@@ -1768,7 +1857,7 @@ function renderSettings() {
                                 <div class="setting-desc">Kecepatan rotasi yaw maksimum (rad/s)</div>
                             </div>
                             <input class="setting-input" id="set-max-angular" type="number"
-                                   step="0.1" min="0.1" max="3.0" value="${s.max_angular_speed || 0.9}">
+                                   step="0.1" min="0.1" max="3.0" value="${s.max_angular_speed || 0.8}">
                         </div>
                         <div class="setting-row">
                             <div>
@@ -1793,7 +1882,7 @@ function renderSettings() {
                                 <div class="setting-desc">Output suara saat unit tiba di pickup/delivery</div>
                             </div>
                             <select class="input-field" id="set-sound-mode" onchange="setSoundMode(this.value)"
-                                    style="width: auto; min-width: 190px; cursor: pointer;">
+                                     style="width: auto; min-width: 190px; cursor: pointer;">
                                 <option value="human" ${currentSoundMode === 'human' ? 'selected' : ''}>Voice TTS (Suara Manusia)</option>
                                 <option value="chime" ${currentSoundMode === 'chime' ? 'selected' : ''}>Synth Chime (Nada Teknis)</option>
                                 <option value="both" ${currentSoundMode === 'both' ? 'selected' : ''}>Hybrid (Chime + Voice TTS)</option>
@@ -1861,7 +1950,7 @@ function renderSettings() {
             <div>
                 <div class="page-section">
                     <div class="section-title">
-                        <span>05 // DATABASE WAYPOINT</span>
+                        <span>05 // DATABASE WAYPOINT (${APP.mode === 'sim' ? 'SIMULASI' : 'REAL ROBOT'})</span>
                         <span>${APP.savedPoints.length} TITIK</span>
                     </div>
                     <div class="panel">
@@ -1878,6 +1967,10 @@ function renderSettings() {
                         <div class="setting-row">
                             <div class="setting-label">ROS2 Distribution</div>
                             <div class="mono text-accent" style="font-weight:600; font-size:0.78rem;">FOXY FITZROY</div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-label">Sumber Pose Aktif</div>
+                            <div class="mono text-emerald" id="sys-pose-source" style="font-weight:600; font-size:0.78rem;">${APP.poseSource || 'NONE'}</div>
                         </div>
                         <div class="setting-row">
                             <div class="setting-label">Status Bridge</div>
@@ -1901,6 +1994,239 @@ function renderSettings() {
 
     return div;
 }
+
+// ====================== MODE SWITCHING & INITIAL POSE ======================
+function updateTopbarModeButton() {
+    const btn = document.getElementById('btn-topbar-mode');
+    const label = document.getElementById('topbar-mode-label');
+    if (!btn || !label) return;
+    if (APP.mode === 'sim') {
+        btn.className = 'topbar-mode-btn mode-sim';
+        label.textContent = 'SIMULASI';
+    } else {
+        btn.className = 'topbar-mode-btn mode-real';
+        label.textContent = 'REAL ROBOT';
+    }
+}
+
+async function fetchModeState() {
+    const data = await apiGet('/api/mode');
+    if (!data) return;
+    APP.mode = data.mode || 'real';
+    APP.mapFile = data.map_file || 'peta_1b.yaml';
+    APP.availableMaps = data.available_maps || [];
+    APP.hasLiveMap = !!data.has_live_map;
+    APP.savedPoints = data.points || APP.savedPoints;
+    APP.homePosition = data.home || APP.homePosition;
+    APP.settings = data.settings || APP.settings;
+    updateTopbarModeButton();
+}
+
+async function setOperationMode(newMode, customMapFile = null) {
+    const payload = { mode: newMode };
+    if (customMapFile) payload.map_file = customMapFile;
+    const res = await apiPost('/api/mode', payload);
+    if (res && res.success) {
+        APP.mode = res.mode;
+        APP.mapFile = res.map_file;
+        APP.savedPoints = res.points || [];
+        APP.homePosition = res.home || { x: 0, y: 0, yaw: 0 };
+        APP.settings = res.settings || APP.settings;
+        APP.taskQueue = [];
+        APP.pendingPickup = null;
+        APP.pendingDelivery = null;
+        updateTopbarModeButton();
+        showToast(res.message || `Mode diubah ke ${newMode.toUpperCase()}`, 'success');
+        if (typeof reloadMapData === 'function') {
+            await reloadMapData();
+        }
+        navigateTo(APP.currentPage);
+    } else {
+        showToast('Gagal mengubah mode operasi', 'error');
+    }
+}
+
+function toggleOperationMode() {
+    const targetMode = APP.mode === 'real' ? 'sim' : 'real';
+    const targetLabel = targetMode === 'sim' ? '🎮 SIMULASI (Gazebo)' : '🤖 REAL ROBOT (Nyata)';
+    const targetDesc = targetMode === 'sim'
+        ? 'Dashboard akan memuat peta gudang simulasi (<code>peta_dc.yaml</code>) beserta daftar waypoint & batas kecepatan simulasi.'
+        : 'Dashboard akan memuat peta robot nyata (<code>peta_1b.yaml</code> / Live SLAM) beserta daftar waypoint & batas kecepatan fisik.';
+
+    showModal(
+        'Ganti Mode Operasi Dashboard?',
+        `<p>Beralih ke <strong>${targetLabel}</strong>?</p>
+         <p style="margin-top:8px; font-size:0.76rem; color:var(--text-muted);">${targetDesc}</p>`,
+        [
+            { label: 'Batal', class: 'btn-outline' },
+            {
+                label: `Aktifkan ${targetMode === 'sim' ? 'Mode Simulasi' : 'Mode Real Robot'}`,
+                class: targetMode === 'sim' ? 'btn-primary' : 'btn-success',
+                action: () => setOperationMode(targetMode)
+            }
+        ]
+    );
+}
+
+async function onChangeActiveMap(newMapFile) {
+    if (!newMapFile) return;
+    await setOperationMode(APP.mode, newMapFile);
+}
+
+async function refreshActiveMap() {
+    showToast('Memuat ulang peta...', 'info');
+    if (typeof reloadMapData === 'function') {
+        const ok = await reloadMapData();
+        if (ok) showToast(`Peta (${APP.mapFile}) berhasil dimuat ulang`, 'success');
+        else showToast('Gagal memuat gambar peta', 'error');
+    }
+}
+
+async function sendInitialPoseToRobot(x, y, yaw = 0.0, setAsHome = false) {
+    const res = await apiPost('/api/initialpose', {
+        x: parseFloat(x) || 0.0,
+        y: parseFloat(y) || 0.0,
+        yaw: parseFloat(yaw) || 0.0,
+        set_as_home: !!setAsHome
+    });
+    if (res && res.success) {
+        if (setAsHome) {
+            APP.homePosition = { x: parseFloat(x) || 0, y: parseFloat(y) || 0, yaw: parseFloat(yaw) || 0 };
+        }
+        showToast(res.message || 'Initial Pose dikirim ke AMCL!', 'success');
+    } else {
+        showToast(res ? res.error : 'Gagal mengirim Initial Pose', 'error');
+    }
+}
+
+function openInitialPoseModal() {
+    const curX = (APP.pose && APP.pose.x) ? APP.pose.x.toFixed(2) : '0.0';
+    const curY = (APP.pose && APP.pose.y) ? APP.pose.y.toFixed(2) : '0.0';
+    const curYawDeg = (APP.pose && APP.pose.yaw) ? ((APP.pose.yaw * 180) / Math.PI).toFixed(0) : '0';
+
+    document.getElementById('modal-title').textContent = '📍 Set Posisi Awal Robot (AMCL /initialpose)';
+    document.getElementById('modal-body').innerHTML = `
+        <p style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:10px;">
+            Kirim <strong>2D Pose Estimate</strong> ke topik <code>/initialpose</code> agar AMCL tahu posisi awal robot di peta tanpa perlu membuka RViz2.
+        </p>
+        <div class="input-row">
+            <div class="input-group">
+                <div class="input-label">Koordinat X (m)</div>
+                <input class="input-field" id="initpose-x" type="number" step="0.1" value="${curX}">
+            </div>
+            <div class="input-group">
+                <div class="input-label">Koordinat Y (m)</div>
+                <input class="input-field" id="initpose-y" type="number" step="0.1" value="${curY}">
+            </div>
+            <div class="input-group">
+                <div class="input-label">Arah Yaw (°)</div>
+                <input class="input-field" id="initpose-yaw-deg" type="number" step="5" value="${curYawDeg}">
+            </div>
+        </div>
+        <label style="display:flex; align-items:center; gap:8px; font-size:0.76rem; color:var(--text-primary); cursor:pointer; margin-top:4px;">
+            <input type="checkbox" id="initpose-set-home" checked>
+            Simpan juga titik ini sebagai posisi <strong>Home / Docking</strong> untuk mode ${APP.mode.toUpperCase()}
+        </label>
+    `;
+    const actionsEl = document.getElementById('modal-actions');
+    actionsEl.innerHTML = '';
+
+    const btnCancel = document.createElement('button');
+    btnCancel.className = 'btn btn-outline';
+    btnCancel.textContent = 'Batal';
+    btnCancel.onclick = hideModal;
+
+    const btnZero = document.createElement('button');
+    btnZero.className = 'btn btn-secondary';
+    btnZero.textContent = 'Reset ke (0, 0)';
+    btnZero.onclick = async () => {
+        hideModal();
+        await sendInitialPoseToRobot(0.0, 0.0, 0.0, true);
+    };
+
+    const btnSend = document.createElement('button');
+    btnSend.className = 'btn btn-primary';
+    btnSend.textContent = 'Kirim Initial Pose';
+    btnSend.onclick = async () => {
+        const x = parseFloat(document.getElementById('initpose-x').value) || 0.0;
+        const y = parseFloat(document.getElementById('initpose-y').value) || 0.0;
+        const yawDeg = parseFloat(document.getElementById('initpose-yaw-deg').value) || 0.0;
+        const setHome = document.getElementById('initpose-set-home').checked;
+        hideModal();
+        await sendInitialPoseToRobot(x, y, (yawDeg * Math.PI) / 180.0, setHome);
+    };
+
+    actionsEl.appendChild(btnCancel);
+    actionsEl.appendChild(btnZero);
+    actionsEl.appendChild(btnSend);
+    document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
+function openSavePointFromMapModal(wx, wy) {
+    document.getElementById('modal-title').textContent = 'Simpan Lokasi ke Peta';
+    document.getElementById('modal-body').innerHTML = `
+        <div class="input-group">
+            <div class="input-label">Nama Titik Lokasi</div>
+            <input class="input-field" id="map-point-name" placeholder="Contoh: Pos Ambil 1 / Meja Dosen">
+        </div>
+        <div class="input-row">
+            <div class="input-group">
+                <div class="input-label">Koordinat X (m)</div>
+                <input class="input-field" id="map-point-x" type="number" step="0.05" value="${wx}">
+            </div>
+            <div class="input-group">
+                <div class="input-label">Koordinat Y (m)</div>
+                <input class="input-field" id="map-point-y" type="number" step="0.05" value="${wy}">
+            </div>
+        </div>
+        <div class="input-group">
+            <div class="input-label">Kategori Titik</div>
+            <select class="input-field" id="map-point-type">
+                <option value="pickup">Pickup (Titik Muat Barang)</option>
+                <option value="delivery">Delivery (Titik Tujuan Antar)</option>
+            </select>
+        </div>
+    `;
+    const actionsEl = document.getElementById('modal-actions');
+    actionsEl.innerHTML = '';
+
+    const btnCancel = document.createElement('button');
+    btnCancel.className = 'btn btn-outline';
+    btnCancel.textContent = 'Batal';
+    btnCancel.onclick = hideModal;
+
+    const btnSave = document.createElement('button');
+    btnSave.className = 'btn btn-primary';
+    btnSave.textContent = 'Simpan Titik';
+    btnSave.onclick = async () => {
+        const name = document.getElementById('map-point-name').value.trim();
+        const x = parseFloat(document.getElementById('map-point-x').value);
+        const y = parseFloat(document.getElementById('map-point-y').value);
+        const type = document.getElementById('map-point-type').value;
+        if (!name) { showToast('Nama titik wajib diisi', 'error'); return; }
+        const res = await apiPost('/api/saved_points', { name, x, y, type });
+        if (res && res.success) {
+            const idx = APP.savedPoints.findIndex(p => p.name === res.point.name);
+            if (idx >= 0) APP.savedPoints[idx] = res.point;
+            else APP.savedPoints.push(res.point);
+            renderWaypointChips();
+            hideModal();
+            showToast(`Lokasi "${name}" disimpan ke profil ${APP.mode.toUpperCase()}`, 'success');
+        }
+    };
+
+    actionsEl.appendChild(btnCancel);
+    actionsEl.appendChild(btnSave);
+    document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
+window.toggleOperationMode = toggleOperationMode;
+window.setOperationMode = setOperationMode;
+window.onChangeActiveMap = onChangeActiveMap;
+window.refreshActiveMap = refreshActiveMap;
+window.openInitialPoseModal = openInitialPoseModal;
+window.sendInitialPoseToRobot = sendInitialPoseToRobot;
+window.openSavePointFromMapModal = openSavePointFromMapModal;
 
 function renderSavedPointsList() {
     const container = document.getElementById('saved-points-list');
@@ -1931,8 +2257,8 @@ async function saveSettings() {
     setSoundMode(soundMode);
 
     const data = {
-        max_linear_speed: parseFloat(document.getElementById('set-max-linear').value) || 0.7,
-        max_angular_speed: parseFloat(document.getElementById('set-max-angular').value) || 0.9,
+        max_linear_speed: parseFloat(document.getElementById('set-max-linear').value) || 0.35,
+        max_angular_speed: parseFloat(document.getElementById('set-max-angular').value) || 0.8,
         waypoint_pause_duration: parseInt(document.getElementById('set-pause-duration').value) || 3,
         arrival_sound_mode: soundMode,
         theme: getTheme()
@@ -1947,22 +2273,27 @@ async function saveSettings() {
 }
 
 function showAddPointModal() {
+    const curX = (APP.pose && APP.pose.x) ? APP.pose.x.toFixed(2) : '0.0';
+    const curY = (APP.pose && APP.pose.y) ? APP.pose.y.toFixed(2) : '0.0';
     document.getElementById('modal-title').textContent = 'Registrasi Waypoint Baru';
     document.getElementById('modal-body').innerHTML = `
         <div class="input-group">
             <div class="input-label">Nama Identifier</div>
-            <input class="input-field" id="new-point-name" placeholder="Contoh: Rak C1">
+            <input class="input-field" id="new-point-name" placeholder="Contoh: Pos Ambil 1">
         </div>
         <div class="input-row">
             <div class="input-group">
                 <div class="input-label">Koordinat X (m)</div>
-                <input class="input-field" id="new-point-x" type="number" step="0.1" placeholder="0.0">
+                <input class="input-field" id="new-point-x" type="number" step="0.05" value="${curX}">
             </div>
             <div class="input-group">
                 <div class="input-label">Koordinat Y (m)</div>
-                <input class="input-field" id="new-point-y" type="number" step="0.1" placeholder="0.0">
+                <input class="input-field" id="new-point-y" type="number" step="0.05" value="${curY}">
             </div>
         </div>
+        <p style="font-size:0.7rem; color:var(--text-muted); margin-bottom:8px;">
+            💡 Default diisi dengan posisi robot saat ini (${curX}, ${curY}).
+        </p>
         <div class="input-group">
             <div class="input-label">Kategori Titik</div>
             <select class="input-field" id="new-point-type">
@@ -1993,7 +2324,9 @@ function showAddPointModal() {
 
         const result = await apiPost('/api/saved_points', { name, x, y, type });
         if (result && result.success) {
-            APP.savedPoints.push(result.point);
+            const idx = APP.savedPoints.findIndex(p => p.name === result.point.name);
+            if (idx >= 0) APP.savedPoints[idx] = result.point;
+            else APP.savedPoints.push(result.point);
             renderSavedPointsList();
             hideModal();
             showToast(`Waypoint "${name}" ditambahkan`, 'success');
@@ -2024,9 +2357,13 @@ async function updateSystemInfo() {
     const data = await apiGet('/api/status');
     const connEl = document.getElementById('sys-connection');
     const camEl = document.getElementById('sys-camera');
+    const poseSrcEl = document.getElementById('sys-pose-source');
     if (connEl) {
         connEl.textContent = data ? 'CONNECTED' : 'DISCONNECTED';
         connEl.style.color = data ? 'var(--success)' : 'var(--danger)';
+    }
+    if (poseSrcEl && data) {
+        poseSrcEl.textContent = data.pose_source || 'NONE';
     }
     if (camEl) {
         try {
@@ -2048,8 +2385,19 @@ async function globalStatusPoll() {
     if (data && data.connected) {
         APP.connected = true;
         APP.pose = data.pose || APP.pose;
+        APP.poseSource = data.pose_source || APP.poseSource;
         APP.delivery = data.delivery || APP.delivery;
         APP.humanStatus = data.human_status || 'NO_HUMAN';
+        APP.hasLiveMap = !!data.has_live_map;
+
+        if (data.mode && data.mode !== APP.mode) {
+            APP.mode = data.mode;
+            updateTopbarModeButton();
+        }
+        if (data.map_file && data.map_file !== APP.mapFile) {
+            APP.mapFile = data.map_file;
+            if (typeof reloadMapData === 'function') reloadMapData();
+        }
 
         if (typeof handleDeliveryStatusUpdate === 'function') {
             handleDeliveryStatusUpdate(APP.delivery);
@@ -2456,10 +2804,15 @@ async function init() {
     startLiveClock();
     applyTheme(getTheme(), true);
 
+    await fetchModeState();
+
     const pointsData = await apiGet('/api/saved_points');
     if (pointsData) {
-        APP.savedPoints = pointsData.points || [];
-        APP.homePosition = pointsData.home || { x: 0, y: 0, yaw: 0 };
+        APP.savedPoints = pointsData.points || APP.savedPoints;
+        APP.homePosition = pointsData.home || APP.homePosition;
+        if (pointsData.mode) APP.mode = pointsData.mode;
+        if (pointsData.map_file) APP.mapFile = pointsData.map_file;
+        updateTopbarModeButton();
     }
 
     const settingsData = await apiGet('/api/settings');
@@ -2477,3 +2830,4 @@ async function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+

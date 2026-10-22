@@ -1,4 +1,4 @@
-image: /home/faid_rama/amr_ws/src/amr_simulation/maps/peta_rumah.pgm
+image: peta_rumah.pgm
 mode: trinary
 resolution: 0.05
 origin: [-7.47, -5.32, 0]

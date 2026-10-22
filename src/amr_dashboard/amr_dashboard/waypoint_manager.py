@@ -89,21 +89,32 @@ class WaypointManager(Node):
         self.get_logger().info('='*55)
     
     def load_config(self):
-        """Load home_position dan settings dari waypoints.yaml."""
+        """Load home_position dan settings dari waypoints.yaml sesuai mode aktif."""
         config_paths = [
+            os.path.join(os.expanduser('~') if hasattr(os, 'expanduser') else os.path.expanduser('~'), 'Documents', 'amr_ws', 'src', 'amr_dashboard', 'config', 'waypoints.yaml'),
             os.path.join(os.path.dirname(__file__), '..', 'config', 'waypoints.yaml'),
-            os.path.join(os.path.expanduser('~'), 'Documents', 'amr_ws', 'src', 'amr_dashboard', 'config', 'waypoints.yaml'),
         ]
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            share_cfg = os.path.join(get_package_share_directory('amr_dashboard'), 'config', 'waypoints.yaml')
+            config_paths.insert(0, share_cfg)
+        except Exception:
+            pass
+
         for path in config_paths:
             if os.path.exists(path):
                 try:
                     with open(path, 'r') as f:
-                        cfg = yaml.safe_load(f)
-                    if cfg and 'home_position' in cfg:
+                        cfg = yaml.safe_load(f) or {}
+                    mode = cfg.get('operation_mode', 'sim')
+                    profile = cfg.get('profiles', {}).get(mode, {})
+                    if 'home_position' in profile:
+                        self.home_position = profile['home_position']
+                    elif 'home_position' in cfg:
                         self.home_position = cfg['home_position']
-                    if cfg and 'settings' in cfg and 'auto_return_home' in cfg['settings']:
+                    if 'settings' in cfg and 'auto_return_home' in cfg['settings']:
                         self.auto_return_home = cfg['settings']['auto_return_home']
-                    self.get_logger().info(f'Loaded config dari {path}')
+                    self.get_logger().info(f'Loaded config [{mode.upper()}] dari {path} | Home: ({self.home_position.get("x", 0.0):.2f}, {self.home_position.get("y", 0.0):.2f})')
                     return
                 except Exception as e:
                     self.get_logger().warn(f'Gagal membaca config {path}: {e}')
@@ -214,6 +225,10 @@ class WaypointManager(Node):
         elif command == 'confirm_delivery':
             self.get_logger().info('✓ KONFIRMASI DELIVERY: Barang sudah diambil!')
             self.confirm_received = True
+        
+        elif command == 'reload_config':
+            self.get_logger().info('↻ RELOAD CONFIG: Memperbarui konfigurasi mode & home position...')
+            self.load_config()
     
     def emergency_stop(self):
         """Kirim cmd_vel zero untuk stop AMR."""
@@ -451,11 +466,11 @@ class WaypointManager(Node):
             self.get_logger().error('Nav2 action server TIDAK TERSEDIA!')
             return False
         
-        # Buat goal
+        # Buat goal (stamp=0 agar TF2 menggunakan latest transform baik di mode Sim maupun Real)
         goal = NavigateToPose.Goal()
         goal.pose = PoseStamped()
         goal.pose.header.frame_id = 'map'
-        goal.pose.header.stamp = self.get_clock().now().to_msg()
+        goal.pose.header.stamp = rclpy.time.Time().to_msg()
         goal.pose.pose.position.x = float(x)
         goal.pose.pose.position.y = float(y)
         goal.pose.pose.position.z = 0.0

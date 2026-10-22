@@ -14,6 +14,7 @@ const MAP_STATE = {
     canvasWidth: 0,
     canvasHeight: 0,
     scale: 1,
+    lastLiveRefresh: 0,
 };
 
 let deliveryMapAnimFrame = null;
@@ -30,12 +31,12 @@ function stopAllMapLoops() {
     }
 }
 
-// ====================== LOAD MAP ======================
-async function loadMapData() {
-    if (MAP_STATE.loaded) return true;
+// ====================== LOAD / RELOAD MAP ======================
+async function loadMapData(forceReload = false) {
+    if (MAP_STATE.loaded && !forceReload) return true;
 
     try {
-        const meta = await apiGet('/api/map/metadata');
+        const meta = await apiGet('/api/map/metadata?t=' + Date.now());
         if (!meta) return false;
         MAP_STATE.metadata = meta;
 
@@ -46,15 +47,21 @@ async function loadMapData() {
                 MAP_STATE.imgWidth = img.naturalWidth;
                 MAP_STATE.imgHeight = img.naturalHeight;
                 MAP_STATE.loaded = true;
+                MAP_STATE.lastLiveRefresh = Date.now();
                 resolve(true);
             };
             img.onerror = () => resolve(false);
-            img.src = '/api/map';
+            img.src = '/api/map?t=' + Date.now();
         });
     } catch (e) {
         console.error('Failed to load map:', e);
         return false;
     }
+}
+
+async function reloadMapData() {
+    MAP_STATE.loaded = false;
+    return await loadMapData(true);
 }
 
 // ====================== COORDINATE CONVERSION ======================
@@ -92,6 +99,14 @@ function pixelToWorld(px, py) {
 function drawMap(canvas, ctx, options = {}) {
     if (!MAP_STATE.loaded || !canvas || !canvas.parentElement) return;
 
+    // Jika sedang mode 'live' (SLAM), refresh gambar peta tiap 2.5 detik di background
+    if (MAP_STATE.metadata && MAP_STATE.metadata.map_file === 'live') {
+        if (Date.now() - MAP_STATE.lastLiveRefresh > 2500) {
+            MAP_STATE.lastLiveRefresh = Date.now();
+            loadMapData(true);
+        }
+    }
+
     const {
         showRobot = true,
         showWaypoints = false,
@@ -115,6 +130,12 @@ function drawMap(canvas, ctx, options = {}) {
     // Apply subtle studio dark contrast overlay
     ctx.fillStyle = 'rgba(9, 9, 11, 0.22)';
     ctx.fillRect(0, 0, MAP_STATE.canvasWidth, MAP_STATE.canvasHeight);
+
+    // Draw Home / Docking Station marker
+    if (showWaypoints && APP.homePosition) {
+        const hPos = worldToPixel(APP.homePosition.x || 0, APP.homePosition.y || 0);
+        drawHomeMarker(ctx, hPos.px, hPos.py);
+    }
 
     // Draw predefined waypoints
     if (showWaypoints && APP.savedPoints) {
@@ -150,6 +171,29 @@ function drawMap(canvas, ctx, options = {}) {
         const { px, py } = worldToPixel(APP.pose.x, APP.pose.y);
         drawRobot(ctx, px, py, APP.pose.yaw);
     }
+}
+
+function drawHomeMarker(ctx, x, y) {
+    const r = 6;
+    ctx.beginPath();
+    ctx.arc(x, y, r + 3, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(168, 85, 247, 0.22)';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#a855f7';
+    ctx.fill();
+    ctx.strokeStyle = '#09090b';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.font = '700 8px "JetBrains Mono", monospace';
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('H', x, y);
+    ctx.textBaseline = 'alphabetic';
 }
 
 function drawWaypointMarker(ctx, x, y, type, label) {
@@ -283,8 +327,8 @@ async function initDeliveryMap() {
 
         showModal(
             'Tetapkan Koordinat Peta',
-            `<span class="mono">POSISI: <strong>X=${wx}m, Y=${wy}m</strong></span><br>
-             Pilih peran titik koordinat ini dalam task pengiriman:`,
+            `<span class="mono">POSISI KLIK: <strong>X=${wx}m, Y=${wy}m</strong></span><br>
+             Pilih tindakan untuk titik koordinat ini:`,
             [
                 {
                     label: 'Set Pickup', class: 'btn-primary',
@@ -302,6 +346,22 @@ async function initDeliveryMap() {
                         const el = document.getElementById('delivery-selected');
                         if (el) el.innerHTML = `${getIcon('check', 13)} Delivery: [${wx}, ${wy}]`;
                         showToast(`Delivery ditetapkan: (${wx}, ${wy})`, 'info');
+                    }
+                },
+                {
+                    label: '📍 Set Posisi Awal Robot (AMCL)', class: 'btn-warning',
+                    action: async () => {
+                        if (typeof sendInitialPoseToRobot === 'function') {
+                            await sendInitialPoseToRobot(wx, wy, 0.0, false);
+                        }
+                    }
+                },
+                {
+                    label: '💾 Simpan ke Daftar Lokasi', class: 'btn-secondary',
+                    action: () => {
+                        if (typeof openSavePointFromMapModal === 'function') {
+                            openSavePointFromMapModal(wx, wy);
+                        }
                     }
                 }
             ]
@@ -354,6 +414,7 @@ function startMonitoringPolling() {
         if (!data) return;
 
         APP.pose = data.pose || APP.pose;
+        APP.poseSource = data.pose_source || APP.poseSource;
         APP.delivery = data.delivery || APP.delivery;
         APP.humanStatus = data.human_status || 'NO_HUMAN';
 
@@ -368,3 +429,5 @@ function startMonitoringPolling() {
 }
 
 window.stopAllMapLoops = stopAllMapLoops;
+window.reloadMapData = reloadMapData;
+

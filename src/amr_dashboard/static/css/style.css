@@ -3070,3 +3070,140 @@ select.input-field {
     padding-top: 4px;
 }
 
+/* ============ OPERATION MODE SWITCHER (REAL ROBOT vs SIMULASI) ============ */
+.topbar-mode-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 12px;
+    border-radius: var(--radius-xs);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    transition: var(--transition);
+    border: 1px solid transparent;
+    white-space: nowrap;
+}
+
+.topbar-mode-btn .mode-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.topbar-mode-btn.mode-real {
+    background: rgba(16, 185, 129, 0.14);
+    border-color: rgba(16, 185, 129, 0.45);
+    color: #34d399;
+}
+
+.topbar-mode-btn.mode-real .mode-dot {
+    background: #10b981;
+    box-shadow: 0 0 8px #10b981;
+}
+
+.topbar-mode-btn.mode-real:hover {
+    background: rgba(16, 185, 129, 0.24);
+    border-color: #10b981;
+}
+
+.topbar-mode-btn.mode-sim {
+    background: rgba(99, 102, 241, 0.16);
+    border-color: rgba(99, 102, 241, 0.5);
+    color: #a5b4fc;
+}
+
+.topbar-mode-btn.mode-sim .mode-dot {
+    background: #818cf8;
+    box-shadow: 0 0 8px #818cf8;
+}
+
+.topbar-mode-btn.mode-sim:hover {
+    background: rgba(99, 102, 241, 0.28);
+    border-color: #818cf8;
+}
+
+.mode-selector-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.mode-option-card {
+    background: var(--bg-tertiary);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: var(--transition);
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.mode-option-card:hover {
+    border-color: var(--accent);
+}
+
+.mode-option-card.active-real {
+    border-color: #10b981;
+    background: rgba(16, 185, 129, 0.09);
+}
+
+.mode-option-card.active-sim {
+    border-color: #818cf8;
+    background: rgba(99, 102, 241, 0.10);
+}
+
+.mode-option-title {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.mode-option-desc {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    line-height: 1.35;
+}
+
+.map-toolbar-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin-bottom: 10px;
+}
+
+.map-toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+    .topbar-mode-btn {
+        padding: 5px 8px;
+        font-size: 0.65rem;
+    }
+    .mode-selector-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+
