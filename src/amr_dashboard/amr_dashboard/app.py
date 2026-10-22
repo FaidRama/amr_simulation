@@ -33,13 +33,21 @@ from flask import Flask, render_template, jsonify, request, Response, send_file
 
 # Coba import cv_bridge & cv2 (untuk camera streaming)
 try:
-    from cv_bridge import CvBridge
     # pyrefly: ignore [missing-import]
     import cv2
-    HAS_CAMERA = True
+    HAS_CV2 = True
 except ImportError:
-    HAS_CAMERA = False
-    print('[WARN] cv_bridge atau OpenCV tidak tersedia. Camera streaming dinonaktifkan.')
+    HAS_CV2 = False
+
+try:
+    from cv_bridge import CvBridge
+    HAS_CV_BRIDGE = True
+except ImportError:
+    HAS_CV_BRIDGE = False
+
+HAS_CAMERA = HAS_CV2 or HAS_CV_BRIDGE
+if not HAS_CAMERA:
+    print('[WARN] OpenCV atau cv_bridge tidak tersedia. Camera streaming dinonaktifkan.')
 
 try:
     from PIL import Image as PILImage
@@ -281,9 +289,11 @@ class DashboardNode(Node):
         self.status_sub = self.create_subscription(
             String, '/amr/delivery_status', self.on_delivery_status, 10)
         
-        # Status human awareness
+        # Status human awareness (mendukung /human_status & /human_state)
         self.human_sub = self.create_subscription(
             String, '/human_status', self.on_human_status, 10)
+        self.human_state_sub = self.create_subscription(
+            String, '/human_state', self.on_human_status, 10)
 
         # Monitor kecepatan cmd_vel & odometry
         self.cmd_vel_listen_sub = self.create_subscription(
@@ -304,7 +314,7 @@ class DashboardNode(Node):
         
         # === CAMERA SUBSCRIBER ===
         if HAS_CAMERA:
-            self.bridge = CvBridge()
+            self.bridge = CvBridge() if HAS_CV_BRIDGE else None
             self.last_cam_time = 0
             self.last_annotated_time = 0
             self.cam_sub = self.create_subscription(
@@ -313,6 +323,8 @@ class DashboardNode(Node):
                 Image, '/camera_sensor/image_raw', self.on_camera, 1)
             self.cam_sub_annotated = self.create_subscription(
                 Image, '/camera/image_annotated', self.on_annotated_camera, 1)
+            self.cam_sub_annotated_comp = self.create_subscription(
+                CompressedImage, '/camera/image_annotated/compressed', self.on_compressed_annotated_camera, 1)
             self.cam_sub_comp = self.create_subscription(
                 CompressedImage, '/camera/image_raw/compressed', self.on_compressed_camera, 1)
         
@@ -441,6 +453,16 @@ class DashboardNode(Node):
         with self.lock:
             self.human_status = msg.data
     
+    def on_compressed_annotated_camera(self, msg):
+        """Callback kamera ber-anotasi AI terkompresi JPEG (YOLO bounding box & HUD)."""
+        self.last_annotated_time = time.time()
+        now = time.time()
+        if now - self.last_cam_time < 0.03:
+            return
+        self.last_cam_time = now
+        with self.lock:
+            self.latest_frame = bytes(msg.data)
+
     def on_annotated_camera(self, msg):
         """Callback kamera ber-anotasi AI (YOLO pose & bounding box)."""
         self.last_annotated_time = time.time()
@@ -468,6 +490,8 @@ class DashboardNode(Node):
 
     def process_camera_frame(self, msg):
         """Convert ROS Image ke JPEG untuk web streaming."""
+        if self.bridge is None:
+            return
         now = time.time()
         if now - self.last_cam_time < 0.03:  # Throttle ~30 FPS
             return

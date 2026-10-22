@@ -33,6 +33,8 @@ install(DIRECTORY launch
 
 install(PROGRAMS
   scripts/human_awareness_node.py
+  scripts/fsm.py
+  scripts/adaptive_velocity_node.py
   scripts/astar_benchmark.py
   scripts/hitung_jarak_astar.py
   scripts/camera_publisher.py

@@ -34,6 +34,12 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import String
 from sensor_msgs.msg import CompressedImage
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+DEFAULT_MODEL = str(SCRIPT_DIR / "yolo11n.pt") if (SCRIPT_DIR / "yolo11n.pt").exists() else "yolo11n.pt"
+
 from fsm import HumanAwareFSM, ProximityClassifier, Zone, State
 
 
@@ -501,7 +507,7 @@ def main():
         help="Topik kamera bertipe CompressedImage"
     )
     parser.add_argument(
-        "--model", default="yolo11n.pt",
+        "--model", default=DEFAULT_MODEL,
         help="Model YOLO .pt atau TensorRT .engine"
     )
     parser.add_argument("--imgsz", type=int, default=640)
@@ -527,8 +533,17 @@ def main():
     parser.add_argument("--log", default="experiment_log.csv")
     parser.add_argument("--save-video", default=None)
     parser.add_argument("--no-display", action="store_true")
+    parser.add_argument(
+        "--publish-annotated", action="store_true", default=True,
+        help="Publish frame ter-anotasi ke topik ROS 2 untuk dashboard"
+    )
+    parser.add_argument(
+        "--annotated-topic",
+        default="/camera/image_annotated/compressed",
+        help="Topik output frame ter-anotasi (CompressedImage)"
+    )
 
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()
 
     # --------------------------------------------------------
     # ROS INITIALIZATION
@@ -540,6 +555,15 @@ def main():
     state_pub = ros_node.create_publisher(
         String, "/human_state", 10
     )
+    status_pub = ros_node.create_publisher(
+        String, "/human_status", 10
+    )
+
+    annotated_pub = None
+    if args.publish_annotated:
+        annotated_pub = ros_node.create_publisher(
+            CompressedImage, args.annotated_topic, 1
+        )
 
     use_ros_camera = args.source.lower() in ("ros", "topic")
     latest_frame = {"frame": None}
@@ -844,6 +868,11 @@ def main():
             state_msg.data = state.value
             state_pub.publish(state_msg)
 
+            # Publish juga ke /human_status untuk dashboard AMR
+            status_msg = String()
+            status_msg.data = state.value if target is not None else "NO_HUMAN"
+            status_pub.publish(status_msg)
+
             # 7. FPS
             inst_fps = 1.0 / max(
                 time.perf_counter() - t_frame,
@@ -882,8 +911,9 @@ def main():
             if frame_count % 30 == 0:
                 log_file.flush()
 
-            # 9. VISUALIZATION / VIDEO
-            if not args.no_display or args.save_video:
+            # 9. VISUALIZATION / VIDEO / DASHBOARD STREAM
+            need_render = (not args.no_display) or args.save_video or (annotated_pub is not None)
+            if need_render:
                 for person in persons:
                     if person is not target:
                         draw_person(
@@ -985,6 +1015,18 @@ def main():
                     args.t_near_enter,
                     scale
                 )
+
+                # Publish annotated frame ke dashboard via ROS 2 CompressedImage
+                if annotated_pub is not None:
+                    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 65]
+                    ret_enc, enc_bytes = cv2.imencode('.jpg', frame, encode_param)
+                    if ret_enc:
+                        img_msg = CompressedImage()
+                        img_msg.header.stamp = ros_node.get_clock().now().to_msg()
+                        img_msg.header.frame_id = "camera_link"
+                        img_msg.format = "jpeg"
+                        img_msg.data = enc_bytes.tobytes()
+                        annotated_pub.publish(img_msg)
 
                 if args.save_video:
                     if video_writer is None:

@@ -2423,9 +2423,10 @@ async function globalStatusPoll() {
             sideNode.className = APP.delivery.status === 'running' ? 'sys-card-val text-accent' : 'sys-card-val';
         }
         if (sideHuman) {
-            const isSafe = APP.humanStatus === 'NO_HUMAN';
-            sideHuman.textContent = isSafe ? 'CLEAR' : APP.humanStatus;
-            sideHuman.className = isSafe ? 'sys-card-val text-emerald' : 'sys-card-val text-amber';
+            const isSafe = APP.humanStatus === 'NO_HUMAN' || APP.humanStatus === 'NORMAL';
+            const isDanger = APP.humanStatus === 'SAFE_STOP';
+            sideHuman.textContent = isSafe ? 'CLEAR' : (isDanger ? 'STOP' : APP.humanStatus);
+            sideHuman.className = isSafe ? 'sys-card-val text-emerald' : (isDanger ? 'sys-card-val text-danger' : 'sys-card-val text-amber');
         }
 
         if (APP.currentPage === 'home') {
@@ -2458,9 +2459,10 @@ async function globalStatusPoll() {
 
             const homeHuman = document.getElementById('home-human');
             if (homeHuman) {
-                const isSafe = APP.humanStatus === 'NO_HUMAN';
-                homeHuman.textContent = isSafe ? 'CLEAR (AMAN)' : APP.humanStatus;
-                homeHuman.className = isSafe ? 'kpi-main text-emerald' : 'kpi-main text-amber';
+                const isSafe = APP.humanStatus === 'NO_HUMAN' || APP.humanStatus === 'NORMAL';
+                const isDanger = APP.humanStatus === 'SAFE_STOP';
+                homeHuman.textContent = isSafe ? 'CLEAR (AMAN)' : (isDanger ? 'BERHENTI (BAHAYA)' : (APP.humanStatus === 'REDUCED_SPEED' ? 'PERLAMBATAN' : APP.humanStatus));
+                homeHuman.className = isSafe ? 'kpi-main text-emerald' : (isDanger ? 'kpi-main text-danger' : 'kpi-main text-amber');
             }
         }
     } else {

@@ -418,15 +418,17 @@ function updateCockpitData(data) {
     const hudHumanBadge = document.getElementById('hud-human-badge');
     const humanLabel = getHumanStatusLabel(human);
 
+    const isDanger = (human === 'DISTURBING' || human === 'CALLING' || human === 'SAFE_STOP');
+    const isWarning = (human === 'WALKING' || human === 'REDUCED_SPEED');
+    const color = isDanger ? 'var(--danger)' : (isWarning ? 'var(--warning)' : 'var(--success)');
+
     if (humanStatusEl) {
         humanStatusEl.textContent = humanLabel;
-        humanStatusEl.style.color = (human === 'DISTURBING' || human === 'CALLING') ? 'var(--danger)' :
-            (human === 'WALKING' ? 'var(--warning)' : 'var(--success)');
+        humanStatusEl.style.color = color;
     }
     if (hudHumanBadge) {
         hudHumanBadge.textContent = `AI: ${humanLabel.toUpperCase()}`;
-        hudHumanBadge.style.color = (human === 'DISTURBING' || human === 'CALLING') ? 'var(--danger)' :
-            (human === 'WALKING' ? 'var(--warning)' : 'var(--success)');
+        hudHumanBadge.style.color = color;
     }
 }
 
@@ -453,7 +455,10 @@ function getHumanStatusLabel(status) {
         'WALKING': 'Berjalan',
         'DISTURBING': 'Menghalangi!',
         'CALLING': 'Memanggil!',
-        'CALIBRATION': 'Kalibrasi...'
+        'CALIBRATION': 'Kalibrasi...',
+        'NORMAL': 'Aman (Normal)',
+        'REDUCED_SPEED': 'Perlambatan',
+        'SAFE_STOP': 'Berhenti Aman'
     };
     return labels[status] || status;
 }
