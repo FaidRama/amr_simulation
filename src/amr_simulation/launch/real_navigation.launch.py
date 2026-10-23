@@ -70,7 +70,7 @@ def generate_launch_description():
         respawn_delay=2.0
     )
 
-    # 2. Filter Laser Sasis (Memotong pantulan 4 tiang aluminium di dalam 34 cm)
+    # 2. Filter Laser Sasis (Memotong pantulan tiang di dalam 34 cm)
     start_laser_filter = Node(
         package='amr_simulation',
         executable='laser_filter_node.py',
@@ -125,8 +125,8 @@ def generate_launch_description():
         condition=UnlessCondition(LaunchConfiguration('use_arduino'))
     )
 
-    # 5. Nav2 Bringup (AMCL + Costmaps + Planner + Controller + Lifecycle)
-    # Diberi delay 3 detik agar sensor hardware (LiDAR & Arduino) stabil terlebih dahulu
+    # 5. Nav2 Bringup (AMCL + Costmaps + Planner + Controller)
+    # Output controller di-remap dari /cmd_vel ke /cmd_vel_nav
     start_nav2 = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_nav2, 'launch', 'bringup_launch.py')
@@ -139,12 +139,22 @@ def generate_launch_description():
         }.items()
     )
 
-    delayed_nav2 = TimerAction(
-        period=3.0,
-        actions=[start_nav2]
+    # 6. Adaptive Velocity Node (Local Planner Speed Governor)
+    # Membaca /cmd_vel_nav dan /human_state, mempublikasikan output aman ke /cmd_vel
+    start_adaptive_velocity = Node(
+        package='amr_simulation',
+        executable='adaptive_velocity_node.py',
+        name='adaptive_velocity_node',
+        output='screen'
     )
 
-    # 6. RViz2 (Opsional di laptop)
+    # Nav2 dan Adaptive Velocity dijalankan setelah sensor stabil (delay 3 detik)
+    delayed_nav2_and_adaptor = TimerAction(
+        period=3.0,
+        actions=[start_nav2, start_adaptive_velocity]
+    )
+
+    # 7. RViz2 Visualizer (Opsional di laptop)
     start_rviz2 = Node(
         package='rviz2',
         executable='rviz2',
@@ -168,6 +178,6 @@ def generate_launch_description():
         tf_base_to_laser,
         tf_base_to_footprint,
         tf_odom_to_base,
-        delayed_nav2,
+        delayed_nav2_and_adaptor,
         start_rviz2
     ])
