@@ -48,6 +48,10 @@ int modePengujian = 0;
 int stepPersegi = 0;
 float targetJarak = 0.0, targetSudut = 0.0;
 
+// Watchdog Failsafe (Anti-Runaway jika Jetson mati / kabel serial lepas)
+const unsigned long SERIAL_WATCHDOG_TIMEOUT_MS = 500; // 0.5 detik
+unsigned long lastSerialCmdTime = 0;
+
 // ====================== 5. FUNGSI INVERSE KINEMATICS =====================
 // Menghitung Setpoint RPM Roda dari Kecepatan Linear v (m/s) & Angular w (rad/s)
 // Berdasarkan Persamaan (21) & (22) pada Proposal Skripsi Anda
@@ -111,6 +115,7 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(PIN_ENCA_R), isrR, RISING);
 
   driveMotors(0, 0);
+  lastSerialCmdTime = millis();
 
   Serial.println("==================================================");
   Serial.println("  DIFF-DRIVE AMR: PID-PSO + INVERSE KINEMATICS    ");
@@ -136,6 +141,7 @@ void loop() {
       Serial.read(); // buang huruf 'V'
       float v_lin = Serial.parseFloat();
       float v_ang = Serial.parseFloat();
+      lastSerialCmdTime = millis(); // Refresh watchdog heartbeat dari Jetson
       modePengujian = 99; // Mode Navigasi Eksternal
       hitungInverseKinematics(v_lin, v_ang);
     } 
@@ -231,16 +237,41 @@ void loop() {
       }
     }
 
-    // F. Loop PID Motor Kiri & Kanan
-    error_L = setpoint_L - rpm_L;
-    integral_L = constrain(integral_L + (KI_L * error_L * DT), -100.0, 255.0);
-    pwm_L = constrain((KP_L * error_L) + integral_L + (KD_L * (error_L - prev_error_L) / DT), -255, 255);
-    prev_error_L = error_L;
+    // FAILSAFE WATCHDOG: Jika mode Navigasi (99) dan tidak ada heartbeat serial > 0.5 detik (Jetson Ctrl+C / kabel putus)
+    if (modePengujian == 99 && (waktuSekarang - lastSerialCmdTime > SERIAL_WATCHDOG_TIMEOUT_MS)) {
+      setpoint_L = 0.0;
+      setpoint_R = 0.0;
+      integral_L = 0.0;
+      integral_R = 0.0;
+      prev_error_L = 0.0;
+      prev_error_R = 0.0;
+      pwm_L = 0.0;
+      pwm_R = 0.0;
+      driveMotors(0, 0);
+    }
 
-    error_R = setpoint_R - rpm_R;
-    integral_R = constrain(integral_R + (KI_R * error_R * DT), -100.0, 255.0);
-    pwm_R = constrain((KP_R * error_R) + integral_R + (KD_R * (error_R - prev_error_R) / DT), -255, 255);
-    prev_error_R = error_R;
+    // F. Loop PID Motor Kiri & Kanan
+    if (fabs(setpoint_L) < 0.05) {
+      pwm_L = 0.0;
+      integral_L = 0.0;
+      prev_error_L = 0.0;
+    } else {
+      error_L = setpoint_L - rpm_L;
+      integral_L = constrain(integral_L + (KI_L * error_L * DT), -100.0, 255.0);
+      pwm_L = constrain((KP_L * error_L) + integral_L + (KD_L * (error_L - prev_error_L) / DT), -255, 255);
+      prev_error_L = error_L;
+    }
+
+    if (fabs(setpoint_R) < 0.05) {
+      pwm_R = 0.0;
+      integral_R = 0.0;
+      prev_error_R = 0.0;
+    } else {
+      error_R = setpoint_R - rpm_R;
+      integral_R = constrain(integral_R + (KI_R * error_R * DT), -100.0, 255.0);
+      pwm_R = constrain((KP_R * error_R) + integral_R + (KD_R * (error_R - prev_error_R) / DT), -255, 255);
+      prev_error_R = error_R;
+    }
 
     driveMotors(pwm_L, pwm_R);
 

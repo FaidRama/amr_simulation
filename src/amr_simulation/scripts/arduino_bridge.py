@@ -249,22 +249,47 @@ class ArduinoBridgeNode(Node):
         self.odom_pub.publish(odom)
 
 
+import signal
+
 def main(args=None):
     rclpy.init(args=args)
     node = ArduinoBridgeNode()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
+
+    def emergency_stop_handler(sig, frame):
         if node.ser and node.ser.is_open:
             try:
-                node.ser.write(b"V,0.0,0.0\n")
+                for _ in range(3):
+                    node.ser.write(b"V,0.000,0.000\n")
+                    node.ser.flush()
+                    time.sleep(0.02)
                 node.ser.close()
             except Exception:
                 pass
         node.destroy_node()
         rclpy.shutdown()
+        exit(0)
+
+    signal.signal(signal.SIGINT, emergency_stop_handler)
+    signal.signal(signal.SIGTERM, emergency_stop_handler)
+
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        if node.ser and node.ser.is_open:
+            try:
+                for _ in range(3):
+                    node.ser.write(b"V,0.000,0.000\n")
+                    node.ser.flush()
+                node.ser.close()
+            except Exception:
+                pass
+        try:
+            node.destroy_node()
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':
