@@ -1,0 +1,1 @@
+frame,timestamp,n_persons,human_detected,bbox_w_px,bbox_h_px,ratio_w,ratio_h,active_feature,distance_est_m,at_edge,confidence,zone,state,infer_ms,fps,true_distance_m
