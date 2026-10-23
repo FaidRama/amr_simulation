@@ -36,7 +36,7 @@ class ArduinoBridgeNode(Node):
         self.declare_parameter('wheel_diameter', 0.127)      # 5 inci = 0.127 meter
         self.declare_parameter('wheel_separation', 0.458)    # 45.8 cm = 0.458 meter
         self.declare_parameter('ticks_per_rev', 350.7)       # 7 PPR * 50.1 gearbox = 350.7 ticks/rev
-        self.declare_parameter('cmd_vel_timeout', 0.8)       # Timeout stop
+        self.declare_parameter('cmd_vel_timeout', 0.4)       # Timeout stop lebih responsif (400ms)
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('publish_tf', True)
@@ -142,15 +142,19 @@ class ArduinoBridgeNode(Node):
 
         # 1. Timeout /cmd_vel: jika > cmd_vel_timeout tidak ada perintah baru, otomatis kirim stop
         dt_cmd = (now - self.last_cmd_vel_time).nanoseconds / 1e9
+        dt_tx = (now - self.last_tx_time).nanoseconds / 1e9
+
         if dt_cmd > self.cmd_vel_timeout:
             if self.target_v != 0.0 or self.target_w != 0.0:
                 self.target_v = 0.0
                 self.target_w = 0.0
                 self.send_cmd(0.0, 0.0, now)
+            elif dt_tx >= 0.2:
+                # Kirim heartbeat stop secara berkala tiap 200ms agar Arduino selalu yakin kecepatan = 0
+                self.send_cmd(0.0, 0.0, now)
 
-        # 2. Heartbeat: selama robot bergerak, kirim ulang perintah kecepatan tiap 50ms
-        dt_tx = (now - self.last_tx_time).nanoseconds / 1e9
-        if (self.target_v != 0.0 or self.target_w != 0.0) and dt_tx >= 0.05:
+        # 2. Heartbeat: selama robot bergerak, kirim ulang perintah kecepatan tiap 50ms (20 Hz)
+        elif (self.target_v != 0.0 or self.target_w != 0.0) and dt_tx >= 0.05:
             self.send_cmd(self.target_v, self.target_w, now)
 
         # 3. Baca serial non-blocking dari Arduino
