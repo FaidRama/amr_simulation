@@ -171,8 +171,8 @@ local_costmap:
       robot_base_frame: base_footprint
       use_sim_time: False
       rolling_window: true
-      width: 4
-      height: 4
+      width: 3
+      height: 3
       resolution: 0.05
       robot_radius: 0.28
       plugins: ["obstacle_layer", "inflation_layer"]
@@ -194,10 +194,7 @@ local_costmap:
           raytrace_min_range: 0.34
           obstacle_max_range: 2.5
           obstacle_min_range: 0.34
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: True
-      always_send_full_costmap: True
+      always_send_full_costmap: False
   local_costmap_client:
     ros__parameters:
       use_sim_time: False
@@ -209,7 +206,7 @@ global_costmap:
   global_costmap:
     ros__parameters:
       update_frequency: 1.0
-      publish_frequency: 1.0
+      publish_frequency: 0.5
       global_frame: map
       robot_base_frame: base_footprint
       use_sim_time: False
@@ -224,7 +221,7 @@ global_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 5.0
         inflation_radius: 0.45
-      always_send_full_costmap: True
+      always_send_full_costmap: False
   global_costmap_client:
     ros__parameters:
       use_sim_time: False

@@ -125,11 +125,11 @@ def generate_launch_description():
         condition=UnlessCondition(LaunchConfiguration('use_arduino'))
     )
 
-    # 5. Nav2 Localization (Map Server + AMCL + Lifecycle Localization)
+    # 5. Nav2 Bringup (AMCL + Costmaps + Planner + Controller + Lifecycle)
     # Diberi delay 3 detik agar sensor hardware (LiDAR & Arduino) stabil terlebih dahulu
-    start_localization = IncludeLaunchDescription(
+    start_nav2 = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(pkg_nav2, 'launch', 'localization_launch.py')
+            os.path.join(pkg_nav2, 'launch', 'bringup_launch.py')
         ),
         launch_arguments={
             'map': LaunchConfiguration('map'),
@@ -139,30 +139,12 @@ def generate_launch_description():
         }.items()
     )
 
-    delayed_localization = TimerAction(
+    delayed_nav2 = TimerAction(
         period=3.0,
-        actions=[start_localization]
+        actions=[start_nav2]
     )
 
-    # 6. Nav2 Navigation (Planner + Controller + Recoveries + BT + Lifecycle Navigation)
-    # Diberi delay 7 detik agar Map & AMCL sudah aktif di memori dan CPU Jetson tidak bottleneck
-    start_navigation = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_nav2, 'launch', 'navigation_launch.py')
-        ),
-        launch_arguments={
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-            'params_file': LaunchConfiguration('params_file'),
-            'autostart': LaunchConfiguration('autostart')
-        }.items()
-    )
-
-    delayed_navigation = TimerAction(
-        period=7.0,
-        actions=[start_navigation]
-    )
-
-    # 7. RViz2 (Opsional di laptop)
+    # 6. RViz2 (Opsional di laptop)
     start_rviz2 = Node(
         package='rviz2',
         executable='rviz2',
@@ -186,7 +168,6 @@ def generate_launch_description():
         tf_base_to_laser,
         tf_base_to_footprint,
         tf_odom_to_base,
-        delayed_localization,
-        delayed_navigation,
+        delayed_nav2,
         start_rviz2
     ])
