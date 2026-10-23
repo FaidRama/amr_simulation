@@ -13,7 +13,8 @@ def generate_launch_description():
     pkg_nav2 = get_package_share_directory('nav2_bringup')
 
     default_map_path = os.path.join(pkg_amr, 'maps', 'peta_l1_ddc.yaml')
-    default_params_path = os.path.join(pkg_amr, 'config', 'nav2_params.yaml')
+    src_params_path = os.path.join(os.getcwd(), 'src', 'amr_simulation', 'config', 'nav2_params.yaml')
+    default_params_path = src_params_path if os.path.exists(src_params_path) else os.path.join(pkg_amr, 'config', 'nav2_params.yaml')
     default_rviz_config = os.path.join(pkg_amr, 'rviz', 'slam_config.rviz')
 
     # Launch Arguments

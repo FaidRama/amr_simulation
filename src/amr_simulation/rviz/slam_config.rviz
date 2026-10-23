@@ -271,7 +271,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /local_costmap/costmap_updates
+        Value: /none
       Use Timestamp: false
       Value: true
     - Alpha: 0.699999988079071
@@ -282,7 +282,7 @@ Visualization Manager:
       Name: Global Costmap
       Topic:
         Depth: 5
-        Durability Policy: Transient Local
+        Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /global_costmap/costmap
@@ -291,7 +291,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /global_costmap/costmap_updates
+        Value: /none
       Use Timestamp: false
       Value: true
   Enabled: true
