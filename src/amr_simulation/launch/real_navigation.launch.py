@@ -73,14 +73,14 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('use_arduino'))
     )
 
-    # 2. Filter Laser Sasis (Memotong pantulan tiang di dalam 34 cm)
+    # 2. Filter Laser Sasis (Memotong pantulan tiang di dalam 29 cm)
     start_laser_filter = Node(
         package='amr_simulation',
         executable='laser_filter_node.py',
         name='laser_filter',
         output='screen',
         parameters=[{
-            'min_range': 0.34,
+            'min_range': 0.29,
             'max_range': 12.0
         }],
         respawn=True,
