@@ -192,9 +192,9 @@ local_costmap:
           marking: True
           data_type: "LaserScan"
           raytrace_max_range: 3.0
-          raytrace_min_range: 0.34
+          raytrace_min_range: 0.30
           obstacle_max_range: 2.5
-          obstacle_min_range: 0.34
+          obstacle_min_range: 0.30
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
