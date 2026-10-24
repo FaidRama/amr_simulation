@@ -142,11 +142,15 @@ def generate_launch_description():
 
     # 6. Adaptive Velocity Node (Local Planner Speed Governor)
     # Membaca /cmd_vel_nav dan /human_state, mempublikasikan output aman ke /cmd_vel
+    scripts_dir = os.path.join(pkg_amr, 'scripts')
     start_adaptive_velocity = Node(
         package='amr_simulation',
         executable='adaptive_velocity_node.py',
         name='adaptive_velocity_node',
-        output='screen'
+        output='screen',
+        remappings=[
+            ('/cmd_vel', '/cmd_vel')
+        ]
     )
 
     # Nav2 dan Adaptive Velocity dijalankan setelah sensor stabil (delay 3 detik)
