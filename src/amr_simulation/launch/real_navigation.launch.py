@@ -120,12 +120,12 @@ def generate_launch_description():
         arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
     )
 
-    tf_odom_to_base = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        arguments=['0', '0', '0', '0', '0', '0', 'odom', 'base_link'],
-        condition=UnlessCondition(LaunchConfiguration('use_arduino'))
-    )
+    #tf_odom_to_base = Node(
+     #   package='tf2_ros',
+      #  executable='static_transform_publisher',
+       # arguments=['0', '0', '0', '0', '0', '0', 'odom', 'base_link'],
+        # condition=UnlessCondition(LaunchConfiguration('use_arduino'))
+    # )
 
     # 5. Nav2 Bringup (AMCL + Costmaps + Planner + Controller)
     # Output controller di-remap dari /cmd_vel ke /cmd_vel_nav
@@ -181,7 +181,7 @@ def generate_launch_description():
         start_arduino_bridge,
         tf_base_to_laser,
         tf_base_to_footprint,
-        tf_odom_to_base,
+        # tf_odom_to_base,
         delayed_nav2_and_adaptor,
         start_rviz2
     ])
