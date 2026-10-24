@@ -31,7 +31,7 @@ class ArduinoBridgeNode(Node):
         super().__init__('arduino_bridge')
 
         # --- PARAMETER KONFIGURASI ROBOT ---
-        self.declare_parameter('serial_port', '/dev/ttyACM0')
+        self.declare_parameter('serial_port', '/dev/arduino')
         self.declare_parameter('baudrate', 115200)
         self.declare_parameter('wheel_diameter', 0.127)      # 5 inci = 0.127 meter
         self.declare_parameter('wheel_separation', 0.458)    # 45.8 cm = 0.458 meter

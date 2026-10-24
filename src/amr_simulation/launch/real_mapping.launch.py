@@ -43,14 +43,14 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('camera'))
     )
 
-    # 2A. Node Arduino Bridge (Odometry Asli & Motor Control via /dev/ttyACM0)
+    # 2A. Node Arduino Bridge (Odometry Asli & Motor Control via /dev/arduino)
     start_arduino_bridge = Node(
         package='amr_simulation',
         executable='arduino_bridge.py',
         name='arduino_bridge',
         output='screen',
         parameters=[{
-            'serial_port': '/dev/ttyACM0',
+            'serial_port': '/dev/arduino',
             'baudrate': 115200,
             'wheel_diameter': 0.127,
             'wheel_separation': 0.458,

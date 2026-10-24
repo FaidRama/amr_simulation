@@ -1,7 +1,7 @@
 import serial
 import time
 
-SERIAL_PORT = '/dev/ttyACM0'
+SERIAL_PORT = '/dev/arduino'
 BAUD_RATE = 115200
 OUTPUT_FILE = 'step_respon_60rpm.csv'
 
