@@ -68,7 +68,8 @@ def generate_launch_description():
             'angle_compensate': True,
         }],
         respawn=True,
-        respawn_delay=2.0
+        respawn_delay=2.0,
+        condition=IfCondition(LaunchConfiguration('use_arduino'))
     )
 
     # 2. Filter Laser Sasis (Memotong pantulan tiang di dalam 34 cm)
