@@ -1,7 +1,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction, ExecuteProcess
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -139,19 +139,17 @@ def generate_launch_description():
             'autostart': LaunchConfiguration('autostart')
         }.items()
     )
-
+ 
     # 6. Adaptive Velocity Node (Local Planner Speed Governor)
     # Membaca /cmd_vel_nav dan /human_state, mempublikasikan output aman ke /cmd_vel
-    scripts_dir = os.path.join(pkg_amr, 'scripts')
-    start_adaptive_velocity = Node(
-        package='amr_simulation',
-        executable='adaptive_velocity_node.py',
-        name='adaptive_velocity_node',
-        output='screen',
-        remappings=[
-            ('/cmd_vel', '/cmd_vel')
-        ]
+    src_adaptive_script = os.path.join(os.getcwd(), 'src', 'amr_simulation', 'scripts', 'adaptive_velocity_node.py')
+    default_adaptive_script = src_adaptive_script if os.path.exists(src_adaptive_script) else os.path.join(pkg_amr, 'scripts', 'adaptive_velocity_node.py')
+    
+    start_adaptive_velocity = ExecuteProcess(
+        cmd=['python3', default_adaptive_script],
+        output='screen'
     )
+
 
     # Nav2 dan Adaptive Velocity dijalankan setelah sensor stabil (delay 3 detik)
     delayed_nav2_and_adaptor = TimerAction(
