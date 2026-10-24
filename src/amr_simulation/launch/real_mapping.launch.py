@@ -20,13 +20,14 @@ def generate_launch_description():
         description='Aktifkan streaming kamera USB untuk pantau jarak jauh'
     )
     
-    # 1. Node RPLidar A1 (Membaca sensor fisik)
+    # 1. Node RPLidar A1 (Membaca sensor fisik via /dev/rplidar)
+    lidar_port = '/dev/rplidar' if os.path.exists('/dev/rplidar') else '/dev/ttyUSB0'
     start_rplidar = Node(
         package='rplidar_ros',
         executable='rplidar_composition',
         output='screen',
         parameters=[{
-            'serial_port': '/dev/ttyUSB0',
+            'serial_port': lidar_port,
             'serial_baudrate': 115200,  # A1M8 biasanya 115200
             'frame_id': 'laser',
             'inverted': False,
