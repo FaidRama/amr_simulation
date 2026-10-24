@@ -5,10 +5,10 @@ scan_to_scan_filter_chain:
       type: laser_filters/LaserScanBoxFilter
       params:
         box_frame: "base_link" # Menggunakan pusat robot sebagai acuan potong
-        min_x: -0.29 # Jarak aman ke belakang
-        max_x: 0.29 # Jarak aman ke depan
-        min_y: -0.29 # Jarak aman ke kanan
-        max_y: 0.29 # Jarak aman ke kiri
+        min_x: -0.285 # Jarak aman ke belakang
+        max_x: 0.285 # Jarak aman ke depan
+        min_y: -0.285 # Jarak aman ke kanan
+        max_y: 0.285 # Jarak aman ke kiri
         min_z: -0.50 # Batas bawah tanah
         max_z: 0.50 # Batas atas kepala robot
 
