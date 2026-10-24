@@ -93,6 +93,7 @@ controller_server:
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
+    cmd_vel_topic: /cmd_vel_nav
     progress_checker_plugin: "progress_checker"
     goal_checker_plugin: "general_goal_checker"
     controller_plugins: ["FollowPath"]
