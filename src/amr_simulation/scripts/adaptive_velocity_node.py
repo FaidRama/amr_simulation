@@ -17,9 +17,9 @@ class AdaptiveVelocityNode(Node):
         super().__init__('adaptive_velocity_node')
 
         # Parameter Kecepatan Adaptif
-        self.declare_parameter('normal_max_linear', 0.30)
-        self.declare_parameter('reduced_max_linear', 0.15)
-        self.declare_parameter('reduced_max_angular', 0.40)
+        self.declare_parameter('normal_max_linear', 0.45)
+        self.declare_parameter('reduced_max_linear', 0.18)
+        self.declare_parameter('reduced_max_angular', 0.50)
 
         self.current_state = "NORMAL"
 
@@ -71,16 +71,21 @@ class AdaptiveVelocityNode(Node):
 
         # Logika Adaptive Velocity Constraint
         if self.current_state == "NORMAL":
-            # State NORMAL: Batas nominal
-            out_cmd.linear.x = min(out_cmd.linear.x, normal_v)
+            if out_cmd.linear.x > normal_v:
+                # Jaga proporsi sudut belok jika linear dipotong
+                scale = normal_v / out_cmd.linear.x
+                out_cmd.linear.x = normal_v
+                out_cmd.angular.z *= scale
 
         elif self.current_state == "REDUCED_SPEED":
-            # State REDUCED_SPEED: Perlambatan linear & pembatasan rotasi tajam
-            out_cmd.linear.x = min(out_cmd.linear.x, reduced_v)
+            if out_cmd.linear.x > reduced_v:
+                scale = reduced_v / out_cmd.linear.x
+                out_cmd.linear.x = reduced_v
+                out_cmd.angular.z *= scale
             if abs(out_cmd.angular.z) > reduced_w:
                 direction = 1.0 if out_cmd.angular.z > 0 else -1.0
                 out_cmd.angular.z = direction * reduced_w
-
+            
         elif self.current_state == "SAFE_STOP":
             # State SAFE_STOP: Berhenti penuh
             out_cmd.linear.x = 0.0
