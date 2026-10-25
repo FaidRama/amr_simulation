@@ -148,7 +148,7 @@ controller_server:
           "PathDist",
           "GoalDist",
         ]
-      BaseObstacle.scale: 1.0
+      BaseObstacle.scale: 4.0
       PathAlign.scale: 32.0
       PathAlign.forward_point_distance: 0.1
       GoalAlign.scale: 24.0
@@ -179,8 +179,8 @@ local_costmap:
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 10.0
-        inflation_radius: 0.5
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.65
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -192,9 +192,9 @@ local_costmap:
           marking: True
           data_type: "LaserScan"
           raytrace_max_range: 3.0
-          raytrace_min_range: 0.30
+          raytrace_min_range: 0.15
           obstacle_max_range: 2.5
-          obstacle_min_range: 0.30
+          obstacle_min_range: 0.15
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
@@ -229,16 +229,16 @@ global_costmap:
           marking: True
           data_type: "LaserScan"
           raytrace_max_range: 5.0
-          raytrace_min_range: 0.34
+          raytrace_min_range: 0.15
           obstacle_max_range: 2.5
-          obstacle_min_range: 0.34
+          obstacle_min_range: 0.15
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.65
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.45
       always_send_full_costmap: True
   global_costmap_client:
     ros__parameters:
