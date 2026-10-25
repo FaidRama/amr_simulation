@@ -1,6 +1,6 @@
 // =========================================================================
 // PENGUJIAN FISIK MULTI-STEP DINAMIS: 0 -> 60 -> 80 -> 100 -> 60 -> 0 RPM
-// METODE: DYNAMIC INTEGRAL CLAMPING + CONDITIONAL INTEGRATION
+// METODE: STANDARD INTEGRAL CLAMPING ANTI-WINDUP (ANTI-DEADLOCK)
 // DUAL MOTOR DC PG36 + BTS7960 (MOTOR KANAN INVERTED)
 // OUTPUT SERIAL: Time_s,Target_RPM,RPM_L,RPM_R,PWM_L,PWM_R
 // SAMPLING INTERVAL: 20 ms (50 Hz)
@@ -65,7 +65,7 @@ void isr_encoder_R() {
   else count_pulsa_R++;
 }
 
-// Prototipe Fungsi Kendali Dinamis
+// Prototipe Fungsi Kendali PI
 int compute_pid_dynamic(float target, float current, float kp, float ki, float kd, float &integral, float &prev_err, float dt);
 
 void setup() {
@@ -141,7 +141,7 @@ void loop() {
     rpm_filtered_L = (ALPHA_EMA * rpm_raw_L) + ((1.0 - ALPHA_EMA) * rpm_filtered_L);
     rpm_filtered_R = (ALPHA_EMA * rpm_raw_R) + ((1.0 - ALPHA_EMA) * rpm_filtered_R);
 
-    // Komputasi Kendali PI Dinamis
+    // Komputasi Kendali PI
     int pwm_L = compute_pid_dynamic(setpoint, rpm_filtered_L, KP_L, KI_L, KD_L, integral_L, prev_error_L, dt);
     int pwm_R = compute_pid_dynamic(setpoint, rpm_filtered_R, KP_R, KI_R, KD_R, integral_R, prev_error_R, dt);
 
@@ -171,7 +171,7 @@ void loop() {
   }
 }
 
-// Algoritma PI Dinamis
+// Algoritma PI Anti-Windup Clamping (Bebas Deadlock)
 int compute_pid_dynamic(float target, float current, float kp, float ki, float kd, float &integral, float &prev_err, float dt) {
   if (target <= 1.0) {
     integral = 0.0;
@@ -181,30 +181,29 @@ int compute_pid_dynamic(float target, float current, float kp, float ki, float k
 
   float error = target - current;
 
-  // Deadband redam kuantisasi pulsa (< 0.8 RPM)
-  if (abs(error) < 0.8) {
+  // Deadband redam kuantisasi pulsa diskrit
+  if (abs(error) < 0.5) {
     error = 0.0;
   }
 
-  // Conditional Integration: Redam akumulasi saat lonjakan setpoint terjadi
-  if (abs(error) <= 6.0) {
-    integral += (error * dt);
-  } else {
-    // Peluruhan halus suku integral saat transisi besar
-    integral *= 0.95;
-  }
-
-  // Dynamic Clamping: Batas beradaptasi linier dengan target kecepatan
-  float dynamic_pwm_cap = (target * 2.05) + 18.0;
-  if (dynamic_pwm_cap > 245.0) dynamic_pwm_cap = 245.0;
-
-  float max_integral = dynamic_pwm_cap / ki;
-  integral = constrain(integral, 0.0, max_integral);
-
   float P = kp * error;
-  float I = ki * integral;
   float D = kd * ((error - prev_err) / dt);
   prev_err = error;
+
+  // Prediksi sinyal kendali tanpa saturasi
+  float tentative_i = integral + (error * dt);
+  float unsaturated_pwm = P + (ki * tentative_i) + D;
+
+  // Clamping Anti-Windup: Integrasi hanya ditambah saat aktuator belum jenuh
+  if (unsaturated_pwm < 255.0 && unsaturated_pwm > 0.0) {
+    integral = tentative_i;
+  }
+
+  // Batasi akumulasi integral maksimal agar tidak melebihi rentang PWM 8-bit
+  float max_integral = 255.0 / ki;
+  integral = constrain(integral, 0.0, max_integral);
+
+  float I = ki * integral;
 
   return constrain((int)(P + I + D), 0, 255);
 }
