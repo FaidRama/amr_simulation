@@ -40,6 +40,7 @@ install(PROGRAMS
   scripts/camera_publisher.py
   scripts/arduino_bridge.py
   scripts/laser_filter_node.py
+  scripts/benchmark_skripsi.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
