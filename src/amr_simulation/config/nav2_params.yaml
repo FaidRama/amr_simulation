@@ -115,11 +115,11 @@ controller_server:
       debug_trajectory_details: True
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.35
+      max_vel_x: 0.25
       max_vel_y: 0.0
       max_vel_theta: 1.2
       min_speed_xy: 0.0
-      max_speed_xy: 0.30
+      max_speed_xy: 0.25
       min_speed_theta: 0.25
       acc_lim_x: 0.8
       acc_lim_y: 0.0
@@ -148,7 +148,7 @@ controller_server:
           "PathDist",
           "GoalDist",
         ]
-      BaseObstacle.scale: 2.0
+      BaseObstacle.scale: 3.0
       PathAlign.scale: 32.0
       PathAlign.forward_point_distance: 0.1
       GoalAlign.scale: 24.0
@@ -166,8 +166,8 @@ controller_server_rclcpp_node:
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 5.0
-      publish_frequency: 2.0
+      update_frequency: 7.0
+      publish_frequency: 3.0
       global_frame: odom
       robot_base_frame: base_footprint
       use_sim_time: False
@@ -179,8 +179,8 @@ local_costmap:
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 7.0
-        inflation_radius: 0.48
+        cost_scaling_factor: 3.5
+        inflation_radius: 0.50
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
