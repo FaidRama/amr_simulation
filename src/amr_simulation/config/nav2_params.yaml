@@ -115,18 +115,18 @@ controller_server:
       debug_trajectory_details: False
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.45
+      max_vel_x: 0.40
       max_vel_y: 0.0
-      max_vel_theta: 1.0
+      max_vel_theta: 0.75
       min_speed_xy: 0.0
       max_speed_xy: 0.45
       min_speed_theta: 0.05
-      acc_lim_x: 1.0
+      acc_lim_x: 0.7
       acc_lim_y: 0.0
-      acc_lim_theta: 2.0
-      decel_lim_x: -1.5
+      acc_lim_theta: 1.2
+      decel_lim_x: -0.9
       decel_lim_y: 0.0
-      decel_lim_theta: -2.0
+      decel_lim_theta: -1.2
       vx_samples: 15
       vy_samples: 1
       vtheta_samples: 20
@@ -135,7 +135,7 @@ controller_server:
       angular_granularity: 0.05
       transform_tolerance: 1.0
       xy_goal_tolerance: 0.25
-      trans_stopped_velocity: 0.10
+      trans_stopped_velocity: 0.08
       short_circuit_trajectory_evaluation: True
       stateful: True
       critics:
@@ -149,12 +149,12 @@ controller_server:
         ]
 
       BaseObstacle.scale: 4.5
-      PathAlign.scale: 10.0
+      PathAlign.scale: 12.0
       PathAlign.forward_point_distance: 0.2
-      PathDist.scale: 30.0
+      PathDist.scale: 32.0
       GoalDist.scale: 24.0
-      RotateToGoal.scale: 16.0
-      RotateToGoal.slowing_factor: 2.5
+      RotateToGoal.scale: 14.0
+      RotateToGoal.slowing_factor: 2.0
       RotateToGoal.lookahead_time: -1.0
       Oscillation.scale: 5.0
       Oscillation.oscillation_reset_dist: 0.05
