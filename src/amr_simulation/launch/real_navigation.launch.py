@@ -80,7 +80,7 @@ def generate_launch_description():
         name='laser_filter',
         output='screen',
         parameters=[{
-            'min_range': 0.10,
+            'min_range': 0.29,
             'max_range': 12.0
         }],
         respawn=True,
