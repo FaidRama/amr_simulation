@@ -17,6 +17,6 @@ scan_to_scan_filter_chain:
       type: laser_filters/LaserScanRangeFilter
       params:
         use_message_range_limits: false
-        lower_threshold: 0.32
+        lower_threshold: 0.05
         upper_threshold: 12.0
         lower_replacement_value: .NaN
