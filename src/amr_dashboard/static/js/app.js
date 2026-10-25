@@ -1536,11 +1536,45 @@ function renderCamera() {
                         <div class="monitor-grid">
                             <div class="monitor-card">
                                 <div class="mon-label">Human AI Status</div>
-                                <div class="mon-value mon-success" id="cam-human">NO_HUMAN</div>
+                                <div class="mon-value mon-warning" id="cam-human">—</div>
                             </div>
                             <div class="monitor-card">
                                 <div class="mon-label">Koordinat (X, Y)</div>
                                 <div class="mon-value mon-accent" id="cam-pos">${APP.pose.x.toFixed(2)}, ${APP.pose.y.toFixed(2)}</div>
+                            </div>
+                        </div>
+                        <div class="monitor-grid" style="margin-top:10px;">
+                            <div class="monitor-card">
+                                <div class="mon-label">Orang Terdeteksi</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-persons">—</div>
+                            </div>
+                            <div class="monitor-card">
+                                <div class="mon-label">Jarak Estimasi</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-dist">—</div>
+                            </div>
+                            <div class="monitor-card">
+                                <div class="mon-label">Zona</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-zone">—</div>
+                            </div>
+                            <div class="monitor-card">
+                                <div class="mon-label">Respon Robot</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-response">—</div>
+                            </div>
+                            <div class="monitor-card">
+                                <div class="mon-label">Fitur Aktif</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-feature">—</div>
+                            </div>
+                            <div class="monitor-card">
+                                <div class="mon-label">Ukuran Bbox (T × L)</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-bbox">—</div>
+                            </div>
+                            <div class="monitor-card">
+                                <div class="mon-label">Confidence</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-conf">—</div>
+                            </div>
+                            <div class="monitor-card">
+                                <div class="mon-label">FPS / Inferensi</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-fps">—</div>
                             </div>
                         </div>
                         <button class="btn btn-outline btn-block mt-12" onclick="captureScreenshot()">
@@ -1571,12 +1605,61 @@ function startCameraPolling() {
             if (data.delivery && typeof handleDeliveryStatusUpdate === 'function') {
                 handleDeliveryStatusUpdate(data.delivery);
             }
-            const camHuman = document.getElementById('cam-human');
             const camPos = document.getElementById('cam-pos');
-            if (camHuman) camHuman.textContent = data.human_status || '—';
+            updateCameraReadout(data);
             if (camPos && data.pose) camPos.textContent = `${data.pose.x.toFixed(2)}, ${data.pose.y.toFixed(2)}`;
         }
     }, 1000);
+}
+
+// Keterangan Human-Aware di bawah frame kamera (data dari /api/status -> human_info)
+function updateCameraReadout(data) {
+    const status = data.human_status || 'NODE_OFFLINE';
+    const info = data.human_info || null;
+
+    const setText = (id, text) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+    };
+
+    const camHuman = document.getElementById('cam-human');
+    if (camHuman) {
+        camHuman.textContent = status;
+        const danger = status === 'SAFE_STOP';
+        const warn = status === 'REDUCED_SPEED' || status === 'NODE_OFFLINE';
+        camHuman.className = 'mon-value ' + (danger ? 'mon-danger' : (warn ? 'mon-warning' : 'mon-success'));
+    }
+
+    if (!info) {
+        ['cam-persons', 'cam-dist', 'cam-zone', 'cam-response', 'cam-feature',
+         'cam-bbox', 'cam-conf', 'cam-fps'].forEach(id => setText(id, '—'));
+        return;
+    }
+
+    const has = v => v !== null && v !== undefined;
+
+    setText('cam-persons', String(info.persons ?? 0));
+    setText('cam-zone', info.zone || '—');
+    setText('cam-response', info.response || '—');
+
+    if (has(info.distance_m)) {
+        let d = `~${info.distance_m.toFixed(2)} m`;
+        if (info.calibrated === false) d += ' *';
+        if (info.in_range === false) d += ' (luar rentang)';
+        setText('cam-dist', d);
+    } else {
+        setText('cam-dist', '—');
+    }
+
+    if (has(info.feature_name) && has(info.ratio)) {
+        setText('cam-feature', `${info.feature_name} ${info.ratio.toFixed(2)}` + (info.at_edge ? ' · tepi frame' : ''));
+    } else {
+        setText('cam-feature', '—');
+    }
+
+    setText('cam-bbox', has(info.bbox_h_px) ? `${info.bbox_h_px} × ${info.bbox_w_px} px` : '—');
+    setText('cam-conf', has(info.confidence) ? info.confidence.toFixed(2) : '—');
+    setText('cam-fps', has(info.fps) ? `${info.fps.toFixed(1)} / ${info.infer_ms ?? '—'} ms` : '—');
 }
 
 // ====================== PAGE: HISTORY ======================
@@ -2832,4 +2915,3 @@ async function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
-

@@ -419,7 +419,7 @@ function updateCockpitData(data) {
     const humanLabel = getHumanStatusLabel(human);
 
     const isDanger = (human === 'DISTURBING' || human === 'CALLING' || human === 'SAFE_STOP');
-    const isWarning = (human === 'WALKING' || human === 'REDUCED_SPEED');
+    const isWarning = (human === 'WALKING' || human === 'REDUCED_SPEED' || human === 'NODE_OFFLINE');
     const color = isDanger ? 'var(--danger)' : (isWarning ? 'var(--warning)' : 'var(--success)');
 
     if (humanStatusEl) {
@@ -451,6 +451,7 @@ function formatElapsed(seconds) {
 function getHumanStatusLabel(status) {
     const labels = {
         'NO_HUMAN': 'Clear (Aman)',
+        'NODE_OFFLINE': 'Node AI Offline',
         'IDLE': 'Terdeteksi',
         'WALKING': 'Berjalan',
         'DISTURBING': 'Menghalangi!',

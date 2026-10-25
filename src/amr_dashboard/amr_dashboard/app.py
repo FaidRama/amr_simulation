@@ -260,6 +260,9 @@ class DashboardNode(Node):
         self.live_map_meta = None
         self.delivery_status = {'status': 'idle', 'current_phase': 'idle'}
         self.human_status = 'NO_HUMAN'
+        self.human_info = None            # dict JSON dari /human_info (detail deteksi)
+        self.last_human_status_time = 0.0  # waktu terakhir /human_status diterima
+        self.last_human_info_time = 0.0    # waktu terakhir /human_info diterima
         self.latest_frame = None  # JPEG bytes terakhir dari kamera
         self.cmd_vel_current = {'linear': 0.0, 'angular': 0.0}
         self.odom_speed = {'linear': 0.0, 'angular': 0.0}
@@ -289,11 +292,16 @@ class DashboardNode(Node):
         self.status_sub = self.create_subscription(
             String, '/amr/delivery_status', self.on_delivery_status, 10)
         
-        # Status human awareness (mendukung /human_status & /human_state)
+        # Status human awareness.
+        # CATATAN: /human_state TIDAK lagi di-subscribe ke variabel yang sama dengan
+        # /human_status. Node mengirim keduanya tiap frame (saat tidak ada orang:
+        # /human_state=NORMAL, /human_status=NO_HUMAN), sehingga nilai yang tampil
+        # bergantung siapa yang datang terakhir (race condition).
         self.human_sub = self.create_subscription(
             String, '/human_status', self.on_human_status, 10)
-        self.human_state_sub = self.create_subscription(
-            String, '/human_state', self.on_human_status, 10)
+        # Detail deteksi (JSON) untuk keterangan di bawah frame kamera
+        self.human_info_sub = self.create_subscription(
+            String, '/human_info', self.on_human_info, 10)
 
         # Monitor kecepatan cmd_vel & odometry
         self.cmd_vel_listen_sub = self.create_subscription(
@@ -321,10 +329,9 @@ class DashboardNode(Node):
                 Image, '/camera/image_raw', self.on_camera, 1)
             self.cam_sub_sensor = self.create_subscription(
                 Image, '/camera_sensor/image_raw', self.on_camera, 1)
-            self.cam_sub_annotated = self.create_subscription(
-                Image, '/camera/image_annotated', self.on_annotated_camera, 1)
-            self.cam_sub_annotated_comp = self.create_subscription(
-                CompressedImage, '/camera/image_annotated/compressed', self.on_compressed_annotated_camera, 1)
+            # Frame ber-anotasi (bbox/HUD) sengaja TIDAK di-subscribe: dulu stream
+            # berpindah-pindah antara frame annotated (~0.8 FPS) dan raw saat annotated
+            # telat >1.5 dtk -> kedap-kedip. Hasil deteksi kini lewat /human_info (teks).
             self.cam_sub_comp = self.create_subscription(
                 CompressedImage, '/camera/image_raw/compressed', self.on_compressed_camera, 1)
         
@@ -449,9 +456,22 @@ class DashboardNode(Node):
                     self.delivery_status = {'status': 'idle', 'current_phase': 'idle'}
     
     def on_human_status(self, msg):
-        """Callback status human awareness."""
+        """Callback status human awareness (/human_status)."""
         with self.lock:
             self.human_status = msg.data
+            self.last_human_status_time = time.time()
+
+    def on_human_info(self, msg):
+        """Callback detail deteksi human awareness (/human_info, JSON)."""
+        try:
+            info = json.loads(msg.data)
+        except (ValueError, TypeError):
+            return
+        if not isinstance(info, dict):
+            return
+        with self.lock:
+            self.human_info = info
+            self.last_human_info_time = time.time()
     
     def on_compressed_annotated_camera(self, msg):
         """Callback kamera ber-anotasi AI terkompresi JPEG (YOLO bounding box & HUD)."""
@@ -706,11 +726,34 @@ def api_status():
         odom = getattr(ros_node, 'odom_speed', {'linear': 0.0, 'angular': 0.0})
         cmd = ros_node.cmd_vel_current
         active_speed = odom if (abs(odom.get('linear', 0.0)) > 0.001 or abs(odom.get('angular', 0.0)) > 0.001) else cmd
+        # --- Status human awareness (dengan deteksi node mati / data basi) ---
+        HUMAN_STALE_SEC = 5.0
+        now_h = time.time()
+        info_fresh = (ros_node.human_info is not None and
+                      now_h - ros_node.last_human_info_time <= HUMAN_STALE_SEC)
+        status_fresh = (ros_node.last_human_status_time > 0 and
+                        now_h - ros_node.last_human_status_time <= HUMAN_STALE_SEC)
+        if info_fresh:
+            # Sumber utama: state FSM dari /human_info. NO_HUMAN hanya jika FSM sudah
+            # NORMAL dan tidak ada orang (selama FSM masih REDUCED_SPEED/SAFE_STOP
+            # karena debounce, itu yang ditampilkan).
+            human_info = ros_node.human_info
+            human_status = human_info.get('state', 'NORMAL')
+            if human_status == 'NORMAL' and human_info.get('persons', 0) == 0:
+                human_status = 'NO_HUMAN'
+        elif status_fresh:
+            human_info = None
+            human_status = ros_node.human_status
+        else:
+            human_info = None
+            human_status = 'NODE_OFFLINE'
+
         return jsonify({
             'pose': ros_node.robot_pose,
             'pose_source': ros_node.pose_source,
             'delivery': ros_node.delivery_status,
-            'human_status': ros_node.human_status,
+            'human_status': human_status,
+            'human_info': human_info,
             'cmd_vel': cmd,
             'odom_vel': odom,
             'speed': active_speed,
