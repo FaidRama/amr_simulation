@@ -20,13 +20,14 @@ def generate_launch_description():
         description='Aktifkan streaming kamera USB untuk pantau jarak jauh'
     )
     
-    # 1. Node RPLidar A1 (Membaca sensor fisik)
+    # 1. Node RPLidar A1 (Membaca sensor fisik via /dev/rplidar)
+    lidar_port = '/dev/rplidar' if os.path.exists('/dev/rplidar') else '/dev/ttyUSB0'
     start_rplidar = Node(
         package='rplidar_ros',
         executable='rplidar_composition',
         output='screen',
         parameters=[{
-            'serial_port': '/dev/ttyUSB0',
+            'serial_port': lidar_port,
             'serial_baudrate': 115200,  # A1M8 biasanya 115200
             'frame_id': 'laser',
             'inverted': False,
@@ -43,14 +44,14 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('camera'))
     )
 
-    # 2A. Node Arduino Bridge (Odometry Asli & Motor Control via /dev/ttyACM0)
+    # 2A. Node Arduino Bridge (Odometry Asli & Motor Control via /dev/arduino)
     start_arduino_bridge = Node(
         package='amr_simulation',
         executable='arduino_bridge.py',
         name='arduino_bridge',
         output='screen',
         parameters=[{
-            'serial_port': '/dev/ttyACM0',
+            'serial_port': '/dev/arduino',
             'baudrate': 115200,
             'wheel_diameter': 0.127,
             'wheel_separation': 0.458,

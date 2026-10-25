@@ -1,7 +1,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction, ExecuteProcess
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -54,45 +54,47 @@ def generate_launch_description():
         description='Jalankan RViz2 untuk visualisasi di laptop'
     )
 
-    # 1. Driver RPLiDAR A1 Fisik (/dev/ttyUSB0)
+    # 1. Driver RPLiDAR A1 Fisik (/dev/rplidar -> /dev/ttyUSB0)
+    lidar_port = '/dev/rplidar' if os.path.exists('/dev/rplidar') else '/dev/ttyUSB0'
     start_rplidar = Node(
         package='rplidar_ros',
         executable='rplidar_composition',
         name='rplidar_composition',
         output='screen',
         parameters=[{
-            'serial_port': '/dev/ttyUSB0',
+            'serial_port': lidar_port,
             'serial_baudrate': 115200,
             'frame_id': 'laser',
             'inverted': False,
             'angle_compensate': True,
         }],
         respawn=True,
-        respawn_delay=2.0
+        respawn_delay=2.0,
+        condition=IfCondition(LaunchConfiguration('use_arduino'))
     )
 
-    # 2. Filter Laser Sasis (Memotong pantulan tiang di dalam 34 cm)
+    # 2. Filter Laser Sasis (Memotong pantulan tiang di dalam 29 cm)
     start_laser_filter = Node(
         package='amr_simulation',
         executable='laser_filter_node.py',
         name='laser_filter',
         output='screen',
         parameters=[{
-            'min_range': 0.34,
+            'min_range': 0.29,
             'max_range': 12.0
         }],
         respawn=True,
         respawn_delay=2.0
     )
 
-    # 3. Arduino Bridge (Odometry Asli & Motor Control via /dev/ttyACM0)
+    # 3. Arduino Bridge (Odometry Asli & Motor Control via /dev/arduino)
     start_arduino_bridge = Node(
         package='amr_simulation',
         executable='arduino_bridge.py',
         name='arduino_bridge',
         output='screen',
         parameters=[{
-            'serial_port': '/dev/ttyACM0',
+            'serial_port': '/dev/arduino',
             'baudrate': 115200,
             'wheel_diameter': 0.127,
             'wheel_separation': 0.458,
@@ -119,12 +121,12 @@ def generate_launch_description():
         arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
     )
 
-    tf_odom_to_base = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        arguments=['0', '0', '0', '0', '0', '0', 'odom', 'base_link'],
-        condition=UnlessCondition(LaunchConfiguration('use_arduino'))
-    )
+    #tf_odom_to_base = Node(
+     #   package='tf2_ros',
+      #  executable='static_transform_publisher',
+       # arguments=['0', '0', '0', '0', '0', '0', 'odom', 'base_link'],
+        # condition=UnlessCondition(LaunchConfiguration('use_arduino'))
+    # )
 
     # 5. Nav2 Bringup (AMCL + Costmaps + Planner + Controller)
     # Output controller di-remap dari /cmd_vel ke /cmd_vel_nav
@@ -139,15 +141,17 @@ def generate_launch_description():
             'autostart': LaunchConfiguration('autostart')
         }.items()
     )
-
+ 
     # 6. Adaptive Velocity Node (Local Planner Speed Governor)
     # Membaca /cmd_vel_nav dan /human_state, mempublikasikan output aman ke /cmd_vel
-    start_adaptive_velocity = Node(
-        package='amr_simulation',
-        executable='adaptive_velocity_node.py',
-        name='adaptive_velocity_node',
+    src_adaptive_script = os.path.join(os.getcwd(), 'src', 'amr_simulation', 'scripts', 'adaptive_velocity_node.py')
+    default_adaptive_script = src_adaptive_script if os.path.exists(src_adaptive_script) else os.path.join(pkg_amr, 'scripts', 'adaptive_velocity_node.py')
+    
+    start_adaptive_velocity = ExecuteProcess(
+        cmd=['python3', default_adaptive_script],
         output='screen'
     )
+
 
     # Nav2 dan Adaptive Velocity dijalankan setelah sensor stabil (delay 3 detik)
     delayed_nav2_and_adaptor = TimerAction(
@@ -178,7 +182,7 @@ def generate_launch_description():
         start_arduino_bridge,
         tf_base_to_laser,
         tf_base_to_footprint,
-        tf_odom_to_base,
+        # tf_odom_to_base,
         delayed_nav2_and_adaptor,
         start_rviz2
     ])

@@ -15,7 +15,7 @@ import time
 import serial
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist, TransformStamped
+from geometry_msgs.msg import Twist, TransformStamped, Point
 from nav_msgs.msg import Odometry
 from tf2_ros import TransformBroadcaster
 
@@ -31,7 +31,7 @@ class ArduinoBridgeNode(Node):
         super().__init__('arduino_bridge')
 
         # --- PARAMETER KONFIGURASI ROBOT ---
-        self.declare_parameter('serial_port', '/dev/ttyACM0')
+        self.declare_parameter('serial_port', '/dev/arduino')
         self.declare_parameter('baudrate', 115200)
         self.declare_parameter('wheel_diameter', 0.127)      # 5 inci = 0.127 meter
         self.declare_parameter('wheel_separation', 0.458)    # 45.8 cm = 0.458 meter
@@ -79,8 +79,18 @@ class ArduinoBridgeNode(Node):
 
         # --- ROS 2 PUB / SUB / TF ---
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
+        self.pid_left_pub = self.create_publisher(Point, '/pid/motor_left', 10)
+        self.pid_right_pub = self.create_publisher(Point, '/pid/motor_right', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.cmd_sub = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
+
+        # Telemetri PID (Setpoint vs Aktual RPM)
+        self.setpoint_rpm_l = 0.0
+        self.setpoint_rpm_r = 0.0
+        self.actual_rpm_l = 0.0
+        self.actual_rpm_r = 0.0
+        self.pwm_l = 0.0
+        self.pwm_r = 0.0
 
         # Timer 50 Hz (tiap 20ms) untuk pembacaan serial, TF broadcast & heartbeat
         self.timer = self.create_timer(0.02, self.update_loop)
@@ -88,6 +98,14 @@ class ArduinoBridgeNode(Node):
             f"Arduino Bridge PID aktif di {self.port} ({self.baud} baud) | "
             f"D={self.wheel_diameter}m, L={self.wheel_separation}m, CPR={self.ticks_per_rev}"
         )
+
+    def compute_setpoint_rpm(self, v: float, w: float):
+        """Hitung target RPM motor kiri dan kanan dari linear v dan angular w."""
+        v_l = v - (self.wheel_separation / 2.0) * w
+        v_r = v + (self.wheel_separation / 2.0) * w
+        rpm_l = (v_l / (math.pi * self.wheel_diameter)) * 60.0
+        rpm_r = (v_r / (math.pi * self.wheel_diameter)) * 60.0
+        return rpm_l, rpm_r
 
     def connect_serial(self):
         try:
@@ -122,6 +140,7 @@ class ArduinoBridgeNode(Node):
         self.last_cmd_vel_time = now
         self.target_v = v
         self.target_w = w
+        self.setpoint_rpm_l, self.setpoint_rpm_r = self.compute_setpoint_rpm(v, w)
 
         # Kirim langsung jika ada perubahan nilai kecepatan agar respon instan
         if self.last_sent_v is None or abs(v - self.last_sent_v) > 0.005 or abs(w - self.last_sent_w) > 0.005:
@@ -148,6 +167,8 @@ class ArduinoBridgeNode(Node):
             if self.target_v != 0.0 or self.target_w != 0.0:
                 self.target_v = 0.0
                 self.target_w = 0.0
+                self.setpoint_rpm_l = 0.0
+                self.setpoint_rpm_r = 0.0
                 self.send_cmd(0.0, 0.0, now)
             elif dt_tx >= 0.2:
                 # Kirim heartbeat stop secara berkala tiap 200ms agar Arduino selalu yakin kecepatan = 0
@@ -174,7 +195,21 @@ class ArduinoBridgeNode(Node):
                             right_ticks = int(parts[1])
                             self.process_encoder_ticks(left_ticks, right_ticks, now)
                     elif line.startswith("LOG:"):
-                        self.get_logger().debug(f"Arduino PID Log: {line}")
+                        parts = line[4:].split(",")
+                        if len(parts) >= 5:
+                            try:
+                                self.actual_rpm_l = float(parts[1])
+                                self.actual_rpm_r = float(parts[2])
+                                self.pwm_l = float(parts[3])
+                                self.pwm_r = float(parts[4])
+
+                                # Publish Telemetri PID: x=Setpoint RPM, y=Actual RPM, z=PWM
+                                pt_l = Point(x=float(self.setpoint_rpm_l), y=self.actual_rpm_l, z=self.pwm_l)
+                                pt_r = Point(x=float(self.setpoint_rpm_r), y=self.actual_rpm_r, z=self.pwm_r)
+                                self.pid_left_pub.publish(pt_l)
+                                self.pid_right_pub.publish(pt_r)
+                            except ValueError:
+                                pass
         except Exception as e:
             self.get_logger().warn(f"Serial read error: {e}")
             self.ser = None
