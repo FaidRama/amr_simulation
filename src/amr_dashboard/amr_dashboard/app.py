@@ -29,13 +29,6 @@ from std_msgs.msg import String
 from nav_msgs.msg import OccupancyGrid, Odometry
 import numpy as np
 
-try:
-    from tf2_ros import Buffer, TransformListener
-    HAS_TF2 = True
-except ImportError:
-    HAS_TF2 = False
-    print('[WARN] tf2_ros tidak tersedia. Menggunakan fallback /amcl_pose.')
-
 from flask import Flask, render_template, jsonify, request, Response, send_file
 
 # Coba import cv_bridge & cv2 (untuk camera streaming)
@@ -100,36 +93,13 @@ MAP_METADATA = {}
 ACTIVE_MAP_FILE = 'peta_1b.yaml'
 
 
-def get_workspace_roots():
-    """Dapatkan daftar kemungkinan root workspace (Jetson ~/deliver_amr & Laptop ~/Documents/amr_ws)."""
-    roots = []
-    env_ws = os.environ.get('AMR_WS')
-    if env_ws:
-        roots.append(os.path.expanduser(env_ws))
-    # Deteksi relatif terhadap lokasi file app.py (misal .../deliver_amr/install/... atau .../src/...)
-    curr = os.path.abspath(os.path.dirname(__file__))
-    for _ in range(6):
-        if os.path.isdir(os.path.join(curr, 'src')):
-            if curr not in roots:
-                roots.append(curr)
-            break
-        curr = os.path.dirname(curr)
-    for candidate in ('~/deliver_amr', '~/Documents/amr_ws'):
-        exp = os.path.expanduser(candidate)
-        if os.path.isdir(exp) and exp not in roots:
-            roots.append(exp)
-    if not roots:
-        roots.append(os.path.expanduser('~/Documents/amr_ws'))
-    return roots
-
-
 def get_maps_directories():
     """Dapatkan daftar direktori maps/ dari source workspace dan installed share."""
     dirs = []
-    for ws_root in get_workspace_roots():
-        src_maps = os.path.join(ws_root, 'src', 'amr_simulation', 'maps')
-        if os.path.isdir(src_maps) and src_maps not in dirs:
-            dirs.append(src_maps)
+    ws_root = os.environ.get('AMR_WS', os.path.expanduser('~/Documents/amr_ws'))
+    src_maps = os.path.join(ws_root, 'src', 'amr_simulation', 'maps')
+    if os.path.isdir(src_maps):
+        dirs.append(src_maps)
     try:
         from ament_index_python.packages import get_package_share_directory
         sim_maps = os.path.join(get_package_share_directory('amr_simulation'), 'maps')
@@ -144,7 +114,6 @@ def list_available_maps():
     """Kembalikan daftar file peta (.yaml) yang tersedia + opsi live ROS2 /map."""
     found = {}
     labels = {
-        'peta_l1_ddc.yaml': 'peta_l1_ddc.yaml (Peta Lantai 1 DDC)',
         'peta_1b.yaml': 'peta_1b.yaml (Real Navigation Default)',
         'peta_kampus.yaml': 'peta_kampus.yaml (Peta Kampus)',
         'peta_rumah.yaml': 'peta_rumah.yaml (Peta Rumah)',
@@ -285,41 +254,28 @@ class DashboardNode(Node):
         # === DATA STORE (thread-safe) ===
         self.lock = threading.Lock()
         self.robot_pose = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
-        self.pose_source = 'NONE'  # 'TF_MAP', 'AMCL', 'ODOM', atau 'NONE'
+        self.pose_source = 'NONE'  # 'AMCL', 'ODOM', atau 'NONE'
         self.last_amcl_time = 0.0
-        self.last_tf_time = 0.0
-        self.has_map_pose = False
         self.live_map_png = None
         self.live_map_meta = None
         self.delivery_status = {'status': 'idle', 'current_phase': 'idle'}
         self.human_status = 'NO_HUMAN'
+        self.human_info = None            # dict JSON dari /human_info (detail deteksi)
+        self.last_human_status_time = 0.0  # waktu terakhir /human_status diterima
+        self.last_human_info_time = 0.0    # waktu terakhir /human_info diterima
         self.latest_frame = None  # JPEG bytes terakhir dari kamera
         self.cmd_vel_current = {'linear': 0.0, 'angular': 0.0}
         self.odom_speed = {'linear': 0.0, 'angular': 0.0}
         self.last_status_time = 0.0  # Waktu terakhir status diterima
         self._history_saved_ids = set()  # Track misi yang sudah disimpan ke history
         
-        # === TF2 LISTENER (Real-time map -> base_link seperti RViz) ===
-        if HAS_TF2:
-            self.tf_buffer = Buffer()
-            self.tf_listener = TransformListener(self.tf_buffer, self)
-            self.tf_pose_timer = self.create_timer(0.1, self.update_tf_pose)
-        
         # === SUBSCRIBERS ===
-        # Posisi AMR dari AMCL (mendukung TRANSIENT_LOCAL latched & VOLATILE)
-        amcl_qos_tl = QoSProfile(
-            depth=1,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL
-        )
-        self.pose_sub_tl = self.create_subscription(
-            PoseWithCovarianceStamped,
-            '/amcl_pose',
-            self.on_pose, amcl_qos_tl)
+        # Posisi AMR dari AMCL
+        qos = QoSProfile(depth=10)
         self.pose_sub = self.create_subscription(
             PoseWithCovarianceStamped,
             '/amcl_pose', 
-            self.on_pose, QoSProfile(depth=10))
+            self.on_pose, qos)
         
         # Live OccupancyGrid dari /map (nav2_map_server / slam_toolbox)
         map_qos_tl = QoSProfile(
@@ -336,11 +292,16 @@ class DashboardNode(Node):
         self.status_sub = self.create_subscription(
             String, '/amr/delivery_status', self.on_delivery_status, 10)
         
-        # Status human awareness (mendukung /human_status & /human_state)
+        # Status human awareness.
+        # CATATAN: /human_state TIDAK lagi di-subscribe ke variabel yang sama dengan
+        # /human_status. Node mengirim keduanya tiap frame (saat tidak ada orang:
+        # /human_state=NORMAL, /human_status=NO_HUMAN), sehingga nilai yang tampil
+        # bergantung siapa yang datang terakhir (race condition).
         self.human_sub = self.create_subscription(
             String, '/human_status', self.on_human_status, 10)
-        self.human_state_sub = self.create_subscription(
-            String, '/human_state', self.on_human_status, 10)
+        # Detail deteksi (JSON) untuk keterangan di bawah frame kamera
+        self.human_info_sub = self.create_subscription(
+            String, '/human_info', self.on_human_info, 10)
 
         # Monitor kecepatan cmd_vel & odometry
         self.cmd_vel_listen_sub = self.create_subscription(
@@ -368,10 +329,9 @@ class DashboardNode(Node):
                 Image, '/camera/image_raw', self.on_camera, 1)
             self.cam_sub_sensor = self.create_subscription(
                 Image, '/camera_sensor/image_raw', self.on_camera, 1)
-            self.cam_sub_annotated = self.create_subscription(
-                Image, '/camera/image_annotated', self.on_annotated_camera, 1)
-            self.cam_sub_annotated_comp = self.create_subscription(
-                CompressedImage, '/camera/image_annotated/compressed', self.on_compressed_annotated_camera, 1)
+            # Frame ber-anotasi (bbox/HUD) sengaja TIDAK di-subscribe: dulu stream
+            # berpindah-pindah antara frame annotated (~0.8 FPS) dan raw saat annotated
+            # telat >1.5 dtk -> kedap-kedip. Hasil deteksi kini lewat /human_info (teks).
             self.cam_sub_comp = self.create_subscription(
                 CompressedImage, '/camera/image_raw/compressed', self.on_compressed_camera, 1)
         
@@ -380,32 +340,6 @@ class DashboardNode(Node):
         
         self.get_logger().info('Dashboard Server Node AKTIF')
     
-    def update_tf_pose(self):
-        """Ambil posisi robot real-time dari TF tree (map -> base_link) persis seperti RViz."""
-        if not HAS_TF2:
-            return
-        for child_frame in ('base_link', 'base_footprint'):
-            try:
-                if self.tf_buffer.can_transform('map', child_frame, rclpy.time.Time()):
-                    t = self.tf_buffer.lookup_transform('map', child_frame, rclpy.time.Time())
-                    tr = t.transform.translation
-                    q = t.transform.rotation
-                    siny = 2.0 * (q.w * q.z + q.x * q.y)
-                    cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-                    yaw = math.atan2(siny, cosy)
-                    with self.lock:
-                        self.last_tf_time = time.time()
-                        self.has_map_pose = True
-                        self.pose_source = 'TF_MAP'
-                        self.robot_pose = {
-                            'x': round(float(tr.x), 3),
-                            'y': round(float(tr.y), 3),
-                            'yaw': round(float(yaw), 3)
-                        }
-                    return
-            except Exception:
-                pass
-
     def on_pose(self, msg):
         """Callback posisi AMR dari AMCL."""
         p = msg.pose.pose
@@ -416,7 +350,6 @@ class DashboardNode(Node):
         
         with self.lock:
             self.last_amcl_time = time.time()
-            self.has_map_pose = True
             self.pose_source = 'AMCL'
             self.robot_pose = {
                 'x': round(p.position.x, 3),
@@ -446,8 +379,8 @@ class DashboardNode(Node):
                 'linear': round(lin, 3),
                 'angular': round(ang, 3)
             }
-            # HANYA gunakan posisi Odometry jika lokalisasi peta (TF_MAP / AMCL) belum pernah aktif
-            if not self.has_map_pose:
+            # Fallback ke posisi Odometry jika /amcl_pose belum aktif (>4 detik)
+            if time.time() - self.last_amcl_time > 4.0:
                 self.pose_source = 'ODOM'
                 self.robot_pose = {
                     'x': round(p.position.x, 3),
@@ -457,7 +390,6 @@ class DashboardNode(Node):
 
     def on_map_grid(self, msg):
         """Callback OccupancyGrid dari /map untuk mode Live ROS Map (SLAM / Nav2)."""
-        global ACTIVE_MAP_FILE
         try:
             w = msg.info.width
             h = msg.info.height
@@ -490,30 +422,6 @@ class DashboardNode(Node):
             with self.lock:
                 self.live_map_png = png_bytes
                 self.live_map_meta = meta
-
-            # Auto-sinkronisasi file peta aktif jika origin /map berbeda dengan file statis saat ini
-            if ACTIVE_MAP_FILE != 'live':
-                cur_orig = MAP_METADATA.get('origin', [0.0, 0.0, 0.0])
-                if abs(float(cur_orig[0]) - ox) > 0.05 or abs(float(cur_orig[1]) - oy) > 0.05:
-                    matched_yaml = None
-                    for d in get_maps_directories():
-                        try:
-                            for fname in sorted(os.listdir(d)):
-                                if fname.endswith('.yaml'):
-                                    ypath = os.path.join(d, fname)
-                                    with open(ypath, 'r') as yf:
-                                        ym = yaml.safe_load(yf) or {}
-                                    yo = ym.get('origin', [0.0, 0.0, 0.0])
-                                    if abs(float(yo[0]) - ox) <= 0.05 and abs(float(yo[1]) - oy) <= 0.05:
-                                        matched_yaml = fname
-                                        break
-                        except Exception:
-                            pass
-                        if matched_yaml:
-                            break
-                    if matched_yaml and matched_yaml != ACTIVE_MAP_FILE:
-                        self.get_logger().info(f'Auto-sync peta dashboard ke peta aktif ROS2: {matched_yaml}')
-                        find_map_files(matched_yaml)
         except Exception as e:
             self.get_logger().warn(f'Gagal memproses /map OccupancyGrid: {e}')
     
@@ -548,9 +456,22 @@ class DashboardNode(Node):
                     self.delivery_status = {'status': 'idle', 'current_phase': 'idle'}
     
     def on_human_status(self, msg):
-        """Callback status human awareness."""
+        """Callback status human awareness (/human_status)."""
         with self.lock:
             self.human_status = msg.data
+            self.last_human_status_time = time.time()
+
+    def on_human_info(self, msg):
+        """Callback detail deteksi human awareness (/human_info, JSON)."""
+        try:
+            info = json.loads(msg.data)
+        except (ValueError, TypeError):
+            return
+        if not isinstance(info, dict):
+            return
+        with self.lock:
+            self.human_info = info
+            self.last_human_info_time = time.time()
     
     def on_compressed_annotated_camera(self, msg):
         """Callback kamera ber-anotasi AI terkompresi JPEG (YOLO bounding box & HUD)."""
@@ -669,16 +590,14 @@ ros_node = None
 # Load waypoints config
 def load_env_file():
     """Load variabel lingkungan dari file .env lokal."""
+    ws_root = os.environ.get('AMR_WS', os.path.expanduser('~/Documents/amr_ws'))
     env_paths = [
         os.path.join(PKG_PATH, 'config', '.env'),
         os.path.join(os.path.dirname(__file__), '..', 'config', '.env'),
+        os.path.join(ws_root, 'src', 'amr_dashboard', 'config', '.env'),
+        os.path.join(ws_root, 'build', 'amr_dashboard', 'config', '.env'),
+        os.path.join(ws_root, '.env'),
     ]
-    for ws_root in get_workspace_roots():
-        env_paths.extend([
-            os.path.join(ws_root, 'src', 'amr_dashboard', 'config', '.env'),
-            os.path.join(ws_root, 'build', 'amr_dashboard', 'config', '.env'),
-            os.path.join(ws_root, '.env'),
-        ])
     for path in env_paths:
         if os.path.exists(path):
             try:
@@ -698,11 +617,11 @@ waypoints_config = {}
 
 def save_waypoints_config():
     """Simpan waypoints_config ke install share dan src agar persisten."""
-    paths = [os.path.join(PKG_PATH, 'config', 'waypoints.yaml')]
-    for ws_root in get_workspace_roots():
-        cand = os.path.join(ws_root, 'src', 'amr_dashboard', 'config', 'waypoints.yaml')
-        if cand not in paths:
-            paths.append(cand)
+    ws_root = os.environ.get('AMR_WS', os.path.expanduser('~/Documents/amr_ws'))
+    paths = [
+        os.path.join(PKG_PATH, 'config', 'waypoints.yaml'),
+        os.path.join(ws_root, 'src', 'amr_dashboard', 'config', 'waypoints.yaml'),
+    ]
     saved_any = False
     for cfg_path in paths:
         try:
@@ -758,13 +677,12 @@ def apply_mode_profile(mode, custom_map_file=None, save=True):
 def load_waypoints_config(override_mode=None):
     global waypoints_config
     load_env_file()
-    config_paths = []
-    for ws_root in get_workspace_roots():
-        config_paths.append(os.path.join(ws_root, 'src', 'amr_dashboard', 'config', 'waypoints.yaml'))
-    config_paths.extend([
+    ws_root = os.environ.get('AMR_WS', os.path.expanduser('~/Documents/amr_ws'))
+    config_paths = [
+        os.path.join(ws_root, 'src', 'amr_dashboard', 'config', 'waypoints.yaml'),
         os.path.join(PKG_PATH, 'config', 'waypoints.yaml'),
         os.path.join(os.path.dirname(__file__), '..', 'config', 'waypoints.yaml'),
-    ])
+    ]
     loaded = False
     for path in config_paths:
         if os.path.exists(path):
@@ -808,11 +726,34 @@ def api_status():
         odom = getattr(ros_node, 'odom_speed', {'linear': 0.0, 'angular': 0.0})
         cmd = ros_node.cmd_vel_current
         active_speed = odom if (abs(odom.get('linear', 0.0)) > 0.001 or abs(odom.get('angular', 0.0)) > 0.001) else cmd
+        # --- Status human awareness (dengan deteksi node mati / data basi) ---
+        HUMAN_STALE_SEC = 5.0
+        now_h = time.time()
+        info_fresh = (ros_node.human_info is not None and
+                      now_h - ros_node.last_human_info_time <= HUMAN_STALE_SEC)
+        status_fresh = (ros_node.last_human_status_time > 0 and
+                        now_h - ros_node.last_human_status_time <= HUMAN_STALE_SEC)
+        if info_fresh:
+            # Sumber utama: state FSM dari /human_info. NO_HUMAN hanya jika FSM sudah
+            # NORMAL dan tidak ada orang (selama FSM masih REDUCED_SPEED/SAFE_STOP
+            # karena debounce, itu yang ditampilkan).
+            human_info = ros_node.human_info
+            human_status = human_info.get('state', 'NORMAL')
+            if human_status == 'NORMAL' and human_info.get('persons', 0) == 0:
+                human_status = 'NO_HUMAN'
+        elif status_fresh:
+            human_info = None
+            human_status = ros_node.human_status
+        else:
+            human_info = None
+            human_status = 'NODE_OFFLINE'
+
         return jsonify({
             'pose': ros_node.robot_pose,
             'pose_source': ros_node.pose_source,
             'delivery': ros_node.delivery_status,
-            'human_status': ros_node.human_status,
+            'human_status': human_status,
+            'human_info': human_info,
             'cmd_vel': cmd,
             'odom_vel': odom,
             'speed': active_speed,
@@ -1167,12 +1108,12 @@ def get_gemini_api_key():
 def save_gemini_api_key(key):
     """Simpan API Key ke file .env lokal."""
     key = key.strip()
-    env_paths = [os.path.join(PKG_PATH, 'config', '.env')]
-    for ws_root in get_workspace_roots():
-        env_paths.extend([
-            os.path.join(ws_root, 'src', 'amr_dashboard', 'config', '.env'),
-            os.path.join(ws_root, '.env'),
-        ])
+    ws_root = os.environ.get('AMR_WS', os.path.expanduser('~/Documents/amr_ws'))
+    env_paths = [
+        os.path.join(PKG_PATH, 'config', '.env'),
+        os.path.join(ws_root, 'src', 'amr_dashboard', 'config', '.env'),
+        os.path.join(ws_root, '.env'),
+    ]
     for env_path in env_paths:
         try:
             os.makedirs(os.path.dirname(env_path), exist_ok=True)
