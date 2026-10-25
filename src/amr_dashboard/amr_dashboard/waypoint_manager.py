@@ -91,13 +91,14 @@ class WaypointManager(Node):
     def load_config(self):
         """Load home_position dan settings dari waypoints.yaml sesuai mode aktif."""
         config_paths = [
-            os.path.join(os.expanduser('~') if hasattr(os, 'expanduser') else os.path.expanduser('~'), 'Documents', 'amr_ws', 'src', 'amr_dashboard', 'config', 'waypoints.yaml'),
+            os.path.join(os.path.expanduser('~'), 'deliver_amr', 'src', 'amr_dashboard', 'config', 'waypoints.yaml'),
+            os.path.join(os.path.expanduser('~'), 'Documents', 'amr_ws', 'src', 'amr_dashboard', 'config', 'waypoints.yaml'),
             os.path.join(os.path.dirname(__file__), '..', 'config', 'waypoints.yaml'),
         ]
         try:
             from ament_index_python.packages import get_package_share_directory
             share_cfg = os.path.join(get_package_share_directory('amr_dashboard'), 'config', 'waypoints.yaml')
-            config_paths.insert(0, share_cfg)
+            config_paths.append(share_cfg)
         except Exception:
             pass
 
