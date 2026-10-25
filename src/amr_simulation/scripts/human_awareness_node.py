@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 human_awareness_node.py
@@ -10,7 +9,7 @@ Camera ROS 2 / local camera / video
     -> Distance estimation
     -> Proximity classifier
     -> FSM
-    -> ROS 2 /human_state
+    -> ROS 2 /human_state  (+ /human_info JSON untuk keterangan dashboard)
 
 Mode kamera ROS:
   --source ros
@@ -19,6 +18,7 @@ Mode kamera ROS:
 
 import argparse
 import csv
+import json
 import sys
 import time
 import threading
@@ -30,6 +30,7 @@ from ultralytics import YOLO
 
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import String
 from sensor_msgs.msg import CompressedImage, Image
@@ -534,8 +535,15 @@ def main():
     parser.add_argument("--save-video", default=None)
     parser.add_argument("--no-display", action="store_true")
     parser.add_argument(
-        "--publish-annotated", action="store_true", default=True,
-        help="Publish frame ter-anotasi ke topik ROS 2 untuk dashboard"
+        "--publish-annotated", action="store_true", default=False,
+        help="(Debug) Publish frame ber-bbox/overlay ke ROS 2. "
+             "Default MATI: dashboard cukup pakai frame kamera asli "
+             "+ teks di --info-topic"
+    )
+    parser.add_argument(
+        "--info-topic", default="/human_info",
+        help="Topik std_msgs/String berisi JSON hasil human-aware "
+             "(untuk keterangan di bawah frame dashboard)"
     )
     parser.add_argument(
         "--annotated-topic",
@@ -559,6 +567,10 @@ def main():
         String, "/human_status", 10
     )
 
+    info_pub = ros_node.create_publisher(
+        String, args.info_topic, 10
+    )
+
     annotated_pub = None
     annotated_raw_pub = None
     if args.publish_annotated:
@@ -570,7 +582,13 @@ def main():
         )
 
     use_ros_camera = args.source.lower() in ("ros", "topic")
-    latest_frame = {"frame": None}
+    # Callback kamera hanya MENYIMPAN frame JPEG terbaru (murah).
+    # Decode + YOLO dilakukan di loop utama hanya untuk frame terbaru,
+    # jadi frame lama otomatis dilewati dan tidak menumpuk (anti-lag).
+    latest = {"data": None, "seq": 0}
+    frame_lock = threading.Lock()
+    executor = None
+    spin_thread = None
     camera_sub = None
     cap = None
 
@@ -589,11 +607,9 @@ def main():
                 )
                 return
 
-            encoded = np.frombuffer(msg.data, dtype=np.uint8)
-            frame = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
-
-            if frame is not None:
-                latest_frame["frame"] = frame
+            with frame_lock:
+                latest["data"] = msg.data
+                latest["seq"] += 1
 
         camera_sub = ros_node.create_subscription(
             CompressedImage,
@@ -605,6 +621,15 @@ def main():
         ros_node.get_logger().info(
             f"Menunggu kamera pada topik: {args.image_topic}"
         )
+
+        # Spin ROS di thread sendiri supaya callback kamera tidak
+        # tertahan oleh inferensi YOLO di loop utama.
+        executor = SingleThreadedExecutor()
+        executor.add_node(ros_node)
+        spin_thread = threading.Thread(
+            target=executor.spin, daemon=True
+        )
+        spin_thread.start()
 
     else:
         source = (
@@ -712,6 +737,7 @@ def main():
     miss_count = 0
     fps_ema = None
     last_feat = None
+    last_seq = -1
     t_start = time.time()
     last_no_frame_log = 0.0
 
@@ -723,28 +749,37 @@ def main():
         while rclpy.ok():
             t_frame = time.perf_counter()
 
-            # Penting: proses callback kamera sebelum membaca frame
             if use_ros_camera:
-                rclpy.spin_once(
-                    ros_node, timeout_sec=0.001
-                )
+                with frame_lock:
+                    seq = latest["seq"]
+                    data = latest["data"]
 
-                frame = latest_frame["frame"]
-
-                if frame is None:
+                # Tidak ada frame baru -> tunggu, jangan proses ulang
+                # frame yang sama.
+                if data is None or seq == last_seq:
                     now = time.time()
 
-                    if now - last_no_frame_log >= 3.0:
+                    if (
+                        data is None
+                        and now - last_no_frame_log >= 3.0
+                    ):
                         ros_node.get_logger().info(
                             f"Menunggu frame dari {args.image_topic}..."
                         )
                         last_no_frame_log = now
 
-                    time.sleep(0.005)
+                    time.sleep(0.003)
                     continue
 
-                # Salin frame supaya tidak diproses saat referensi berubah
-                frame = frame.copy()
+                last_seq = seq
+
+                frame = cv2.imdecode(
+                    np.frombuffer(data, dtype=np.uint8),
+                    cv2.IMREAD_COLOR
+                )
+
+                if frame is None:
+                    continue
 
             else:
                 ret, frame = cap.read()
@@ -888,6 +923,53 @@ def main():
                 if fps_ema is None
                 else 0.9 * fps_ema + 0.1 * inst_fps
             )
+
+            # 7b. PUBLISH HASIL SEBAGAI TEKS (untuk keterangan dashboard)
+            info = {
+                "stamp": round(time.time(), 3),
+                "frame": frame_count,
+                "state": state.value,
+                "zone": zone.value,
+                "response": STATE_RESPONSE.get(state, ""),
+                "persons": len(persons),
+                "distance_m": None,
+                "in_range": None,
+                "calibrated": None,
+                "feature": None,
+                "feature_name": None,
+                "ratio": None,
+                "ratio_h": None,
+                "ratio_w": None,
+                "bbox_h_px": None,
+                "bbox_w_px": None,
+                "confidence": None,
+                "at_edge": None,
+                "fps": round(fps_ema, 2),
+                "infer_ms": round(infer_ms),
+                "t_med": args.t_med_enter,
+                "t_near": args.t_near_enter,
+            }
+
+            if target is not None:
+                feat = target["feat"]
+                info.update({
+                    "distance_m": round(dist_smooth, 2),
+                    "in_range": bool(target["in_range"]),
+                    "calibrated": bool(calibrated_by[feat]),
+                    "feature": feat,
+                    "feature_name": FEAT_NAME[feat],
+                    "ratio": round(target["r"], 3),
+                    "ratio_h": round(target["ratio_h"], 3),
+                    "ratio_w": round(target["ratio_w"], 3),
+                    "bbox_h_px": int(target["h"]),
+                    "bbox_w_px": int(target["w"]),
+                    "confidence": round(target["conf"], 3),
+                    "at_edge": bool(target["at_edge"]),
+                })
+
+            info_msg = String()
+            info_msg.data = json.dumps(info)
+            info_pub.publish(info_msg)
 
             # 8. CSV LOGGING
             writer.writerow([
@@ -1088,6 +1170,12 @@ def main():
 
         log_file.flush()
         log_file.close()
+
+        if executor is not None:
+            executor.shutdown()
+
+        if spin_thread is not None:
+            spin_thread.join(timeout=1.0)
 
         ros_node.destroy_node()
 
