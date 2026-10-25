@@ -3,7 +3,7 @@ import time
 
 SERIAL_PORT = '/dev/arduino'
 BAUD_RATE = 115200
-OUTPUT_FILE = 'step_respon_60rpm.csv'
+OUTPUT_FILE = 'step_respon_dinamis.csv'
 
 print(f"Menghubungkan ke {SERIAL_PORT}...")
 try:
