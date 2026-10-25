@@ -46,12 +46,13 @@ def generate_launch_description():
         }]
     )
 
-    # 2. Joint State Publisher (Dummy status untuk sendi roda continuous)
+    # 2. Joint State Publisher (Dummy status untuk sendi roda continuous pada 30Hz)
     joint_state_publisher = Node(
         package='joint_state_publisher',
         executable='joint_state_publisher',
         name='joint_state_publisher',
         parameters=[{
+            'rate': 30,
             'use_sim_time': LaunchConfiguration('use_sim_time')
         }]
     )
