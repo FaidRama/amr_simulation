@@ -38,7 +38,7 @@ class ArduinoBridgeNode(Node):
         self.declare_parameter('ticks_per_rev', 350.7)       # 7 PPR * 50.1 gearbox = 350.7 ticks/rev
         self.declare_parameter('cmd_vel_timeout', 1.0)       # Timeout 1.0s (halus, tidak getar saat Nav2 menghitung)
         self.declare_parameter('odom_frame', 'odom')
-        self.declare_parameter('base_frame', 'base_link')
+        self.declare_parameter('base_frame', 'base_footprint')
         self.declare_parameter('publish_tf', True)
 
         self.port = self.get_parameter('serial_port').value
