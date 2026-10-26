@@ -110,10 +110,19 @@ class ArduinoBridgeNode(Node):
     def connect_serial(self):
         try:
             self.ser = serial.Serial(self.port, self.baud, timeout=0)
-            time.sleep(1.0)  # Tunggu bootloader Arduino Uno selesai auto-reset
+            # 1. Hardware auto-reset via DTR/RTS pulse (persis seperti saat kabel dicopot-pasang)
+            self.ser.dtr = False
+            self.ser.rts = False
+            time.sleep(0.1)
+            self.ser.dtr = True
+            self.ser.rts = True
+            # 2. Beri waktu bootloader Optiboot Arduino Uno selesai (~1.6 detik)
+            time.sleep(1.6)
+            # 3. Bersihkan buffer sisa bootloader & kirim heartbeat nol
             self.ser.reset_input_buffer()
+            self.ser.reset_output_buffer()
             self.ser.write(b"V,0.0,0.0\n")
-            self.get_logger().info(f"✅ Berhasil terhubung ke Arduino di {self.port}")
+            self.get_logger().info(f"✅ Berhasil terhubung ke Arduino di {self.port} (DTR reset OK)")
         except Exception as e:
             self.get_logger().warn(f"⚠️ Menunggu koneksi port Arduino {self.port} ({e})")
             self.ser = None
