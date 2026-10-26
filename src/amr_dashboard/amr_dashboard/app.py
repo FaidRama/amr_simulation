@@ -14,6 +14,8 @@ import math
 import sqlite3
 import threading
 import signal
+import subprocess
+import re
 import hashlib
 import urllib.request
 import urllib.parse
@@ -28,6 +30,13 @@ from sensor_msgs.msg import Image, CompressedImage
 from std_msgs.msg import String
 from nav_msgs.msg import OccupancyGrid, Odometry
 import numpy as np
+
+try:
+    from tf2_ros import Buffer, TransformListener
+    HAS_TF2 = True
+except ImportError:
+    HAS_TF2 = False
+    print('[WARN] tf2_ros tidak tersedia. Menggunakan fallback /amcl_pose.')
 
 from flask import Flask, render_template, jsonify, request, Response, send_file
 
@@ -93,13 +102,35 @@ MAP_METADATA = {}
 ACTIVE_MAP_FILE = 'peta_1b.yaml'
 
 
+def get_workspace_roots():
+    """Dapatkan daftar kemungkinan root workspace (Jetson ~/deliver_amr & Laptop ~/Documents/amr_ws)."""
+    roots = []
+    env_ws = os.environ.get('AMR_WS')
+    if env_ws:
+        roots.append(os.path.expanduser(env_ws))
+    curr = os.path.abspath(os.path.dirname(__file__))
+    for _ in range(6):
+        if os.path.isdir(os.path.join(curr, 'src')):
+            if curr not in roots:
+                roots.append(curr)
+            break
+        curr = os.path.dirname(curr)
+    for candidate in ('~/deliver_amr', '~/Documents/amr_ws'):
+        exp = os.path.expanduser(candidate)
+        if os.path.isdir(exp) and exp not in roots:
+            roots.append(exp)
+    if not roots:
+        roots.append(os.path.expanduser('~/Documents/amr_ws'))
+    return roots
+
+
 def get_maps_directories():
     """Dapatkan daftar direktori maps/ dari source workspace dan installed share."""
     dirs = []
-    ws_root = os.environ.get('AMR_WS', os.path.expanduser('~/Documents/amr_ws'))
-    src_maps = os.path.join(ws_root, 'src', 'amr_simulation', 'maps')
-    if os.path.isdir(src_maps):
-        dirs.append(src_maps)
+    for ws_root in get_workspace_roots():
+        src_maps = os.path.join(ws_root, 'src', 'amr_simulation', 'maps')
+        if os.path.isdir(src_maps) and src_maps not in dirs:
+            dirs.append(src_maps)
     try:
         from ament_index_python.packages import get_package_share_directory
         sim_maps = os.path.join(get_package_share_directory('amr_simulation'), 'maps')
@@ -114,6 +145,7 @@ def list_available_maps():
     """Kembalikan daftar file peta (.yaml) yang tersedia + opsi live ROS2 /map."""
     found = {}
     labels = {
+        'peta_l1_ddc.yaml': 'peta_l1_ddc.yaml (Peta Lantai 1 DDC)',
         'peta_1b.yaml': 'peta_1b.yaml (Real Navigation Default)',
         'peta_kampus.yaml': 'peta_kampus.yaml (Peta Kampus)',
         'peta_rumah.yaml': 'peta_rumah.yaml (Peta Rumah)',
@@ -254,10 +286,13 @@ class DashboardNode(Node):
         # === DATA STORE (thread-safe) ===
         self.lock = threading.Lock()
         self.robot_pose = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
-        self.pose_source = 'NONE'  # 'AMCL', 'ODOM', atau 'NONE'
+        self.pose_source = 'NONE'  # 'TF_MAP', 'AMCL', 'ODOM', atau 'NONE'
         self.last_amcl_time = 0.0
+        self.last_tf_time = 0.0
+        self.has_map_pose = False
         self.live_map_png = None
         self.live_map_meta = None
+        self.latest_map_msg = None
         self.delivery_status = {'status': 'idle', 'current_phase': 'idle'}
         self.human_status = 'NO_HUMAN'
         self.human_info = None            # dict JSON dari /human_info (detail deteksi)
@@ -269,13 +304,27 @@ class DashboardNode(Node):
         self.last_status_time = 0.0  # Waktu terakhir status diterima
         self._history_saved_ids = set()  # Track misi yang sudah disimpan ke history
         
+        # === TF2 LISTENER (Real-time map -> base_link seperti RViz) ===
+        if HAS_TF2:
+            self.tf_buffer = Buffer()
+            self.tf_listener = TransformListener(self.tf_buffer, self)
+            self.tf_pose_timer = self.create_timer(0.1, self.update_tf_pose)
+        
         # === SUBSCRIBERS ===
-        # Posisi AMR dari AMCL
-        qos = QoSProfile(depth=10)
+        # Posisi AMR dari AMCL (mendukung TRANSIENT_LOCAL latched & VOLATILE)
+        amcl_qos_tl = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL
+        )
+        self.pose_sub_tl = self.create_subscription(
+            PoseWithCovarianceStamped,
+            '/amcl_pose',
+            self.on_pose, amcl_qos_tl)
         self.pose_sub = self.create_subscription(
             PoseWithCovarianceStamped,
             '/amcl_pose', 
-            self.on_pose, qos)
+            self.on_pose, QoSProfile(depth=10))
         
         # Live OccupancyGrid dari /map (nav2_map_server / slam_toolbox)
         map_qos_tl = QoSProfile(
@@ -340,6 +389,32 @@ class DashboardNode(Node):
         
         self.get_logger().info('Dashboard Server Node AKTIF')
     
+    def update_tf_pose(self):
+        """Ambil posisi robot real-time dari TF tree (map -> base_link) persis seperti RViz."""
+        if not HAS_TF2:
+            return
+        for child_frame in ('base_link', 'base_footprint'):
+            try:
+                if self.tf_buffer.can_transform('map', child_frame, rclpy.time.Time()):
+                    t = self.tf_buffer.lookup_transform('map', child_frame, rclpy.time.Time())
+                    tr = t.transform.translation
+                    q = t.transform.rotation
+                    siny = 2.0 * (q.w * q.z + q.x * q.y)
+                    cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+                    yaw = math.atan2(siny, cosy)
+                    with self.lock:
+                        self.last_tf_time = time.time()
+                        self.has_map_pose = True
+                        self.pose_source = 'TF_MAP'
+                        self.robot_pose = {
+                            'x': round(float(tr.x), 3),
+                            'y': round(float(tr.y), 3),
+                            'yaw': round(float(yaw), 3)
+                        }
+                    return
+            except Exception:
+                pass
+
     def on_pose(self, msg):
         """Callback posisi AMR dari AMCL."""
         p = msg.pose.pose
@@ -350,6 +425,7 @@ class DashboardNode(Node):
         
         with self.lock:
             self.last_amcl_time = time.time()
+            self.has_map_pose = True
             self.pose_source = 'AMCL'
             self.robot_pose = {
                 'x': round(p.position.x, 3),
@@ -379,8 +455,8 @@ class DashboardNode(Node):
                 'linear': round(lin, 3),
                 'angular': round(ang, 3)
             }
-            # Fallback ke posisi Odometry jika /amcl_pose belum aktif (>4 detik)
-            if time.time() - self.last_amcl_time > 4.0:
+            # HANYA gunakan posisi Odometry jika lokalisasi peta (TF_MAP / AMCL) belum pernah aktif
+            if not self.has_map_pose:
                 self.pose_source = 'ODOM'
                 self.robot_pose = {
                     'x': round(p.position.x, 3),
@@ -390,6 +466,7 @@ class DashboardNode(Node):
 
     def on_map_grid(self, msg):
         """Callback OccupancyGrid dari /map untuk mode Live ROS Map (SLAM / Nav2)."""
+        global ACTIVE_MAP_FILE
         try:
             w = msg.info.width
             h = msg.info.height
@@ -420,8 +497,33 @@ class DashboardNode(Node):
                 'source': 'live_ros_topic'
             }
             with self.lock:
+                self.latest_map_msg = msg
                 self.live_map_png = png_bytes
                 self.live_map_meta = meta
+
+            # Auto-sinkronisasi file peta aktif jika origin /map berbeda dengan file statis saat ini
+            if ACTIVE_MAP_FILE != 'live':
+                cur_orig = MAP_METADATA.get('origin', [0.0, 0.0, 0.0])
+                if abs(float(cur_orig[0]) - ox) > 0.05 or abs(float(cur_orig[1]) - oy) > 0.05:
+                    matched_yaml = None
+                    for d in get_maps_directories():
+                        try:
+                            for fname in sorted(os.listdir(d)):
+                                if fname.endswith('.yaml'):
+                                    ypath = os.path.join(d, fname)
+                                    with open(ypath, 'r') as yf:
+                                        ym = yaml.safe_load(yf) or {}
+                                    yo = ym.get('origin', [0.0, 0.0, 0.0])
+                                    if abs(float(yo[0]) - ox) <= 0.05 and abs(float(yo[1]) - oy) <= 0.05:
+                                        matched_yaml = fname
+                                        break
+                        except Exception:
+                            pass
+                        if matched_yaml:
+                            break
+                    if matched_yaml and matched_yaml != ACTIVE_MAP_FILE:
+                        self.get_logger().info(f'Auto-sync peta dashboard ke peta aktif ROS2: {matched_yaml}')
+                        find_map_files(matched_yaml)
         except Exception as e:
             self.get_logger().warn(f'Gagal memproses /map OccupancyGrid: {e}')
     
@@ -590,14 +692,16 @@ ros_node = None
 # Load waypoints config
 def load_env_file():
     """Load variabel lingkungan dari file .env lokal."""
-    ws_root = os.environ.get('AMR_WS', os.path.expanduser('~/Documents/amr_ws'))
     env_paths = [
         os.path.join(PKG_PATH, 'config', '.env'),
         os.path.join(os.path.dirname(__file__), '..', 'config', '.env'),
-        os.path.join(ws_root, 'src', 'amr_dashboard', 'config', '.env'),
-        os.path.join(ws_root, 'build', 'amr_dashboard', 'config', '.env'),
-        os.path.join(ws_root, '.env'),
     ]
+    for ws_root in get_workspace_roots():
+        env_paths.extend([
+            os.path.join(ws_root, 'src', 'amr_dashboard', 'config', '.env'),
+            os.path.join(ws_root, 'build', 'amr_dashboard', 'config', '.env'),
+            os.path.join(ws_root, '.env'),
+        ])
     for path in env_paths:
         if os.path.exists(path):
             try:
@@ -617,11 +721,11 @@ waypoints_config = {}
 
 def save_waypoints_config():
     """Simpan waypoints_config ke install share dan src agar persisten."""
-    ws_root = os.environ.get('AMR_WS', os.path.expanduser('~/Documents/amr_ws'))
-    paths = [
-        os.path.join(PKG_PATH, 'config', 'waypoints.yaml'),
-        os.path.join(ws_root, 'src', 'amr_dashboard', 'config', 'waypoints.yaml'),
-    ]
+    paths = [os.path.join(PKG_PATH, 'config', 'waypoints.yaml')]
+    for ws_root in get_workspace_roots():
+        cand = os.path.join(ws_root, 'src', 'amr_dashboard', 'config', 'waypoints.yaml')
+        if cand not in paths:
+            paths.append(cand)
     saved_any = False
     for cfg_path in paths:
         try:
@@ -677,12 +781,13 @@ def apply_mode_profile(mode, custom_map_file=None, save=True):
 def load_waypoints_config(override_mode=None):
     global waypoints_config
     load_env_file()
-    ws_root = os.environ.get('AMR_WS', os.path.expanduser('~/Documents/amr_ws'))
-    config_paths = [
-        os.path.join(ws_root, 'src', 'amr_dashboard', 'config', 'waypoints.yaml'),
+    config_paths = []
+    for ws_root in get_workspace_roots():
+        config_paths.append(os.path.join(ws_root, 'src', 'amr_dashboard', 'config', 'waypoints.yaml'))
+    config_paths.extend([
         os.path.join(PKG_PATH, 'config', 'waypoints.yaml'),
         os.path.join(os.path.dirname(__file__), '..', 'config', 'waypoints.yaml'),
-    ]
+    ])
     loaded = False
     for path in config_paths:
         if os.path.exists(path):
@@ -708,12 +813,279 @@ def load_waypoints_config(override_mode=None):
     apply_mode_profile(active_mode, save=bool(override_mode))
 
 
+# =====================================================================
+# SLAM MAPPING PROCESS MANAGER & MAP SAVER
+# =====================================================================
+MAPPING_PROC = None
+MAPPING_LOCK = threading.Lock()
+MAPPING_LOGS = []
+
+
+def _append_mapping_log(line):
+    global MAPPING_LOGS
+    ts = datetime.now().strftime('%H:%M:%S')
+    MAPPING_LOGS.append(f'[{ts}] {line}')
+    if len(MAPPING_LOGS) > 80:
+        MAPPING_LOGS = MAPPING_LOGS[-80:]
+
+
+def _read_mapping_stdout(proc):
+    try:
+        for line in iter(proc.stdout.readline, ''):
+            if not line:
+                break
+            clean = line.strip()
+            if clean:
+                _append_mapping_log(clean)
+    except Exception:
+        pass
+
+
+def is_slam_active():
+    """Cek apakah SLAM Mapping sedang berjalan (baik via dashboard maupun terminal)."""
+    with MAPPING_LOCK:
+        if MAPPING_PROC is not None and MAPPING_PROC.poll() is None:
+            return True
+    if ros_node is not None:
+        try:
+            names = [n.lower() for n in ros_node.get_node_names()]
+            if any('slam_toolbox' in n for n in names):
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def stop_slam_process():
+    """Hentikan proses real_mapping.launch.py dan bersihkan node SLAM."""
+    global MAPPING_PROC
+    with MAPPING_LOCK:
+        proc = MAPPING_PROC
+        MAPPING_PROC = None
+    if proc is not None and proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            proc.wait(timeout=3.0)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
+    # Pastikan node SLAM/LiDAR/Arduino dari sesi mapping berhenti tanpa mematikan dashboard
+    subprocess.run(
+        ['pkill', '-f', '(real_mapping\\.launch\\.py|async_slam_toolbox_node|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py)'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    _append_mapping_log('🛑 Proses SLAM Mapping dihentikan.')
+
+
 # --- ROUTES ---
 
 @app.route('/')
 def index():
     """Halaman utama SPA."""
     return render_template('index.html')
+
+
+@app.route('/api/mapping/status')
+def api_mapping_status():
+    """Status real-time proses SLAM Mapping, metadata peta live, dan log."""
+    active = is_slam_active()
+    launched_by_dash = False
+    with MAPPING_LOCK:
+        launched_by_dash = (MAPPING_PROC is not None and MAPPING_PROC.poll() is None)
+    pose = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+    pose_source = 'NONE'
+    has_live_map = False
+    map_meta = None
+    if ros_node is not None:
+        with ros_node.lock:
+            pose = dict(ros_node.robot_pose)
+            pose_source = ros_node.pose_source
+            has_live_map = ros_node.live_map_png is not None
+            map_meta = dict(ros_node.live_map_meta) if ros_node.live_map_meta else None
+    return jsonify({
+        'active': active,
+        'launched_by_dashboard': launched_by_dash,
+        'has_live_map': has_live_map,
+        'map_meta': map_meta,
+        'pose': pose,
+        'pose_source': pose_source,
+        'active_map_file': ACTIVE_MAP_FILE,
+        'available_maps': list_available_maps(),
+        'logs': MAPPING_LOGS[-35:]
+    })
+
+
+@app.route('/api/mapping/start', methods=['POST'])
+def api_mapping_start():
+    """Jalankan ros2 launch amr_simulation real_mapping.launch.py di background."""
+    global MAPPING_PROC, ACTIVE_MAP_FILE
+    if is_slam_active():
+        ACTIVE_MAP_FILE = 'live'
+        return jsonify({
+            'success': True,
+            'message': 'SLAM Mapping sudah aktif! Mode peta dialihkan ke Live /map.'
+        })
+
+    # Matikan node navigasi (AMCL/Nav2) jika masih jalan agar tidak bentrok port serial LiDAR & Arduino
+    subprocess.run(
+        ['pkill', '-9', '-f', '(real_navigation\\.launch\\.py|real_mapping\\.launch\\.py|amcl|bt_navigator|controller_server|planner_server|recoveries_server|lifecycle_manager|async_slam_toolbox_node|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py)'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    time.sleep(0.8)
+
+    ws_roots = get_workspace_roots()
+    setup_parts = ['source /opt/ros/foxy/setup.bash 2>/dev/null || true']
+    for wr in reversed(ws_roots):
+        setup_bash = os.path.join(wr, 'install', 'setup.bash')
+        if os.path.exists(setup_bash):
+            setup_parts.append(f'source "{setup_bash}"')
+    setup_parts.append('exec ros2 launch amr_simulation real_mapping.launch.py')
+    full_cmd = ' && '.join(setup_parts)
+
+    try:
+        with MAPPING_LOCK:
+            MAPPING_LOGS.clear()
+            _append_mapping_log('🚀 Meluncurkan: ros2 launch amr_simulation real_mapping.launch.py ...')
+            MAPPING_PROC = subprocess.Popen(
+                ['/bin/bash', '-c', full_cmd],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                preexec_fn=os.setsid
+            )
+            t = threading.Thread(target=_read_mapping_stdout, args=(MAPPING_PROC,), daemon=True)
+            t.start()
+
+        ACTIVE_MAP_FILE = 'live'
+        if ros_node is not None:
+            with ros_node.lock:
+                ros_node.has_map_pose = False
+        return jsonify({
+            'success': True,
+            'message': 'SLAM Mapping dimulai! Tunggu ~3-5 detik hingga LiDAR & SLAM Toolbox menampilkan peta.'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/mapping/stop', methods=['POST'])
+def api_mapping_stop():
+    """Hentikan proses SLAM Mapping."""
+    if ros_node is not None:
+        ros_node.send_cmd_vel(0.0, 0.0)
+    stop_slam_process()
+    return jsonify({
+        'success': True,
+        'message': 'Proses SLAM Mapping berhasil dihentikan.'
+    })
+
+
+@app.route('/api/mapping/save', methods=['POST'])
+def api_mapping_save():
+    """Simpan peta OccupancyGrid dari topik /map langsung ke file .pgm dan .yaml (Anti-Timeout)."""
+    global ACTIVE_MAP_FILE
+    if ros_node is None:
+        return jsonify({'success': False, 'error': 'ROS2 belum terhubung'}), 503
+
+    data = request.get_json() or {}
+    raw_name = str(data.get('map_name', '')).strip()
+    set_active = bool(data.get('set_active', True))
+
+    if raw_name.endswith('.yaml') or raw_name.endswith('.pgm'):
+        raw_name = os.path.splitext(raw_name)[0]
+    clean_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', raw_name).strip('_')
+    if not clean_name:
+        clean_name = f'peta_slam_{datetime.now().strftime("%H%M%S")}'
+
+    with ros_node.lock:
+        msg = ros_node.latest_map_msg
+
+    if msg is None or msg.info.width == 0 or msg.info.height == 0:
+        return jsonify({
+            'success': False,
+            'error': 'Belum ada data peta dari topik /map. Pastikan SLAM Mapping sedang berjalan!'
+        }), 400
+
+    try:
+        width = int(msg.info.width)
+        height = int(msg.info.height)
+        res = round(float(msg.info.resolution), 5)
+        origin_x = round(float(msg.info.origin.position.x), 3)
+        origin_y = round(float(msg.info.origin.position.y), 3)
+
+        # Konversi data OccupancyGrid (-1: unknown, 0: free, 100: occupied) ke PGM P5 (0-255)
+        arr = np.array(msg.data, dtype=np.int16).reshape((height, width))
+        img_arr = np.full((height, width), 205, dtype=np.uint8)
+        img_arr[arr == 0] = 254
+        img_arr[arr >= 50] = 0
+        mask_mid = (arr > 0) & (arr < 50)
+        if np.any(mask_mid):
+            img_arr[mask_mid] = (254 - (arr[mask_mid] * 254 // 100)).astype(np.uint8)
+        # Flip vertikal agar baris 0 berada di atas sesuai standar PGM ROS map_server
+        img_arr = np.flipud(img_arr)
+
+        pgm_header = f"P5\n{width} {height}\n255\n".encode('ascii')
+        pgm_bytes = pgm_header + img_arr.tobytes()
+
+        yaml_content = (
+            f"image: {clean_name}.pgm\n"
+            f"mode: trinary\n"
+            f"resolution: {res}\n"
+            f"origin: [{origin_x}, {origin_y}, 0]\n"
+            f"negate: 0\n"
+            f"occupied_thresh: 0.65\n"
+            f"free_thresh: 0.25\n"
+        )
+
+        target_dirs = get_maps_directories()
+        if not target_dirs:
+            fallback_dir = os.path.join(get_workspace_roots()[0], 'src', 'amr_simulation', 'maps')
+            os.makedirs(fallback_dir, exist_ok=True)
+            target_dirs = [fallback_dir]
+
+        saved_paths = []
+        for d in target_dirs:
+            try:
+                os.makedirs(d, exist_ok=True)
+                pgm_path = os.path.join(d, f"{clean_name}.pgm")
+                yaml_path = os.path.join(d, f"{clean_name}.yaml")
+                with open(pgm_path, 'wb') as pf:
+                    pf.write(pgm_bytes)
+                with open(yaml_path, 'w') as yf:
+                    yf.write(yaml_content)
+                saved_paths.append(yaml_path)
+            except Exception as e:
+                print(f'[WARN] Gagal menyimpan peta ke {d}: {e}')
+
+        if not saved_paths:
+            return jsonify({'success': False, 'error': 'Gagal menulis file peta ke disk'}), 500
+
+        yaml_filename = f"{clean_name}.yaml"
+        _append_mapping_log(f'💾 Peta berhasil disimpan: {yaml_filename} ({width}x{height} px)')
+
+        if set_active:
+            if 'profiles' in waypoints_config and 'real' in waypoints_config['profiles']:
+                waypoints_config['profiles']['real']['map_file'] = yaml_filename
+            save_waypoints_config()
+            if not is_slam_active():
+                find_map_files(yaml_filename)
+
+        return jsonify({
+            'success': True,
+            'map_file': yaml_filename,
+            'width': width,
+            'height': height,
+            'resolution': res,
+            'origin': [origin_x, origin_y, 0.0],
+            'saved_paths': saved_paths,
+            'available_maps': list_available_maps(),
+            'message': f'Peta "{yaml_filename}" ({width}×{height} px) berhasil disimpan!'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/status')
@@ -768,14 +1140,17 @@ def api_status():
 @app.route('/api/map')
 def api_map():
     """Serve gambar peta sebagai PNG (dari topik /map live atau file PGM statis)."""
-    # 1. Jika mode peta adalah 'live' dan data /map tersedia, kirim langsung
-    if ACTIVE_MAP_FILE == 'live' and ros_node is not None:
+    force_live = request.args.get('live') == '1'
+    # 1. Jika mode peta adalah 'live' (atau diminta ?live=1) dan data /map tersedia, kirim langsung
+    if (force_live or ACTIVE_MAP_FILE == 'live') and ros_node is not None:
         with ros_node.lock:
             live_png = ros_node.live_map_png
         if live_png:
             resp = send_file(BytesIO(live_png), mimetype='image/png')
             resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
             return resp
+        if force_live:
+            return jsonify({'error': 'Topik /map live belum tersedia'}), 404
 
     # 2. Fallback ke file PGM statis
     if not MAP_PGM_PATH or not os.path.exists(MAP_PGM_PATH):
@@ -804,7 +1179,8 @@ def api_map():
 @app.route('/api/map/metadata')
 def api_map_metadata():
     """Metadata peta (resolution, origin, size, mode, map_file)."""
-    if ACTIVE_MAP_FILE == 'live' and ros_node is not None:
+    force_live = request.args.get('live') == '1'
+    if (force_live or ACTIVE_MAP_FILE == 'live') and ros_node is not None:
         with ros_node.lock:
             live_meta = ros_node.live_map_meta
         if live_meta:
@@ -812,6 +1188,8 @@ def api_map_metadata():
             meta['map_file'] = 'live'
             meta['mode'] = waypoints_config.get('operation_mode', 'real')
             return jsonify(meta)
+        if force_live:
+            return jsonify({'error': 'Metadata /map live belum tersedia'}), 404
 
     metadata = dict(MAP_METADATA)
     if MAP_PGM_PATH and os.path.exists(MAP_PGM_PATH) and HAS_PIL:
