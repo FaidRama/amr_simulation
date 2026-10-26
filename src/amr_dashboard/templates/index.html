@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/style.css?v=1.5">
+    <link rel="stylesheet" href="/static/css/style.css?v=1.6">
     <script>
         (function() {
             const saved = localStorage.getItem('amr_theme') || 'nordic-slate';
@@ -229,33 +229,45 @@
 
     <!-- ============ MOBILE BOTTOM NAV (Mobile Screens) ============ -->
     <nav id="mobile-nav">
-        <button class="mobile-nav-item" data-page="home" onclick="navigateTo('home')">
+        <button class="mobile-nav-item" data-page="home" onclick="navigateTo('home')" title="Mission Overview">
             <span class="mobile-nav-icon" id="m-icon-home"></span>
             <span>Overview</span>
         </button>
-        <button class="mobile-nav-item" data-page="monitoring" onclick="navigateTo('monitoring')">
+        <button class="mobile-nav-item" data-page="monitoring" onclick="navigateTo('monitoring')" title="Cockpit Telemetry">
             <span class="mobile-nav-icon" id="m-icon-monitoring"></span>
             <span>Cockpit</span>
         </button>
-        <button class="mobile-nav-item" data-page="delivery" onclick="navigateTo('delivery')">
+        <button class="mobile-nav-item" data-page="delivery" onclick="navigateTo('delivery')" title="Delivery Dispatch">
             <span class="mobile-nav-icon" id="m-icon-delivery"></span>
             <span>Dispatch</span>
         </button>
-        <button class="mobile-nav-item" data-page="mapping" onclick="navigateTo('mapping')">
+        <button class="mobile-nav-item" data-page="mapping" onclick="navigateTo('mapping')" title="SLAM Mapping">
             <span class="mobile-nav-icon" id="m-icon-mapping"></span>
             <span>Mapping</span>
         </button>
-        <button class="mobile-nav-item" data-page="joystick" onclick="navigateTo('joystick')">
+        <button class="mobile-nav-item" data-page="camera" onclick="navigateTo('camera')" title="Optical Camera Stream">
+            <span class="mobile-nav-icon" id="m-icon-camera"></span>
+            <span>Kamera</span>
+        </button>
+        <button class="mobile-nav-item" data-page="joystick" onclick="navigateTo('joystick')" title="Manual Teleop">
             <span class="mobile-nav-icon" id="m-icon-joystick"></span>
             <span>Teleop</span>
+        </button>
+        <button class="mobile-nav-item" data-page="history" onclick="navigateTo('history')" title="Mission Logs">
+            <span class="mobile-nav-icon" id="m-icon-history"></span>
+            <span>Logs</span>
+        </button>
+        <button class="mobile-nav-item" data-page="settings" onclick="navigateTo('settings')" title="System Config">
+            <span class="mobile-nav-icon" id="m-icon-settings"></span>
+            <span>Config</span>
         </button>
     </nav>
 
     <!-- ============ JAVASCRIPT ============ -->
-    <script src="/static/js/icons.js?v=1.5"></script>
-    <script src="/static/js/app.js?v=1.5"></script>
-    <script src="/static/js/map.js?v=1.5"></script>
-    <script src="/static/js/joystick.js?v=1.5"></script>
-    <script src="/static/js/monitoring.js?v=1.5"></script>
+    <script src="/static/js/icons.js?v=1.6"></script>
+    <script src="/static/js/app.js?v=1.6"></script>
+    <script src="/static/js/map.js?v=1.6"></script>
+    <script src="/static/js/joystick.js?v=1.6"></script>
+    <script src="/static/js/monitoring.js?v=1.6"></script>
 </body>
 </html>

@@ -247,8 +247,17 @@ function navigateTo(page) {
     document.querySelectorAll('#app-sidebar .nav-item').forEach(item => {
         item.classList.toggle('active', item.dataset.page === page);
     });
+    const mobileNav = document.getElementById('mobile-nav');
     document.querySelectorAll('#mobile-nav .mobile-nav-item').forEach(item => {
-        item.classList.toggle('active', item.dataset.page === page);
+        const isActive = (item.dataset.page === page);
+        item.classList.toggle('active', isActive);
+        if (isActive && mobileNav) {
+            const itemLeft = item.offsetLeft;
+            const itemWidth = item.offsetWidth;
+            const navWidth = mobileNav.clientWidth;
+            const targetScroll = itemLeft - (navWidth / 2) + (itemWidth / 2);
+            mobileNav.scrollTo({ left: targetScroll, behavior: 'smooth' });
+        }
     });
 
     if (APP.statusPollTimer) {
@@ -3064,7 +3073,9 @@ function populateNavIcons() {
         'm-icon-delivery': 'package',
         'm-icon-mapping': 'map',
         'm-icon-camera': 'video',
-        'm-icon-joystick': 'compass'
+        'm-icon-joystick': 'compass',
+        'm-icon-history': 'clock',
+        'm-icon-settings': 'sliders'
     };
     Object.entries(mobileMap).forEach(([id, icon]) => {
         const el = document.getElementById(id);
