@@ -114,7 +114,7 @@ controller_server:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: False
       min_vel_x: 0.0
-      min_vel_y: 0.45
+      min_vel_y: 0.0
       max_vel_x: 0.45
       max_vel_y: 0.0
       max_vel_theta: 0.80
@@ -268,8 +268,8 @@ planner_server:
     GridBased:
       plugin: "nav2_navfn_planner/NavfnPlanner"
       tolerance: 0.5
-      use_astar: false
-      allow_unknown: false
+      use_astar: true
+      allow_unknown: true
 
 planner_server_rclcpp_node:
   ros__parameters:
