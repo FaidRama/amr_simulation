@@ -117,16 +117,16 @@ controller_server:
       min_vel_y: 0.0
       max_vel_x: 0.38
       max_vel_y: 0.0
-      max_vel_theta: 0.90
+      max_vel_theta: 0.60
       min_speed_xy: 0.0
       max_speed_xy: 0.38
       min_speed_theta: 0.00
       acc_lim_x: 0.7
       acc_lim_y: 0.0
-      acc_lim_theta: 1.5
+      acc_lim_theta: 0.8
       decel_lim_x: -0.8
       decel_lim_y: 0.0
-      decel_lim_theta: -1.5
+      decel_lim_theta: -0.8
       vx_samples: 15
       vy_samples: 1
       vtheta_samples: 20
@@ -148,14 +148,14 @@ controller_server:
           "GoalDist",
         ]
 
-      BaseObstacle.scale: 12.0
-      PathAlign.scale: 4.0
+      BaseObstacle.scale: 5.0
+      PathAlign.scale: 16.0
       PathAlign.forward_point_distance: 0.25
-      PathDist.scale: 6.0
-      GoalDist.scale: 24.0
-      RotateToGoal.scale: 8.0
+      PathDist.scale: 24.0
+      GoalDist.scale: 12.0
+      RotateToGoal.scale: 14.0
       RotateToGoal.slowing_factor: 5.0
-      RotateToGoal.lookahead_time: 10.0
+      RotateToGoal.lookahead_time: -1.0
       Oscillation.scale: 5.0
       Oscillation.oscillation_reset_dist: 0.05
 
@@ -180,7 +180,7 @@ local_costmap:
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.5
+        cost_scaling_factor: 3.0
         inflation_radius: 0.55
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -237,7 +237,7 @@ global_costmap:
         map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.5
+        cost_scaling_factor: 3.0
         inflation_radius: 0.55
       always_send_full_costmap: True
   global_costmap_client:
