@@ -107,8 +107,8 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.30
-      yaw_goal_tolerance: 0.45
+      xy_goal_tolerance: 0.35
+      yaw_goal_tolerance: 0.65
     # DWB parameters
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
@@ -120,7 +120,7 @@ controller_server:
       max_vel_theta: 0.90
       min_speed_xy: 0.0
       max_speed_xy: 0.38
-      min_speed_theta: 0.05
+      min_speed_theta: 0.00
       acc_lim_x: 0.7
       acc_lim_y: 0.0
       acc_lim_theta: 1.5
@@ -135,7 +135,7 @@ controller_server:
       angular_granularity: 0.05
       transform_tolerance: 1.5
       xy_goal_tolerance: 0.25
-      trans_stopped_velocity: 0.08
+      trans_stopped_velocity: 0.05
       short_circuit_trajectory_evaluation: True
       stateful: True
       critics:
@@ -153,9 +153,9 @@ controller_server:
       PathAlign.forward_point_distance: 0.25
       PathDist.scale: 6.0
       GoalDist.scale: 24.0
-      RotateToGoal.scale: 16.0
-      RotateToGoal.slowing_factor: 2.0
-      RotateToGoal.lookahead_time: -1.0
+      RotateToGoal.scale: 8.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: 10.0
       Oscillation.scale: 5.0
       Oscillation.oscillation_reset_dist: 0.05
 
