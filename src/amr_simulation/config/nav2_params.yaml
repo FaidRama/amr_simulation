@@ -148,11 +148,11 @@ controller_server:
           "GoalDist",
         ]
 
-      BaseObstacle.scale: 5.0
+      BaseObstacle.scale: 7.0
       PathAlign.scale: 4.0
       PathAlign.forward_point_distance: 0.40
-      PathDist.scale: 10.0
-      GoalDist.scale: 20.0
+      PathDist.scale: 15.0
+      GoalDist.scale: 15.0
       RotateToGoal.scale: 10.0
       RotateToGoal.slowing_factor: 3.0
       RotateToGoal.lookahead_time: 0.5
