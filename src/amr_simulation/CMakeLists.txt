@@ -39,6 +39,7 @@ install(PROGRAMS
   scripts/hitung_jarak_astar.py
   scripts/camera_publisher.py
   scripts/arduino_bridge.py
+  scripts/rplidar_bridge.py
   scripts/laser_filter_node.py
   scripts/benchmark_skripsi.py
   DESTINATION lib/${PROJECT_NAME}
