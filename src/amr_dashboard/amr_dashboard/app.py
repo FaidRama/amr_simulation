@@ -295,8 +295,10 @@ class DashboardNode(Node):
         self.latest_map_msg = None
         self.delivery_status = {'status': 'idle', 'current_phase': 'idle'}
         self.human_status = 'NO_HUMAN'
+        self.human_state = None            # nilai dari /human_state (NORMAL, REDUCED_SPEED, SAFE_STOP)
         self.human_info = None            # dict JSON dari /human_info (detail deteksi)
         self.last_human_status_time = 0.0  # waktu terakhir /human_status diterima
+        self.last_human_state_time = 0.0   # waktu terakhir /human_state diterima
         self.last_human_info_time = 0.0    # waktu terakhir /human_info diterima
         self.latest_frame = None  # JPEG bytes terakhir dari kamera
         self.cmd_vel_current = {'linear': 0.0, 'angular': 0.0}
@@ -341,13 +343,11 @@ class DashboardNode(Node):
         self.status_sub = self.create_subscription(
             String, '/amr/delivery_status', self.on_delivery_status, 10)
         
-        # Status human awareness.
-        # CATATAN: /human_state TIDAK lagi di-subscribe ke variabel yang sama dengan
-        # /human_status. Node mengirim keduanya tiap frame (saat tidak ada orang:
-        # /human_state=NORMAL, /human_status=NO_HUMAN), sehingga nilai yang tampil
-        # bergantung siapa yang datang terakhir (race condition).
+        # Status human awareness (/human_state, /human_status, dan /human_info)
         self.human_sub = self.create_subscription(
             String, '/human_status', self.on_human_status, 10)
+        self.human_state_sub = self.create_subscription(
+            String, '/human_state', self.on_human_state, 10)
         # Detail deteksi (JSON) untuk keterangan di bawah frame kamera
         self.human_info_sub = self.create_subscription(
             String, '/human_info', self.on_human_info, 10)
@@ -562,6 +562,12 @@ class DashboardNode(Node):
         with self.lock:
             self.human_status = msg.data
             self.last_human_status_time = time.time()
+
+    def on_human_state(self, msg):
+        """Callback state human awareness (/human_state)."""
+        with self.lock:
+            self.human_state = msg.data
+            self.last_human_state_time = time.time()
 
     def on_human_info(self, msg):
         """Callback detail deteksi human awareness (/human_info, JSON)."""
@@ -1105,6 +1111,8 @@ def api_status():
                       now_h - ros_node.last_human_info_time <= HUMAN_STALE_SEC)
         status_fresh = (ros_node.last_human_status_time > 0 and
                         now_h - ros_node.last_human_status_time <= HUMAN_STALE_SEC)
+        state_fresh = (ros_node.last_human_state_time > 0 and
+                       now_h - ros_node.last_human_state_time <= HUMAN_STALE_SEC)
         if info_fresh:
             # Sumber utama: state FSM dari /human_info. NO_HUMAN hanya jika FSM sudah
             # NORMAL dan tidak ada orang (selama FSM masih REDUCED_SPEED/SAFE_STOP
@@ -1116,6 +1124,10 @@ def api_status():
         elif status_fresh:
             human_info = None
             human_status = ros_node.human_status
+        elif state_fresh:
+            human_info = None
+            st = ros_node.human_state
+            human_status = 'NO_HUMAN' if st == 'NORMAL' else st
         else:
             human_info = None
             human_status = 'NODE_OFFLINE'
