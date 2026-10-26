@@ -29,6 +29,9 @@ class LaserFilterNode(Node):
         )
 
     def scan_callback(self, msg: LaserScan):
+        # 1. TAMBAHKAN BARIS INI: Paksa sinkronisasi waktu laser dengan waktu Jetson
+        msg.header.stamp = self.get_clock().now().to_msg()
+        
         # Update range_min agar node SLAM / Costmap otomatis mengabaikan objek di bawah threshold
         msg.range_min = max(msg.range_min, self.min_range)
 
