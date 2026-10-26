@@ -35,7 +35,7 @@ amcl:
     save_pose_rate: 0.5
     sigma_hit: 0.15
     tf_broadcast: true
-    transform_tolerance: 1.0
+    transform_tolerance: 1.5
     update_min_a: 0.05
     update_min_d: 0.05
     z_hit: 0.8
@@ -107,8 +107,8 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.35
+      xy_goal_tolerance: 0.35
+      yaw_goal_tolerance: 0.65
     # DWB parameters
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
@@ -117,25 +117,25 @@ controller_server:
       min_vel_y: 0.0
       max_vel_x: 0.38
       max_vel_y: 0.0
-      max_vel_theta: 0.90
+      max_vel_theta: 0.60
       min_speed_xy: 0.0
       max_speed_xy: 0.38
-      min_speed_theta: 0.05
+      min_speed_theta: 0.00
       acc_lim_x: 0.7
       acc_lim_y: 0.0
-      acc_lim_theta: 1.5
+      acc_lim_theta: 0.8
       decel_lim_x: -0.8
       decel_lim_y: 0.0
-      decel_lim_theta: -1.5
+      decel_lim_theta: -0.8
       vx_samples: 15
       vy_samples: 1
-      vtheta_samples: 5
-      sim_time: 2.2
+      vtheta_samples: 20
+      sim_time: 1.5
       linear_granularity: 0.05
       angular_granularity: 0.05
-      transform_tolerance: 1.0
+      transform_tolerance: 1.5
       xy_goal_tolerance: 0.25
-      trans_stopped_velocity: 0.08
+      trans_stopped_velocity: 0.05
       short_circuit_trajectory_evaluation: True
       stateful: True
       critics:
@@ -148,13 +148,13 @@ controller_server:
           "GoalDist",
         ]
 
-      BaseObstacle.scale: 12.0
-      PathAlign.scale: 4.0
+      BaseObstacle.scale: 5.0
+      PathAlign.scale: 16.0
       PathAlign.forward_point_distance: 0.25
-      PathDist.scale: 6.0
-      GoalDist.scale: 24.0
-      RotateToGoal.scale: 16.0
-      RotateToGoal.slowing_factor: 2.0
+      PathDist.scale: 24.0
+      GoalDist.scale: 12.0
+      RotateToGoal.scale: 14.0
+      RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0
       Oscillation.scale: 5.0
       Oscillation.oscillation_reset_dist: 0.05
@@ -171,16 +171,17 @@ local_costmap:
       global_frame: odom
       robot_base_frame: base_footprint
       use_sim_time: False
+      transform_tolerance: 1.5
       rolling_window: true
       width: 3
       height: 3
       resolution: 0.05
-      robot_radius: 0.26
+      robot_radius: 0.30
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.60
+        inflation_radius: 0.55
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -212,7 +213,8 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_footprint
       use_sim_time: False
-      robot_radius: 0.26
+      transform_tolerance: 1.5
+      robot_radius: 0.30
       resolution: 0.05
       track_unknown_space: false
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
@@ -235,8 +237,8 @@ global_costmap:
         map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
-        inflation_radius: 0.42
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.55
       always_send_full_costmap: True
   global_costmap_client:
     ros__parameters:
