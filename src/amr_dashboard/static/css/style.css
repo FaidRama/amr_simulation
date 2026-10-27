@@ -2695,35 +2695,67 @@ select.input-field {
     bottom: 0;
     left: 0;
     right: 0;
-    height: 56px;
+    width: 100vw;
+    box-sizing: border-box;
+    height: 58px;
     background: var(--bg-topbar);
     backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
     border-top: 1px solid var(--border);
-    z-index: 100;
+    z-index: 1000;
     align-items: center;
-    justify-content: space-around;
-    padding: 0 4px;
+    justify-content: flex-start;
+    padding: 0 10px;
+    gap: 6px;
+    overflow-x: scroll !important;
+    overflow-y: hidden !important;
+    white-space: nowrap !important;
+    -webkit-overflow-scrolling: touch !important;
+    touch-action: pan-x !important;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+#mobile-nav::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
 }
 
 .mobile-nav-item {
     background: transparent;
     border: none;
     color: var(--text-muted);
-    display: flex;
+    display: inline-flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    font-size: 0.64rem;
+    flex: 0 0 72px !important;
+    width: 72px !important;
+    min-width: 72px !important;
+    max-width: 72px !important;
+    flex-shrink: 0 !important;
+    font-size: 0.65rem;
     font-weight: 600;
     gap: 3px;
     cursor: pointer;
-    padding: 6px 10px;
+    padding: 6px 4px;
     border-radius: var(--radius-xs);
     transition: var(--transition);
+    white-space: nowrap;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-nav-item:active {
+    transform: scale(0.95);
 }
 
 .mobile-nav-item.active {
     color: var(--accent-bright);
+    background: rgba(56, 189, 248, 0.08);
 }
 
 /* === UTILITY === */
@@ -2846,7 +2878,10 @@ select.input-field {
     }
 
     #mobile-nav {
-        display: flex;
+        display: flex !important;
+        overflow-x: scroll !important;
+        -webkit-overflow-scrolling: touch !important;
+        touch-action: pan-x !important;
     }
 
     #toast-container {

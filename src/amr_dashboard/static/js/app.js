@@ -247,8 +247,17 @@ function navigateTo(page) {
     document.querySelectorAll('#app-sidebar .nav-item').forEach(item => {
         item.classList.toggle('active', item.dataset.page === page);
     });
+    const mobileNav = document.getElementById('mobile-nav');
     document.querySelectorAll('#mobile-nav .mobile-nav-item').forEach(item => {
-        item.classList.toggle('active', item.dataset.page === page);
+        const isActive = (item.dataset.page === page);
+        item.classList.toggle('active', isActive);
+        if (isActive && mobileNav) {
+            const itemLeft = item.offsetLeft;
+            const itemWidth = item.offsetWidth;
+            const navWidth = mobileNav.clientWidth;
+            const targetScroll = itemLeft - (navWidth / 2) + (itemWidth / 2);
+            mobileNav.scrollTo({ left: targetScroll, behavior: 'smooth' });
+        }
     });
 
     if (APP.statusPollTimer) {
@@ -3064,11 +3073,56 @@ function populateNavIcons() {
         'm-icon-delivery': 'package',
         'm-icon-mapping': 'map',
         'm-icon-camera': 'video',
-        'm-icon-joystick': 'compass'
+        'm-icon-joystick': 'compass',
+        'm-icon-history': 'clock',
+        'm-icon-settings': 'sliders'
     };
     Object.entries(mobileMap).forEach(([id, icon]) => {
         const el = document.getElementById(id);
         if (el) el.innerHTML = getIcon(icon, 18);
+    });
+}
+
+function initMobileNavScroll() {
+    const nav = document.getElementById('mobile-nav');
+    if (!nav) return;
+
+    let isDown = false;
+    let startX = 0;
+    let scrollLeft = 0;
+    let hasDragged = false;
+
+    nav.addEventListener('pointerdown', (e) => {
+        isDown = true;
+        hasDragged = false;
+        startX = e.pageX - nav.offsetLeft;
+        scrollLeft = nav.scrollLeft;
+    });
+
+    const stopDrag = () => {
+        isDown = false;
+    };
+
+    window.addEventListener('pointerup', stopDrag);
+    window.addEventListener('pointercancel', stopDrag);
+
+    nav.addEventListener('pointermove', (e) => {
+        if (!isDown) return;
+        const x = e.pageX - nav.offsetLeft;
+        const walk = (x - startX);
+        if (Math.abs(walk) > 4) {
+            hasDragged = true;
+        }
+        nav.scrollLeft = scrollLeft - walk;
+    });
+
+    nav.querySelectorAll('.mobile-nav-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+            if (hasDragged) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        }, true);
     });
 }
 
@@ -3370,6 +3424,7 @@ async function executeVoiceCommand(text) {
 // ====================== INIT ======================
 async function init() {
     populateNavIcons();
+    initMobileNavScroll();
     startLiveClock();
     applyTheme(getTheme(), true);
 
