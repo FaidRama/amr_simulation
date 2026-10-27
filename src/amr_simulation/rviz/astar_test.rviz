@@ -129,9 +129,9 @@ Visualization Manager:
       Name: LaserScan
       Position Transformer: XYZ
       Selectable: true
-      Size (Pixels): 3
-      Size (m): 0.009999999776482582
-      Style: Flat Squares
+      Size (Pixels): 6
+      Size (m): 0.05
+      Style: Points
       Topic:
         Depth: 5
         Durability Policy: Volatile
