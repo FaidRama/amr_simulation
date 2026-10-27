@@ -17,9 +17,9 @@ class AdaptiveVelocityNode(Node):
         super().__init__('adaptive_velocity_node')
 
         # Parameter Kecepatan Adaptif
-        self.declare_parameter('normal_max_linear', 0.45)
-        self.declare_parameter('reduced_max_linear', 0.18)
-        self.declare_parameter('reduced_max_angular', 0.80)
+        self.declare_parameter('normal_max_linear', 0.35)
+        self.declare_parameter('reduced_max_linear', 0.15)
+        self.declare_parameter('reduced_max_angular', 0.45)
 
         self.current_state = "NORMAL"
 
