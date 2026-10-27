@@ -184,6 +184,41 @@ function drawMap(canvas, ctx, options = {}) {
         });
     }
 
+    // Record & Draw Robot Trajectory Trail
+    if (showRobot && typeof recordRobotTrailPoint === 'function') {
+        recordRobotTrailPoint(APP.pose.x || 0, APP.pose.y || 0);
+        if (MAP_STATE.robotTrail.length > 1) {
+            ctx.save();
+            ctx.beginPath();
+            MAP_STATE.robotTrail.forEach((pt, idx) => {
+                const { px, py } = worldToPixel(pt.x, pt.y);
+                if (idx === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            });
+            ctx.strokeStyle = 'rgba(16, 185, 129, 0.75)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.restore();
+        }
+    }
+
+    // Draw Active Nav2 Navigation Planned Path (/plan)
+    if (APP.navPath && APP.navPath.length > 1) {
+        ctx.save();
+        ctx.beginPath();
+        APP.navPath.forEach((pt, idx) => {
+            const { px, py } = worldToPixel(pt.x, pt.y);
+            if (idx === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+        });
+        ctx.strokeStyle = '#06b6d4'; // Cyan neon navigation path
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([5, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+    }
+
     // Draw robot position & orientation
     if (showRobot) {
         const { px, py } = worldToPixel(APP.pose.x, APP.pose.y);
