@@ -100,7 +100,7 @@ def generate_launch_description():
             'wheel_separation': 0.458,
             'ticks_per_rev': 350.7,
             'odom_frame': 'odom',
-            'base_frame': 'base_link',
+            'base_frame': 'base_footprint',
             'publish_tf': True
         }],
         respawn=True,
@@ -109,16 +109,16 @@ def generate_launch_description():
     )
 
     # 4. Static Transforms
-    tf_base_to_laser = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        arguments=['0', '0', '0', '3.14159', '0', '0', 'base_link', 'laser']
-    )
-
     tf_base_to_footprint = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
+    )
+
+    tf_footprint_to_base = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['0', '0', '0', '0', '0', '0', 'base_footprint', 'base_link']
     )
 
     #tf_odom_to_base = Node(
@@ -180,9 +180,8 @@ def generate_launch_description():
         start_rplidar,
         start_laser_filter,
         start_arduino_bridge,
+        tf_footprint_to_base,
         tf_base_to_laser,
-        tf_base_to_footprint,
-        # tf_odom_to_base,
         delayed_nav2_and_adaptor,
         start_rviz2
     ])
