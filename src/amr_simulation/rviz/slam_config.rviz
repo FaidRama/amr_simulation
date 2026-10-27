@@ -118,7 +118,7 @@ Visualization Manager:
       Name: LaserScan
       Position Transformer: XYZ
       Selectable: false
-      Size (Pixels): 6
+      Size (Pixels): 3
       Size (m): 0.05
       Style: Points
       Topic:
