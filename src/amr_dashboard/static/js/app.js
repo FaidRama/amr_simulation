@@ -2963,6 +2963,7 @@ async function globalStatusPoll() {
         APP.delivery = data.delivery || APP.delivery;
         APP.humanStatus = data.human_status || 'NO_HUMAN';
         APP.hasLiveMap = !!data.has_live_map;
+        APP.navPath = data.nav_path || [];
 
         if (data.mode && data.mode !== APP.mode) {
             APP.mode = data.mode;
@@ -3450,7 +3451,18 @@ async function init() {
     navigateTo('home');
 
     globalStatusPoll();
-    setInterval(globalStatusPoll, 1000);
+    APP._lastPollTime = 0;
+    setInterval(() => {
+        const isMapPage = ['delivery', 'monitoring', 'mapping', 'joystick'].includes(APP.currentPage);
+        const isRunning = APP.delivery && APP.delivery.status === 'running';
+        const now = Date.now();
+        // 250ms saat di halaman peta atau navigasi sedang berjalan, 1000ms saat di halaman lain
+        const interval = (isMapPage || isRunning) ? 250 : 1000;
+        if (now - APP._lastPollTime >= interval) {
+            APP._lastPollTime = now;
+            globalStatusPoll();
+        }
+    }, 100);
 }
 
 document.addEventListener('DOMContentLoaded', init);

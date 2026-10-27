@@ -25,10 +25,11 @@ from io import BytesIO
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.duration import Duration
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from sensor_msgs.msg import Image, CompressedImage
 from std_msgs.msg import String
-from nav_msgs.msg import OccupancyGrid, Odometry
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
 import numpy as np
 
 try:
@@ -305,6 +306,10 @@ class DashboardNode(Node):
         self.odom_speed = {'linear': 0.0, 'angular': 0.0}
         self.last_status_time = 0.0  # Waktu terakhir status diterima
         self._history_saved_ids = set()  # Track misi yang sudah disimpan ke history
+        self.nav_path = []  # List titik jalur navigasi global dari /plan Nav2
+        self.last_path_time = 0.0
+        self.last_odom_pose = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+        self.odom_to_map_offset = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
         
         # === TF2 LISTENER (Real-time map -> base_link seperti RViz) ===
         if HAS_TF2:
@@ -313,6 +318,10 @@ class DashboardNode(Node):
             self.tf_pose_timer = self.create_timer(0.1, self.update_tf_pose)
         
         # === SUBSCRIBERS ===
+        # Nav2 Global Planned Path (/plan)
+        self.plan_sub = self.create_subscription(
+            Path, '/plan', self.on_plan, 10)
+
         # Posisi AMR dari AMCL (mendukung TRANSIENT_LOCAL latched & VOLATILE)
         amcl_qos_tl = QoSProfile(
             depth=1,
@@ -389,34 +398,63 @@ class DashboardNode(Node):
         
         self.get_logger().info('Dashboard Server Node AKTIF')
     
+    def on_plan(self, msg):
+        """Callback jalur navigasi global Nav2 (/plan)."""
+        pts = []
+        n = len(msg.poses)
+        if n > 0:
+            step = max(1, n // 100)
+            for i in range(0, n, step):
+                p = msg.poses[i].pose.position
+                pts.append({'x': round(float(p.x), 3), 'y': round(float(p.y), 3)})
+            last_p = msg.poses[-1].pose.position
+            if not pts or pts[-1]['x'] != round(float(last_p.x), 3) or pts[-1]['y'] != round(float(last_p.y), 3):
+                pts.append({'x': round(float(last_p.x), 3), 'y': round(float(last_p.y), 3)})
+
+        with self.lock:
+            self.nav_path = pts
+            self.last_path_time = time.time()
+
     def update_tf_pose(self):
-        """Ambil posisi robot real-time dari TF tree (map -> base_link) persis seperti RViz."""
+        """Ambil posisi robot real-time dari TF tree (map -> base_footprint / base_link) persis seperti RViz."""
         if not HAS_TF2:
             return
-        for child_frame in ('base_link', 'base_footprint'):
+        for child_frame in ('base_footprint', 'base_link'):
             try:
-                if self.tf_buffer.can_transform('map', child_frame, rclpy.time.Time()):
-                    t = self.tf_buffer.lookup_transform('map', child_frame, rclpy.time.Time())
-                    tr = t.transform.translation
-                    q = t.transform.rotation
-                    siny = 2.0 * (q.w * q.z + q.x * q.y)
-                    cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-                    yaw = math.atan2(siny, cosy)
-                    with self.lock:
-                        self.last_tf_time = time.time()
-                        self.has_map_pose = True
-                        self.pose_source = 'TF_MAP'
-                        self.robot_pose = {
-                            'x': round(float(tr.x), 3),
-                            'y': round(float(tr.y), 3),
-                            'yaw': round(float(yaw), 3)
-                        }
-                    return
+                t = self.tf_buffer.lookup_transform(
+                    'map', child_frame,
+                    rclpy.time.Time(),
+                    timeout=Duration(seconds=0.04)
+                )
+                tr = t.transform.translation
+                q = t.transform.rotation
+                siny = 2.0 * (q.w * q.z + q.x * q.y)
+                cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+                yaw = math.atan2(siny, cosy)
+                with self.lock:
+                    self.last_tf_time = time.time()
+                    self.has_map_pose = True
+                    self.pose_source = 'TF_MAP'
+                    self.robot_pose = {
+                        'x': round(float(tr.x), 3),
+                        'y': round(float(tr.y), 3),
+                        'yaw': round(float(yaw), 3)
+                    }
+                    # Update offset odom -> map agar fallback odometry selalu tersinkronisasi
+                    ox = self.last_odom_pose['x']
+                    oy = self.last_odom_pose['y']
+                    oyaw = self.last_odom_pose['yaw']
+                    self.odom_to_map_offset = {
+                        'x': float(tr.x) - ox,
+                        'y': float(tr.y) - oy,
+                        'yaw': yaw - oyaw
+                    }
+                return
             except Exception:
                 pass
 
     def on_pose(self, msg):
-        """Callback posisi AMR dari AMCL."""
+        """Callback posisi AMR dari AMCL (/amcl_pose)."""
         p = msg.pose.pose
         q = p.orientation
         siny = 2.0 * (q.w * q.z + q.x * q.y)
@@ -432,6 +470,14 @@ class DashboardNode(Node):
                 'y': round(p.position.y, 3),
                 'yaw': round(yaw, 3)
             }
+            ox = self.last_odom_pose['x']
+            oy = self.last_odom_pose['y']
+            oyaw = self.last_odom_pose['yaw']
+            self.odom_to_map_offset = {
+                'x': float(p.position.x) - ox,
+                'y': float(p.position.y) - oy,
+                'yaw': yaw - oyaw
+            }
 
     def on_cmd_vel_listen(self, msg):
         """Callback monitor kecepatan perintah robot."""
@@ -442,12 +488,13 @@ class DashboardNode(Node):
             }
 
     def on_odom(self, msg):
-        """Callback monitor kecepatan aktual & fallback posisi odometry robot."""
+        """Callback monitor kecepatan aktual & fallback posisi odometry robot (50Hz)."""
         p = msg.pose.pose
         q = p.orientation
         siny = 2.0 * (q.w * q.z + q.x * q.y)
         cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         yaw = math.atan2(siny, cosy)
+        now = time.time()
         with self.lock:
             lin = math.hypot(msg.twist.twist.linear.x, msg.twist.twist.linear.y)
             ang = msg.twist.twist.angular.z
@@ -455,13 +502,21 @@ class DashboardNode(Node):
                 'linear': round(lin, 3),
                 'angular': round(ang, 3)
             }
-            # HANYA gunakan posisi Odometry jika lokalisasi peta (TF_MAP / AMCL) belum pernah aktif
-            if not self.has_map_pose:
-                self.pose_source = 'ODOM'
+            self.last_odom_pose = {
+                'x': float(p.position.x),
+                'y': float(p.position.y),
+                'yaw': float(yaw)
+            }
+            # Jika TF_MAP dan AMCL tidak update selama > 0.6 detik (atau belum pernah ada map pose)
+            # gunakan Odometry terfusi agar pergerakan robot pada peta dashboard TIDAK PERNAH DIAM!
+            tf_stale = (now - self.last_tf_time > 0.6) and (now - self.last_amcl_time > 0.6)
+            if not self.has_map_pose or tf_stale:
+                off = getattr(self, 'odom_to_map_offset', {'x': 0.0, 'y': 0.0, 'yaw': 0.0})
+                self.pose_source = 'ODOM_FUSED' if self.has_map_pose else 'ODOM'
                 self.robot_pose = {
-                    'x': round(p.position.x, 3),
-                    'y': round(p.position.y, 3),
-                    'yaw': round(yaw, 3)
+                    'x': round(p.position.x + off['x'], 3),
+                    'y': round(p.position.y + off['y'], 3),
+                    'yaw': round(yaw + off['yaw'], 3)
                 }
 
     def on_map_grid(self, msg):
@@ -1144,6 +1199,7 @@ def api_status():
             'mode': waypoints_config.get('operation_mode', 'real'),
             'map_file': ACTIVE_MAP_FILE,
             'has_live_map': ros_node.live_map_png is not None,
+            'nav_path': getattr(ros_node, 'nav_path', []),
             'connected': True,
             'timestamp': time.time()
         })
