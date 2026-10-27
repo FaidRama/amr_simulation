@@ -44,8 +44,8 @@ const float WHEEL_BASE_B   = 0.458; // meter (45.8 cm sesuai Proposal Skripsi)
 const float CPR_WHEEL      = 350.7; // Ticks per revolusi PG36 (7 PPR * 50.1 gearbox)
 
 // ====================== 4. PARAMETER KENDALI PID-PSO =====================
-const float KP_L = 0.8624, KI_L = 20.5540, KD_L = 0.0000;
-const float KP_R = 0.7037, KI_R = 22.4384, KD_R = 0.0000;
+const float KP_L =  0.9531, KI_L = 21.0829, KD_L = 0.0000;
+const float KP_R = 0.7861, KI_R = 23.2146, KD_R = 0.0000;
 
 const unsigned long SAMPLING_MS = 50; 
 const float DT = SAMPLING_MS / 1000.0; // 0.05 s (20 Hz)
