@@ -109,16 +109,16 @@ def generate_launch_description():
     )
 
     # 4. Static Transforms
-    tf_base_to_footprint = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
-    )
-
     tf_footprint_to_base = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         arguments=['0', '0', '0', '0', '0', '0', 'base_footprint', 'base_link']
+    )
+
+    tf_base_to_laser = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['0', '0', '0', '3.14159', '0', '0', 'base_link', 'laser']
     )
 
     #tf_odom_to_base = Node(
