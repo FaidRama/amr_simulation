@@ -48,7 +48,7 @@ class BenchmarkSkripsiNode(Node):
 
         # Parameter Fisik AMR-01 Sesuai Proposal Skripsi
         self.wheel_diameter = 0.127       # D = 0.127 m (5 inch)
-        self.wheel_separation = 0.458     # B = 0.458 m (jarak antar roda)
+        self.wheel_separation = 0.492     # B = 0.458 m (jarak antar roda)
 
         # Publishers & Subscribers (Depth 10)
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
@@ -402,21 +402,23 @@ class BenchmarkSkripsiNode(Node):
                 t_now = time.time() - start_time
                 log_data.append({
                     'time': t_now,
-                    'yaw_accum_deg': math.degrees(accumulated_yaw),
+                    'yaw_accum_deg': math.degrees(abs(accumulated_yaw)),
                     'target_deg': target_deg
                 })
 
-                remaining = abs(target_rad - abs(accumulated_yaw))
-                if remaining <= math.radians(0.8):
+                # Sisa sudut putaran: Begitu mencapai atau melewati target, LANGSUNG BERHENTI!
+                remaining = target_rad - abs(accumulated_yaw)
+                if remaining <= 0.0:
                     break
 
+                # Perlambat di 15 derajat terakhir agar berhenti presisi di 90°
                 if remaining < math.radians(15.0):
                     w_cmd = max(0.12, rot_speed * (remaining / math.radians(15.0)))
                 else:
                     w_cmd = rot_speed
 
                 self.send_cmd(0.0, w_cmd)
-                sys.stdout.write(f"\r[*] Akumulasi Putaran Odom: {math.degrees(accumulated_yaw):6.2f}° / {target_deg:.0f}°")
+                sys.stdout.write(f"\r[*] Akumulasi Putaran Odom: {math.degrees(abs(accumulated_yaw)):6.2f}° / {target_deg:.0f}°")
                 sys.stdout.flush()
 
         except KeyboardInterrupt:
