@@ -2695,21 +2695,23 @@ select.input-field {
     bottom: 0;
     left: 0;
     right: 0;
+    width: 100vw;
+    box-sizing: border-box;
     height: 58px;
     background: var(--bg-topbar);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     border-top: 1px solid var(--border);
-    z-index: 100;
+    z-index: 1000;
     align-items: center;
     justify-content: flex-start;
     padding: 0 10px;
-    gap: 4px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    white-space: nowrap;
-    -webkit-overflow-scrolling: touch;
-    touch-action: pan-x;
+    gap: 6px;
+    overflow-x: scroll !important;
+    overflow-y: hidden !important;
+    white-space: nowrap !important;
+    -webkit-overflow-scrolling: touch !important;
+    touch-action: pan-x !important;
     overscroll-behavior-x: contain;
     scrollbar-width: none;
     -ms-overflow-style: none;
@@ -2717,6 +2719,8 @@ select.input-field {
 
 #mobile-nav::-webkit-scrollbar {
     display: none;
+    width: 0;
+    height: 0;
 }
 
 .mobile-nav-item {
@@ -2727,13 +2731,16 @@ select.input-field {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    flex: 0 0 auto;
-    min-width: 66px;
+    flex: 0 0 72px !important;
+    width: 72px !important;
+    min-width: 72px !important;
+    max-width: 72px !important;
+    flex-shrink: 0 !important;
     font-size: 0.65rem;
     font-weight: 600;
     gap: 3px;
     cursor: pointer;
-    padding: 6px 8px;
+    padding: 6px 4px;
     border-radius: var(--radius-xs);
     transition: var(--transition);
     white-space: nowrap;
@@ -2871,7 +2878,10 @@ select.input-field {
     }
 
     #mobile-nav {
-        display: flex;
+        display: flex !important;
+        overflow-x: scroll !important;
+        -webkit-overflow-scrolling: touch !important;
+        touch-action: pan-x !important;
     }
 
     #toast-container {

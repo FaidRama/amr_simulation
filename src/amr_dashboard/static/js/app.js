@@ -3083,6 +3083,49 @@ function populateNavIcons() {
     });
 }
 
+function initMobileNavScroll() {
+    const nav = document.getElementById('mobile-nav');
+    if (!nav) return;
+
+    let isDown = false;
+    let startX = 0;
+    let scrollLeft = 0;
+    let hasDragged = false;
+
+    nav.addEventListener('pointerdown', (e) => {
+        isDown = true;
+        hasDragged = false;
+        startX = e.pageX - nav.offsetLeft;
+        scrollLeft = nav.scrollLeft;
+    });
+
+    const stopDrag = () => {
+        isDown = false;
+    };
+
+    window.addEventListener('pointerup', stopDrag);
+    window.addEventListener('pointercancel', stopDrag);
+
+    nav.addEventListener('pointermove', (e) => {
+        if (!isDown) return;
+        const x = e.pageX - nav.offsetLeft;
+        const walk = (x - startX);
+        if (Math.abs(walk) > 4) {
+            hasDragged = true;
+        }
+        nav.scrollLeft = scrollLeft - walk;
+    });
+
+    nav.querySelectorAll('.mobile-nav-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+            if (hasDragged) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        }, true);
+    });
+}
+
 function startLiveClock() {
     const clockEl = document.getElementById('live-clock');
     if (!clockEl) return;
@@ -3381,6 +3424,7 @@ async function executeVoiceCommand(text) {
 // ====================== INIT ======================
 async function init() {
     populateNavIcons();
+    initMobileNavScroll();
     startLiveClock();
     applyTheme(getTheme(), true);
 
