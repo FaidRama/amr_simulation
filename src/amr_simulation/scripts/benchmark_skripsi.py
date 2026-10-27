@@ -48,7 +48,7 @@ class BenchmarkSkripsiNode(Node):
 
         # Parameter Fisik AMR-01 Sesuai Proposal Skripsi
         self.wheel_diameter = 0.127       # D = 0.127 m (5 inch)
-        self.wheel_separation = 0.492     # B = 0.458 m (jarak antar roda)
+        self.wheel_separation = 0.458     # B = 0.458 m (jarak antar roda)
 
         # Publishers & Subscribers (Depth 10)
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
