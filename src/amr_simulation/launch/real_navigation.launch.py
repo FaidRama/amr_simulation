@@ -12,7 +12,7 @@ def generate_launch_description():
     pkg_amr = get_package_share_directory('amr_simulation')
     pkg_nav2 = get_package_share_directory('nav2_bringup')
 
-    default_map_path = os.path.join(pkg_amr, 'maps', 'peta_1b.yaml')
+    default_map_path = os.path.join(pkg_amr, 'maps', 'peta_l1_ddc.yaml')
     src_params_path = os.path.join(os.getcwd(), 'src', 'amr_simulation', 'config', 'nav2_params.yaml')
     default_params_path = src_params_path if os.path.exists(src_params_path) else os.path.join(pkg_amr, 'config', 'nav2_params.yaml')
     default_rviz_config = os.path.join(pkg_amr, 'rviz', 'slam_config.rviz')
@@ -100,7 +100,7 @@ def generate_launch_description():
             'wheel_separation': 0.458,
             'ticks_per_rev': 350.7,
             'odom_frame': 'odom',
-            'base_frame': 'base_footprint',
+            'base_frame': 'base_link',
             'publish_tf': True
         }],
         respawn=True,
@@ -109,16 +109,16 @@ def generate_launch_description():
     )
 
     # 4. Static Transforms
-    tf_footprint_to_base = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        arguments=['0', '0', '0', '0', '0', '0', 'base_footprint', 'base_link']
-    )
-
     tf_base_to_laser = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         arguments=['0', '0', '0', '3.14159', '0', '0', 'base_link', 'laser']
+    )
+
+    tf_base_to_footprint = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
     )
 
     #tf_odom_to_base = Node(
@@ -180,8 +180,9 @@ def generate_launch_description():
         start_rplidar,
         start_laser_filter,
         start_arduino_bridge,
-        tf_footprint_to_base,
         tf_base_to_laser,
+        tf_base_to_footprint,
+        # tf_odom_to_base,
         delayed_nav2_and_adaptor,
         start_rviz2
     ])
