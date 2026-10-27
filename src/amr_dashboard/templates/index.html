@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/style.css?v=1.4">
+    <link rel="stylesheet" href="/static/css/style.css?v=1.5">
     <script>
         (function() {
             const saved = localStorage.getItem('amr_theme') || 'nordic-slate';
@@ -44,27 +44,32 @@
                 <span class="nav-label">Dispatch</span>
                 <span class="nav-kbd">03</span>
             </button>
+            <button class="nav-item" data-page="mapping" onclick="navigateTo('mapping')" title="SLAM Mapping Studio">
+                <span class="nav-icon" id="s-icon-mapping"></span>
+                <span class="nav-label">SLAM Mapping</span>
+                <span class="nav-kbd">04</span>
+            </button>
 
             <div class="sidebar-group-label sidebar-group-spaced">OPERATIONS</div>
             <button class="nav-item" data-page="camera" onclick="navigateTo('camera')" title="Optical Camera Stream">
                 <span class="nav-icon" id="s-icon-camera"></span>
                 <span class="nav-label">Optical Cam</span>
-                <span class="nav-kbd">04</span>
+                <span class="nav-kbd">05</span>
             </button>
             <button class="nav-item" data-page="joystick" onclick="navigateTo('joystick')" title="Manual Teleop">
                 <span class="nav-icon" id="s-icon-joystick"></span>
                 <span class="nav-label">Teleop</span>
-                <span class="nav-kbd">05</span>
+                <span class="nav-kbd">06</span>
             </button>
             <button class="nav-item" data-page="history" onclick="navigateTo('history')" title="Mission Logs">
                 <span class="nav-icon" id="s-icon-history"></span>
                 <span class="nav-label">Logs</span>
-                <span class="nav-kbd">06</span>
+                <span class="nav-kbd">07</span>
             </button>
             <button class="nav-item" data-page="settings" onclick="navigateTo('settings')" title="System Config">
                 <span class="nav-icon" id="s-icon-settings"></span>
                 <span class="nav-label">Config</span>
-                <span class="nav-kbd">07</span>
+                <span class="nav-kbd">08</span>
             </button>
         </nav>
 
@@ -236,9 +241,9 @@
             <span class="mobile-nav-icon" id="m-icon-delivery"></span>
             <span>Dispatch</span>
         </button>
-        <button class="mobile-nav-item" data-page="camera" onclick="navigateTo('camera')">
-            <span class="mobile-nav-icon" id="m-icon-camera"></span>
-            <span>Kamera</span>
+        <button class="mobile-nav-item" data-page="mapping" onclick="navigateTo('mapping')">
+            <span class="mobile-nav-icon" id="m-icon-mapping"></span>
+            <span>Mapping</span>
         </button>
         <button class="mobile-nav-item" data-page="joystick" onclick="navigateTo('joystick')">
             <span class="mobile-nav-icon" id="m-icon-joystick"></span>
@@ -247,10 +252,10 @@
     </nav>
 
     <!-- ============ JAVASCRIPT ============ -->
-    <script src="/static/js/icons.js?v=1.4"></script>
-    <script src="/static/js/app.js?v=1.4"></script>
-    <script src="/static/js/map.js?v=1.4"></script>
-    <script src="/static/js/joystick.js?v=1.4"></script>
-    <script src="/static/js/monitoring.js?v=1.4"></script>
+    <script src="/static/js/icons.js?v=1.5"></script>
+    <script src="/static/js/app.js?v=1.5"></script>
+    <script src="/static/js/map.js?v=1.5"></script>
+    <script src="/static/js/joystick.js?v=1.5"></script>
+    <script src="/static/js/monitoring.js?v=1.5"></script>
 </body>
 </html>

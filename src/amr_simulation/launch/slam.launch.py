@@ -13,7 +13,7 @@ def generate_launch_description():
         name='scan_to_scan_filter_chain',
         parameters=[
             os.path.join(get_package_share_directory('amr_simulation'), 'config', 'laser_filter_config.yaml'),
-            {'use_sim_time': True}
+            {'use_sim_time': False}
         ],
         remappings=[
             ('scan', '/scan'),                # Sedot laser asli dari Gazebo
@@ -36,7 +36,7 @@ def generate_launch_description():
         parameters=[
             slam_config_path,
             {
-                'use_sim_time': True,
+                'use_sim_time': False,
                 'base_frame': 'base_link',
                 'odom_frame': 'odom',
                 'map_frame': 'map',
@@ -56,7 +56,7 @@ def generate_launch_description():
         name='rviz2',
         output='screen',
         arguments=['-d', rviz_config_dir], # IKI KUNCINE LE!
-        parameters=[{'use_sim_time': True}]
+        parameters=[{'use_sim_time': False}]
     )
 
     # Memanggil semua pekerja untuk turun ke lapangan

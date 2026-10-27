@@ -38,7 +38,7 @@ class ArduinoBridgeNode(Node):
         self.declare_parameter('ticks_per_rev', 350.7)       # 7 PPR * 50.1 gearbox = 350.7 ticks/rev
         self.declare_parameter('cmd_vel_timeout', 1.0)       # Timeout 1.0s (halus, tidak getar saat Nav2 menghitung)
         self.declare_parameter('odom_frame', 'odom')
-        self.declare_parameter('base_frame', 'base_link')
+        self.declare_parameter('base_frame', 'base_footprint')
         self.declare_parameter('publish_tf', True)
 
         self.port = self.get_parameter('serial_port').value
@@ -110,10 +110,19 @@ class ArduinoBridgeNode(Node):
     def connect_serial(self):
         try:
             self.ser = serial.Serial(self.port, self.baud, timeout=0)
-            time.sleep(1.0)  # Tunggu bootloader Arduino Uno selesai auto-reset
+            # 1. Hardware auto-reset via DTR/RTS pulse (persis seperti saat kabel dicopot-pasang)
+            self.ser.dtr = False
+            self.ser.rts = False
+            time.sleep(0.1)
+            self.ser.dtr = True
+            self.ser.rts = True
+            # 2. Beri waktu bootloader Optiboot Arduino Uno selesai (~1.6 detik)
+            time.sleep(1.6)
+            # 3. Bersihkan buffer sisa bootloader & kirim heartbeat nol
             self.ser.reset_input_buffer()
+            self.ser.reset_output_buffer()
             self.ser.write(b"V,0.0,0.0\n")
-            self.get_logger().info(f"✅ Berhasil terhubung ke Arduino di {self.port}")
+            self.get_logger().info(f"✅ Berhasil terhubung ke Arduino di {self.port} (DTR reset OK)")
         except Exception as e:
             self.get_logger().warn(f"⚠️ Menunggu koneksi port Arduino {self.port} ({e})")
             self.ser = None
@@ -252,10 +261,12 @@ class ArduinoBridgeNode(Node):
         qx, qy, qz, qw = euler_to_quaternion(self.yaw)
         stamp = now.to_msg()
 
+        future_stamp = (now + rclpy.duration.Duration(seconds=0.05)).to_msg()
+
         # Broadcast TF: odom -> base_link
         if self.publish_tf:
             t = TransformStamped()
-            t.header.stamp = stamp
+            t.header.stamp = future_stamp     # <-- GANTI stamp MENJADI future_stamp DI SINI
             t.header.frame_id = self.odom_frame
             t.child_frame_id = self.base_frame
             t.transform.translation.x = self.x

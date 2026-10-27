@@ -35,7 +35,7 @@ amcl:
     save_pose_rate: 0.5
     sigma_hit: 0.15
     tf_broadcast: true
-    transform_tolerance: 1.0
+    transform_tolerance: 1.5
     update_min_a: 0.05
     update_min_d: 0.05
     z_hit: 0.8
@@ -102,40 +102,40 @@ controller_server:
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.05
-      movement_time_allowance: 25.0
+      movement_time_allowance: 80.0
     # Goal checker parameters
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.35
+      xy_goal_tolerance: 0.35
+      yaw_goal_tolerance: 0.65
     # DWB parameters
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: False
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.40
+      max_vel_x: 0.45
       max_vel_y: 0.0
-      max_vel_theta: 0.75
+      max_vel_theta: 0.80
       min_speed_xy: 0.0
       max_speed_xy: 0.45
-      min_speed_theta: 0.05
-      acc_lim_x: 0.7
+      min_speed_theta: 0.00
+      acc_lim_x: 0.8
       acc_lim_y: 0.0
-      acc_lim_theta: 1.2
+      acc_lim_theta: 1.5
       decel_lim_x: -0.9
       decel_lim_y: 0.0
-      decel_lim_theta: -1.2
+      decel_lim_theta: -1.5
       vx_samples: 15
       vy_samples: 1
       vtheta_samples: 20
-      sim_time: 1.7
+      sim_time: 1.2
       linear_granularity: 0.05
       angular_granularity: 0.05
-      transform_tolerance: 1.0
-      xy_goal_tolerance: 0.25
-      trans_stopped_velocity: 0.08
+      transform_tolerance: 1.5
+      xy_goal_tolerance: 0.35
+      trans_stopped_velocity: 0.10
       short_circuit_trajectory_evaluation: True
       stateful: True
       critics:
@@ -148,13 +148,13 @@ controller_server:
           "GoalDist",
         ]
 
-      BaseObstacle.scale: 4.5
-      PathAlign.scale: 12.0
-      PathAlign.forward_point_distance: 0.2
-      PathDist.scale: 32.0
-      GoalDist.scale: 24.0
-      RotateToGoal.scale: 14.0
-      RotateToGoal.slowing_factor: 2.0
+      BaseObstacle.scale: 9.0
+      PathAlign.scale: 4.0
+      PathAlign.forward_point_distance: 0.40
+      PathDist.scale: 8.0
+      GoalDist.scale: 12.0
+      RotateToGoal.scale: 10.0
+      RotateToGoal.slowing_factor: 3.0
       RotateToGoal.lookahead_time: -1.0
       Oscillation.scale: 5.0
       Oscillation.oscillation_reset_dist: 0.05
@@ -166,16 +166,17 @@ controller_server_rclcpp_node:
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 5.0
-      publish_frequency: 2.0
+      update_frequency: 6.0
+      publish_frequency: 3.0
       global_frame: odom
       robot_base_frame: base_footprint
       use_sim_time: False
+      transform_tolerance: 1.5
       rolling_window: true
       width: 3
       height: 3
       resolution: 0.05
-      footprint: "[ [0.30, 0.28], [0.30, -0.28], [-0.30, -0.28], [-0.30, 0.28] ]"
+      robot_radius: 0.29
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
@@ -191,9 +192,9 @@ local_costmap:
           clearing: True
           marking: True
           data_type: "LaserScan"
-          raytrace_max_range: 3.0
-          raytrace_min_range: 0.28
-          obstacle_max_range: 2.5
+          raytrace_max_range: 3.5
+          raytrace_min_range: 0.10
+          obstacle_max_range: 3.0
           obstacle_min_range: 0.10
 
       always_send_full_costmap: True
@@ -212,9 +213,10 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_footprint
       use_sim_time: False
-      footprint: "[ [0.30, 0.28], [0.30, -0.28], [-0.30, -0.28], [-0.30, 0.28] ]"
+      transform_tolerance: 1.5
+      robot_radius: 0.29
       resolution: 0.05
-      track_unknown_space: false
+      track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -227,9 +229,9 @@ global_costmap:
           marking: True
           data_type: "LaserScan"
           raytrace_max_range: 5.0
-          raytrace_min_range: 0.34
-          obstacle_max_range: 2.5
-          obstacle_min_range: 0.34
+          raytrace_min_range: 0.10
+          obstacle_max_range: 3.5
+          obstacle_min_range: 0.10
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
@@ -260,14 +262,14 @@ map_saver:
 
 planner_server:
   ros__parameters:
-    expected_planner_frequency: 1.0
+    expected_planner_frequency: 0.5
     use_sim_time: False
     planner_plugins: ["GridBased"]
     GridBased:
       plugin: "nav2_navfn_planner/NavfnPlanner"
-      tolerance: 0.5
-      use_astar: false
-      allow_unknown: false
+      tolerance: 0.8
+      use_astar: true
+      allow_unknown: true
 
 planner_server_rclcpp_node:
   ros__parameters:
@@ -278,14 +280,14 @@ recoveries_server:
     costmap_topic: local_costmap/costmap_raw
     footprint_topic: local_costmap/published_footprint
     cycle_frequency: 10.0
-    recovery_plugins: ["spin", "back_up", "wait"]
+    recovery_plugins: ["wait", "spin", "back_up"]
+    wait:
+      plugin: "nav2_recoveries/Wait"
+      wait_duration: 1.0
     spin:
       plugin: "nav2_recoveries/Spin"
     back_up:
       plugin: "nav2_recoveries/BackUp"
-    wait:
-      plugin: "nav2_recoveries/Wait"
-      wait_duration: 1.0
     global_frame: odom
     robot_base_frame: base_footprint
     transform_timeout: 0.2

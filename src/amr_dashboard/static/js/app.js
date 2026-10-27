@@ -125,6 +125,7 @@ const APP = {
     mapFile: 'peta_1b.yaml',
     availableMaps: [],
     hasLiveMap: false,
+    mappingActive: false,
     poseSource: 'NONE',
     pose: { x: 0, y: 0, yaw: 0 },
     delivery: { status: 'idle', current_phase: 'idle' },
@@ -218,6 +219,9 @@ function closeModal(event) {
 
 // ====================== NAVIGATION ======================
 function navigateTo(page) {
+    if (typeof stopMappingStepHold === 'function') {
+        stopMappingStepHold();
+    }
     APP.currentPage = page;
     const content = document.getElementById('app-content');
     const backBtn = document.getElementById('btn-back');
@@ -231,6 +235,7 @@ function navigateTo(page) {
         const titles = {
             delivery: 'Delivery Dispatch',
             monitoring: 'Cockpit Telemetry',
+            mapping: 'SLAM Mapping Studio',
             camera: 'Optical Camera Stream',
             history: 'Mission Logs',
             joystick: 'Manual Teleop',
@@ -258,6 +263,7 @@ function navigateTo(page) {
         home: renderHome,
         delivery: renderDelivery,
         monitoring: renderMonitoring,
+        mapping: renderMapping,
         camera: renderCamera,
         history: renderHistory,
         joystick: renderJoystick,
@@ -308,6 +314,9 @@ function renderHome() {
                 <p>Pusat kendali utama, peta SLAM real-time, dan direktori operasi unit AMR-01</p>
             </div>
             <div class="studio-header-actions">
+                <button class="btn btn-outline btn-sm" onclick="navigateTo('mapping')">
+                    ${getIcon('map', 15)} SLAM Mapping
+                </button>
                 <button class="btn btn-outline btn-sm" onclick="navigateTo('monitoring')">
                     ${getIcon('activity', 15)} Buka Cockpit
                 </button>
@@ -403,7 +412,7 @@ function renderHome() {
                     <div class="studio-panel-title">
                         ${getIcon('layers', 15)} DIREKTORI MODUL KONTROL
                     </div>
-                    <span class="mono" style="font-size:0.66rem; color:var(--text-muted);">6 MODUL</span>
+                    <span class="mono" style="font-size:0.66rem; color:var(--text-muted);">7 MODUL</span>
                 </div>
                 <div class="studio-panel-body">
                     <div class="module-list">
@@ -427,8 +436,18 @@ function renderHome() {
                             <span class="module-arrow">${getIcon('chevronRight', 16)}</span>
                         </div>
 
-                        <div class="module-row" onclick="navigateTo('camera')">
+                        <div class="module-row" onclick="navigateTo('mapping')">
                             <span class="module-index">03</span>
+                            <div class="module-icon-box">${getIcon('map', 18)}</div>
+                            <div class="module-info">
+                                <div class="module-name">SLAM Mapping Studio</div>
+                                <div class="module-desc">Jalankan real_mapping, pantau peta live + pose robot, teleop, & simpan peta</div>
+                            </div>
+                            <span class="module-arrow">${getIcon('chevronRight', 16)}</span>
+                        </div>
+
+                        <div class="module-row" onclick="navigateTo('camera')">
+                            <span class="module-index">04</span>
                             <div class="module-icon-box">${getIcon('video', 18)}</div>
                             <div class="module-info">
                                 <div class="module-name">Optical Camera Stream</div>
@@ -438,7 +457,7 @@ function renderHome() {
                         </div>
 
                         <div class="module-row" onclick="navigateTo('joystick')">
-                            <span class="module-index">04</span>
+                            <span class="module-index">05</span>
                             <div class="module-icon-box">${getIcon('compass', 18)}</div>
                             <div class="module-info">
                                 <div class="module-name">Manual Teleop</div>
@@ -448,7 +467,7 @@ function renderHome() {
                         </div>
 
                         <div class="module-row" onclick="navigateTo('history')">
-                            <span class="module-index">05</span>
+                            <span class="module-index">06</span>
                             <div class="module-icon-box">${getIcon('clock', 18)}</div>
                             <div class="module-info">
                                 <div class="module-name">Mission Logs</div>
@@ -458,7 +477,7 @@ function renderHome() {
                         </div>
 
                         <div class="module-row" onclick="navigateTo('settings')">
-                            <span class="module-index">06</span>
+                            <span class="module-index">07</span>
                             <div class="module-icon-box">${getIcon('sliders', 18)}</div>
                             <div class="module-info">
                                 <div class="module-name">System Configuration & Themes</div>
@@ -1536,11 +1555,45 @@ function renderCamera() {
                         <div class="monitor-grid">
                             <div class="monitor-card">
                                 <div class="mon-label">Human AI Status</div>
-                                <div class="mon-value mon-success" id="cam-human">NO_HUMAN</div>
+                                <div class="mon-value mon-warning" id="cam-human">—</div>
                             </div>
                             <div class="monitor-card">
                                 <div class="mon-label">Koordinat (X, Y)</div>
                                 <div class="mon-value mon-accent" id="cam-pos">${APP.pose.x.toFixed(2)}, ${APP.pose.y.toFixed(2)}</div>
+                            </div>
+                        </div>
+                        <div class="monitor-grid" style="margin-top:10px;">
+                            <div class="monitor-card">
+                                <div class="mon-label">Orang Terdeteksi</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-persons">—</div>
+                            </div>
+                            <div class="monitor-card">
+                                <div class="mon-label">Jarak Estimasi</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-dist">—</div>
+                            </div>
+                            <div class="monitor-card">
+                                <div class="mon-label">Zona</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-zone">—</div>
+                            </div>
+                            <div class="monitor-card">
+                                <div class="mon-label">Respon Robot</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-response">—</div>
+                            </div>
+                            <div class="monitor-card">
+                                <div class="mon-label">Fitur Aktif</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-feature">—</div>
+                            </div>
+                            <div class="monitor-card">
+                                <div class="mon-label">Ukuran Bbox (T × L)</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-bbox">—</div>
+                            </div>
+                            <div class="monitor-card">
+                                <div class="mon-label">Confidence</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-conf">—</div>
+                            </div>
+                            <div class="monitor-card">
+                                <div class="mon-label">FPS / Inferensi</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-fps">—</div>
                             </div>
                         </div>
                         <button class="btn btn-outline btn-block mt-12" onclick="captureScreenshot()">
@@ -1571,12 +1624,61 @@ function startCameraPolling() {
             if (data.delivery && typeof handleDeliveryStatusUpdate === 'function') {
                 handleDeliveryStatusUpdate(data.delivery);
             }
-            const camHuman = document.getElementById('cam-human');
             const camPos = document.getElementById('cam-pos');
-            if (camHuman) camHuman.textContent = data.human_status || '—';
+            updateCameraReadout(data);
             if (camPos && data.pose) camPos.textContent = `${data.pose.x.toFixed(2)}, ${data.pose.y.toFixed(2)}`;
         }
     }, 1000);
+}
+
+// Keterangan Human-Aware di bawah frame kamera (data dari /api/status -> human_info)
+function updateCameraReadout(data) {
+    const status = data.human_status || 'NODE_OFFLINE';
+    const info = data.human_info || null;
+
+    const setText = (id, text) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+    };
+
+    const camHuman = document.getElementById('cam-human');
+    if (camHuman) {
+        camHuman.textContent = status;
+        const danger = status === 'SAFE_STOP';
+        const warn = status === 'REDUCED_SPEED' || status === 'NODE_OFFLINE';
+        camHuman.className = 'mon-value ' + (danger ? 'mon-danger' : (warn ? 'mon-warning' : 'mon-success'));
+    }
+
+    if (!info) {
+        ['cam-persons', 'cam-dist', 'cam-zone', 'cam-response', 'cam-feature',
+         'cam-bbox', 'cam-conf', 'cam-fps'].forEach(id => setText(id, '—'));
+        return;
+    }
+
+    const has = v => v !== null && v !== undefined;
+
+    setText('cam-persons', String(info.persons ?? 0));
+    setText('cam-zone', info.zone || '—');
+    setText('cam-response', info.response || '—');
+
+    if (has(info.distance_m)) {
+        let d = `~${info.distance_m.toFixed(2)} m`;
+        if (info.calibrated === false) d += ' *';
+        if (info.in_range === false) d += ' (luar rentang)';
+        setText('cam-dist', d);
+    } else {
+        setText('cam-dist', '—');
+    }
+
+    if (has(info.feature_name) && has(info.ratio)) {
+        setText('cam-feature', `${info.feature_name} ${info.ratio.toFixed(2)}` + (info.at_edge ? ' · tepi frame' : ''));
+    } else {
+        setText('cam-feature', '—');
+    }
+
+    setText('cam-bbox', has(info.bbox_h_px) ? `${info.bbox_h_px} × ${info.bbox_w_px} px` : '—');
+    setText('cam-conf', has(info.confidence) ? info.confidence.toFixed(2) : '—');
+    setText('cam-fps', has(info.fps) ? `${info.fps.toFixed(1)} / ${info.infer_ms ?? '—'} ms` : '—');
 }
 
 // ====================== PAGE: HISTORY ======================
@@ -1661,6 +1763,469 @@ async function clearHistory() {
         }
     ]);
 }
+
+// ====================== PAGE: SLAM MAPPING STUDIO ======================
+let _mappingHoldTimer = null;
+let _mappingActiveKey = null;
+
+function getMappingTeleopSpeeds() {
+    const linEl = document.getElementById('mapping-speed-lin');
+    const angEl = document.getElementById('mapping-speed-ang');
+    const lin = linEl ? parseFloat(linEl.value) : 0.22;
+    const ang = angEl ? parseFloat(angEl.value) : 0.55;
+    return {
+        lin: isNaN(lin) ? 0.22 : Math.max(0.05, Math.min(0.6, lin)),
+        ang: isNaN(ang) ? 0.55 : Math.max(0.1, Math.min(1.5, ang))
+    };
+}
+
+function startMappingStepHold(linSign, angSign) {
+    stopMappingStepHold(false);
+    const sendOnce = () => {
+        const { lin, ang } = getMappingTeleopSpeeds();
+        const cmdLin = +(linSign * lin).toFixed(2);
+        const cmdAng = +(angSign * ang).toFixed(2);
+        const linDisp = document.getElementById('vel-linear');
+        const angDisp = document.getElementById('vel-angular');
+        if (linDisp) linDisp.textContent = cmdLin.toFixed(2);
+        if (angDisp) angDisp.textContent = cmdAng.toFixed(2);
+        apiPost('/api/cmd_vel', { linear: cmdLin, angular: cmdAng });
+    };
+    sendOnce();
+    _mappingHoldTimer = setInterval(sendOnce, 120);
+}
+
+function stopMappingStepHold(sendZero = true) {
+    if (_mappingHoldTimer) {
+        clearInterval(_mappingHoldTimer);
+        _mappingHoldTimer = null;
+    }
+    _mappingActiveKey = null;
+    if (sendZero) {
+        const linDisp = document.getElementById('vel-linear');
+        const angDisp = document.getElementById('vel-angular');
+        if (linDisp) linDisp.textContent = '0.00';
+        if (angDisp) angDisp.textContent = '0.00';
+        apiPost('/api/cmd_vel', { linear: 0, angular: 0 });
+    }
+}
+
+function handleMappingKeyDown(e) {
+    if (APP.currentPage !== 'mapping') return;
+    const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+    const key = e.key.toLowerCase();
+    if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(key)) {
+        e.preventDefault();
+    } else {
+        return;
+    }
+
+    if (key === ' ') {
+        stopMappingStepHold(true);
+        return;
+    }
+
+    if (_mappingActiveKey === key) return;
+    _mappingActiveKey = key;
+
+    if (key === 'w' || key === 'arrowup') startMappingStepHold(1, 0);
+    else if (key === 's' || key === 'arrowdown') startMappingStepHold(-1, 0);
+    else if (key === 'a' || key === 'arrowleft') startMappingStepHold(0, 1);
+    else if (key === 'd' || key === 'arrowright') startMappingStepHold(0, -1);
+}
+
+function handleMappingKeyUp(e) {
+    if (APP.currentPage !== 'mapping') return;
+    const key = e.key.toLowerCase();
+    if (_mappingActiveKey && key === _mappingActiveKey) {
+        stopMappingStepHold(true);
+    }
+}
+
+if (!window._mappingKeyListenersAttached) {
+    window.addEventListener('keydown', handleMappingKeyDown);
+    window.addEventListener('keyup', handleMappingKeyUp);
+    window._mappingKeyListenersAttached = true;
+}
+
+function renderMapping() {
+    const div = document.createElement('div');
+    div.className = 'page-enter';
+
+    div.innerHTML = `
+        <div class="studio-overview-header">
+            <div>
+                <div class="studio-title-tag">${getIcon('map', 13)} SYS // SLAM MAPPING STUDIO</div>
+                <h1>Pembuatan Peta Ruangan (SLAM Mapping)</h1>
+                <p>Jalankan <code>real_mapping.launch.py</code>, kemudikan robot mengelilingi ruangan sambil memantau perkembangan peta live, lalu simpan ke file <code>.pgm</code> &amp; <code>.yaml</code></p>
+            </div>
+            <div class="studio-header-actions" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                <span id="mapping-state-badge" class="badge badge-offline" style="padding:6px 12px; font-size:0.74rem;">
+                    <span class="badge-dot"></span>
+                    <span class="badge-text" id="mapping-state-text">MENGECEK STATUS...</span>
+                </span>
+                <button class="btn btn-primary" id="btn-start-mapping" onclick="startSlamMapping()">
+                    🚀 Mulai SLAM Mapping
+                </button>
+                <button class="btn btn-danger" id="btn-stop-mapping" onclick="stopSlamMapping()" disabled>
+                    🛑 Hentikan Mapping
+                </button>
+            </div>
+        </div>
+
+        <div class="studio-two-col">
+            <!-- LEFT COLUMN: LIVE 2D SLAM MAP + SAVE MAP FORM -->
+            <div>
+                <div class="page-section">
+                    <div class="section-title">
+                        <span>01 // LIVE 2D SLAM OCCUPANCY GRID &amp; POSISI ROBOT</span>
+                        <div style="display:flex; gap:6px;">
+                            <button type="button" class="btn btn-outline btn-sm" style="padding:2px 8px; font-size:0.68rem;" onclick="clearRobotTrail()">
+                                🧹 Reset Jejak
+                            </button>
+                            <button type="button" class="btn btn-outline btn-sm" style="padding:2px 8px; font-size:0.68rem;" onclick="loadLiveSlamMapData()">
+                                🔄 Refresh Peta
+                            </button>
+                        </div>
+                    </div>
+                    <div class="panel">
+                        <div class="map-container" style="min-height:320px; position:relative;">
+                            <canvas id="mapping-map-canvas"></canvas>
+                            <div class="map-legend" style="flex-wrap:wrap; gap:10px;">
+                                <span style="display:inline-flex; align-items:center; gap:5px;"><span style="width:9px; height:9px; background:#e2e8f0; border:1px solid #475569; display:inline-block;"></span> Area Bebas</span>
+                                <span style="display:inline-flex; align-items:center; gap:5px;"><span style="width:9px; height:9px; background:#09090b; border:1px solid #94a3b8; display:inline-block;"></span> Tembok / Halangan</span>
+                                <span style="display:inline-flex; align-items:center; gap:5px;"><span style="width:9px; height:9px; border-radius:50%; background:#10b981; display:inline-block;"></span> Jejak Lintasan</span>
+                                <span class="legend-robot">AMR-01 (Live TF)</span>
+                            </div>
+                        </div>
+
+                        <!-- Live Map Telemetry Readout -->
+                        <div class="monitor-grid" style="grid-template-columns: repeat(4, 1fr); margin-top:10px; gap:8px;">
+                            <div class="monitor-card" style="padding:8px 10px;">
+                                <div class="mon-label">Ukuran Peta</div>
+                                <div class="mon-value mono" style="font-size:0.84rem;" id="mapping-meta-size">Menunggu /map...</div>
+                            </div>
+                            <div class="monitor-card" style="padding:8px 10px;">
+                                <div class="mon-label">Resolusi Grid</div>
+                                <div class="mon-value mono" style="font-size:0.84rem;" id="mapping-meta-res">0.05 m/px</div>
+                            </div>
+                            <div class="monitor-card" style="padding:8px 10px;">
+                                <div class="mon-label">Pose Robot (X, Y, Yaw)</div>
+                                <div class="mon-value mono text-accent" style="font-size:0.84rem;" id="mapping-meta-pose">0.00, 0.00 (0.0°)</div>
+                            </div>
+                            <div class="monitor-card" style="padding:8px 10px;">
+                                <div class="mon-label">Sumber Pose</div>
+                                <div class="mon-value mono text-emerald" style="font-size:0.84rem;" id="mapping-meta-source">NONE</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SAVE MAP PANEL -->
+                <div class="page-section">
+                    <div class="section-title">
+                        <span>02 // SIMPAN PETA HASIL MAPPING (.PGM &amp; .YAML)</span>
+                        <span class="mono" style="color:var(--emerald);">DIRECT MEMORY SAVER (ANTI-TIMEOUT)</span>
+                    </div>
+                    <div class="panel">
+                        <div class="input-row" style="align-items:flex-end; gap:10px; flex-wrap:wrap;">
+                            <div class="input-group" style="flex:1; min-width:210px; margin-bottom:0;">
+                                <div class="input-label">Nama File Peta Baru (Tanpa Ekstensi)</div>
+                                <input type="text" class="input-field mono" id="mapping-save-name"
+                                       placeholder="Contoh: peta_lantai_1 atau lab_robotika"
+                                       value="peta_baru">
+                            </div>
+                            <button type="button" class="btn btn-primary" id="btn-save-slam-map" onclick="saveSlamMap()" style="height:38px; padding:0 18px; font-weight:700;">
+                                💾 Simpan Peta (.pgm &amp; .yaml)
+                            </button>
+                        </div>
+
+                        <label style="display:flex; align-items:center; gap:8px; margin-top:10px; font-size:0.78rem; color:var(--text-secondary); cursor:pointer;">
+                            <input type="checkbox" id="mapping-set-active" checked style="accent-color:var(--accent); width:15px; height:15px;">
+                            <span>Langsung jadikan sebagai <strong>Peta Aktif Dashboard</strong> setelah disimpan</span>
+                        </label>
+
+                        <div id="mapping-save-result" class="hidden" style="margin-top:10px; padding:10px 12px; border-radius:6px; background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.35); font-size:0.75rem;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- RIGHT COLUMN: TELEOP CONTROLLER + SLAM LOGS -->
+            <div>
+                <div class="page-section">
+                    <div class="section-title">
+                        <span>03 // KENDALI TELEOP PEMETAAN (/cmd_vel)</span>
+                        <span class="mono">JOYSTICK + D-PAD + KEYBOARD WASD</span>
+                    </div>
+                    <div class="panel">
+                        <!-- Safe Mapping Speed Controls -->
+                        <div class="input-row" style="margin-bottom:12px; gap:10px;">
+                            <div class="input-group" style="margin-bottom:0;">
+                                <div class="input-label">Kecepatan Maju/Mundur (m/s)</div>
+                                <input type="number" class="input-field mono" id="mapping-speed-lin" step="0.02" min="0.08" max="0.50" value="0.22">
+                            </div>
+                            <div class="input-group" style="margin-bottom:0;">
+                                <div class="input-label">Kecepatan Belok/Rotasi (rad/s)</div>
+                                <input type="number" class="input-field mono" id="mapping-speed-ang" step="0.05" min="0.15" max="1.20" value="0.55">
+                            </div>
+                        </div>
+
+                        <div class="joystick-container" style="gap:12px;">
+                            <!-- Virtual Radar Joystick -->
+                            <div class="joystick-canvas-wrap">
+                                <canvas id="joystick-canvas" width="210" height="210"></canvas>
+                            </div>
+
+                            <!-- Tactile Hold-to-Drive D-Pad -->
+                            <div style="width:100%; max-width:280px; display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; margin:2px auto;">
+                                <div></div>
+                                <button type="button" class="btn btn-outline" style="padding:10px 0; font-weight:700;"
+                                        onmousedown="startMappingStepHold(1, 0)" onmouseup="stopMappingStepHold(true)" onmouseleave="stopMappingStepHold(false)"
+                                        ontouchstart="event.preventDefault(); startMappingStepHold(1, 0)" ontouchend="stopMappingStepHold(true)">
+                                    ⬆️ Maju (W)
+                                </button>
+                                <div></div>
+
+                                <button type="button" class="btn btn-outline" style="padding:10px 0; font-weight:700;"
+                                        onmousedown="startMappingStepHold(0, 1)" onmouseup="stopMappingStepHold(true)" onmouseleave="stopMappingStepHold(false)"
+                                        ontouchstart="event.preventDefault(); startMappingStepHold(0, 1)" ontouchend="stopMappingStepHold(true)">
+                                    ⬅️ Kiri (A)
+                                </button>
+                                <button type="button" class="btn btn-danger" style="padding:10px 0; font-weight:700;"
+                                        onclick="stopMappingStepHold(true)">
+                                    ⏹️ STOP
+                                </button>
+                                <button type="button" class="btn btn-outline" style="padding:10px 0; font-weight:700;"
+                                        onmousedown="startMappingStepHold(0, -1)" onmouseup="stopMappingStepHold(true)" onmouseleave="stopMappingStepHold(false)"
+                                        ontouchstart="event.preventDefault(); startMappingStepHold(0, -1)" ontouchend="stopMappingStepHold(true)">
+                                    ➡️ Kanan (D)
+                                </button>
+
+                                <div></div>
+                                <button type="button" class="btn btn-outline" style="padding:10px 0; font-weight:700;"
+                                        onmousedown="startMappingStepHold(-1, 0)" onmouseup="stopMappingStepHold(true)" onmouseleave="stopMappingStepHold(false)"
+                                        ontouchstart="event.preventDefault(); startMappingStepHold(-1, 0)" ontouchend="stopMappingStepHold(true)">
+                                    ⬇️ Mundur (S)
+                                </button>
+                                <div></div>
+                            </div>
+
+                            <div class="joystick-info" style="width:100%;">
+                                <div class="vel-display">
+                                    <div class="vel-label">LINEAR X (m/s)</div>
+                                    <div class="vel-value" id="vel-linear">0.00</div>
+                                </div>
+                                <div class="vel-display">
+                                    <div class="vel-label">ANGULAR Z (rad/s)</div>
+                                    <div class="vel-value text-accent" id="vel-angular">0.00</div>
+                                </div>
+                            </div>
+
+                            <button class="estop-btn" onclick="emergencyStop()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+                                EMERGENCY STOP
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SLAM PROCESS LOGS -->
+                <div class="page-section">
+                    <div class="section-title">
+                        <span>04 // LOG PROSES SLAM (real_mapping.launch.py)</span>
+                        <span class="mono" id="mapping-log-status">STANDBY</span>
+                    </div>
+                    <div class="panel" style="padding:10px;">
+                        <pre id="mapping-log-box" class="mono" style="margin:0; max-height:150px; overflow-y:auto; font-size:0.70rem; line-height:1.45; color:var(--text-secondary); background:rgba(9,13,20,0.75); padding:10px; border-radius:6px; border:1px solid var(--border-subtle); white-space:pre-wrap;">Menunggu proses SLAM Mapping dijalankan...</pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    setTimeout(() => {
+        if (typeof initJoystick === 'function') initJoystick();
+        if (typeof initMappingMap === 'function') initMappingMap('mapping-map-canvas');
+        pollMappingStatusOnce();
+        startMappingPolling();
+    }, 60);
+
+    return div;
+}
+
+async function pollMappingStatusOnce() {
+    const st = await apiGet('/api/mapping/status');
+    if (!st) return;
+
+    APP.mappingActive = !!st.active;
+    APP.hasLiveMap = !!st.has_live_map;
+    if (st.pose) APP.pose = st.pose;
+    if (st.pose_source) APP.poseSource = st.pose_source;
+
+    const badge = document.getElementById('mapping-state-badge');
+    const badgeText = document.getElementById('mapping-state-text');
+    const btnStart = document.getElementById('btn-start-mapping');
+    const btnStop = document.getElementById('btn-stop-mapping');
+
+    if (badge && badgeText) {
+        if (st.active) {
+            badge.className = 'badge badge-online';
+            badgeText.textContent = st.has_live_map
+                ? 'SLAM AKTIF // MEMBANGUN PETA'
+                : 'SLAM AKTIF // INISIALISASI SENSOR...';
+        } else {
+            badge.className = 'badge badge-offline';
+            badgeText.textContent = 'SLAM STANDBY';
+        }
+    }
+
+    if (btnStart) btnStart.disabled = !!st.active;
+    if (btnStop) btnStop.disabled = !st.active;
+
+    // Update telemetry cards
+    const sizeEl = document.getElementById('mapping-meta-size');
+    const resEl = document.getElementById('mapping-meta-res');
+    const poseEl = document.getElementById('mapping-meta-pose');
+    const srcEl = document.getElementById('mapping-meta-source');
+
+    if (st.map_meta && sizeEl) {
+        const w = st.map_meta.width || 0;
+        const h = st.map_meta.height || 0;
+        const res = st.map_meta.resolution || 0.05;
+        const wm = (w * res).toFixed(1);
+        const hm = (h * res).toFixed(1);
+        sizeEl.textContent = `${w}×${h} px (${wm}×${hm}m)`;
+        if (resEl) resEl.textContent = `${res.toFixed(3)} m/px`;
+    } else if (sizeEl) {
+        sizeEl.textContent = st.active ? 'Menunggu /map...' : 'Belum Aktif';
+    }
+
+    if (poseEl && APP.pose) {
+        const yawDeg = ((APP.pose.yaw || 0) * 180 / Math.PI).toFixed(1);
+        poseEl.textContent = `${APP.pose.x.toFixed(2)}m, ${APP.pose.y.toFixed(2)}m (${yawDeg}°)`;
+    }
+    if (srcEl) {
+        srcEl.textContent = APP.poseSource || 'NONE';
+    }
+
+    const logBox = document.getElementById('mapping-log-box');
+    const logStatus = document.getElementById('mapping-log-status');
+    if (logStatus) {
+        logStatus.textContent = st.active
+            ? (st.launched_by_dashboard ? 'RUNNING (DASHBOARD)' : 'RUNNING (EXTERNAL TERMINAL)')
+            : 'IDLE';
+    }
+    if (logBox && st.logs && st.logs.length > 0) {
+        const shouldScroll = (logBox.scrollTop + logBox.clientHeight) >= (logBox.scrollHeight - 30);
+        logBox.textContent = st.logs.join('\n');
+        if (shouldScroll) {
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+    }
+}
+
+function startMappingPolling() {
+    if (APP.statusPollTimer) clearInterval(APP.statusPollTimer);
+    APP.statusPollTimer = setInterval(pollMappingStatusOnce, 1000);
+}
+
+async function startSlamMapping() {
+    const btnStart = document.getElementById('btn-start-mapping');
+    if (btnStart) btnStart.disabled = true;
+
+    showToast('Menjalankan real_mapping.launch.py (RPLiDAR + Arduino + EKF + SLAM Toolbox)...', 'info');
+    if (typeof clearRobotTrail === 'function') clearRobotTrail();
+
+    const res = await apiPost('/api/mapping/start', {});
+    if (res && res.success) {
+        APP.mappingActive = true;
+        APP.mapFile = 'live';
+        showToast(res.message || 'SLAM Mapping dimulai!', 'success');
+        await pollMappingStatusOnce();
+    } else {
+        if (btnStart) btnStart.disabled = false;
+        showToast((res && res.error) ? res.error : 'Gagal memulai SLAM Mapping', 'error');
+    }
+}
+
+async function stopSlamMapping() {
+    showModal(
+        'Hentikan Proses SLAM Mapping?',
+        'Pastikan Anda sudah menekan tombol <strong>Simpan Peta (.pgm &amp; .yaml)</strong> jika ingin menyimpan hasil pemetaan saat ini. Hentikan proses <code>real_mapping</code> sekarang?',
+        [
+            { label: 'Batal', class: 'btn-outline' },
+            {
+                label: '🛑 Ya, Hentikan Mapping',
+                class: 'btn-danger',
+                action: async () => {
+                    showToast('Menghentikan proses SLAM Mapping...', 'info');
+                    const res = await apiPost('/api/mapping/stop', {});
+                    if (res && res.success) {
+                        APP.mappingActive = false;
+                        showToast(res.message || 'SLAM Mapping dihentikan', 'info');
+                        await pollMappingStatusOnce();
+                    } else {
+                        showToast((res && res.error) ? res.error : 'Gagal menghentikan SLAM Mapping', 'error');
+                    }
+                }
+            }
+        ]
+    );
+}
+
+async function saveSlamMap() {
+    const nameInput = document.getElementById('mapping-save-name');
+    const setActiveChk = document.getElementById('mapping-set-active');
+    const btnSave = document.getElementById('btn-save-slam-map');
+    const resultBox = document.getElementById('mapping-save-result');
+
+    const rawName = nameInput ? nameInput.value.trim() : '';
+    if (!rawName) {
+        showToast('Masukkan nama file peta terlebih dahulu', 'error');
+        if (nameInput) nameInput.focus();
+        return;
+    }
+
+    const setActive = setActiveChk ? !!setActiveChk.checked : true;
+    if (btnSave) btnSave.disabled = true;
+    showToast(`Menyimpan peta "${rawName}"...`, 'info');
+
+    const res = await apiPost('/api/mapping/save', {
+        map_name: rawName,
+        set_active: setActive
+    });
+
+    if (btnSave) btnSave.disabled = false;
+
+    if (res && res.success) {
+        showToast(res.message || `Peta ${res.map_file} berhasil disimpan!`, 'success');
+        if (res.available_maps) APP.availableMaps = res.available_maps;
+        if (setActive && res.map_file) APP.mapFile = res.map_file;
+
+        if (resultBox) {
+            resultBox.classList.remove('hidden');
+            const filesList = (res.saved_files || []).map(f => `<div>• <code>${f}</code></div>`).join('');
+            resultBox.innerHTML = `
+                <div style="font-weight:700; color:var(--emerald); margin-bottom:4px;">
+                    ✅ ${res.message} (${res.width}×${res.height} px, resolusi ${res.resolution} m/px)
+                </div>
+                <div class="mono" style="font-size:0.68rem; color:var(--text-secondary);">
+                    ${filesList}
+                </div>
+            `;
+        }
+    } else {
+        showToast((res && res.error) ? res.error : 'Gagal menyimpan peta', 'error');
+    }
+}
+
+window.startSlamMapping = startSlamMapping;
+window.stopSlamMapping = stopSlamMapping;
+window.saveSlamMap = saveSlamMap;
+window.startMappingStepHold = startMappingStepHold;
+window.stopMappingStepHold = stopMappingStepHold;
 
 // ====================== PAGE: JOYSTICK (MANUAL TELEOP) ======================
 function renderJoystick() {
@@ -2482,6 +3047,7 @@ function populateNavIcons() {
         's-icon-home': 'home',
         's-icon-monitoring': 'activity',
         's-icon-delivery': 'package',
+        's-icon-mapping': 'map',
         's-icon-camera': 'video',
         's-icon-history': 'clock',
         's-icon-joystick': 'compass',
@@ -2496,6 +3062,7 @@ function populateNavIcons() {
         'm-icon-home': 'home',
         'm-icon-monitoring': 'activity',
         'm-icon-delivery': 'package',
+        'm-icon-mapping': 'map',
         'm-icon-camera': 'video',
         'm-icon-joystick': 'compass'
     };
@@ -2832,4 +3399,3 @@ async function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
-
