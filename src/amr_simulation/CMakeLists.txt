@@ -42,6 +42,8 @@ install(PROGRAMS
   scripts/rplidar_bridge.py
   scripts/laser_filter_node.py
   scripts/benchmark_skripsi.py
+  scripts/ukur_peta_skripsi.py
+  scripts/uji_amcl_skripsi.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
