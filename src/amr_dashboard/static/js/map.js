@@ -469,7 +469,8 @@ async function loadLiveSlamMapData() {
     MAP_STATE.slamFetchInFlight = true;
     try {
         const meta = await apiGet('/api/map/metadata?live=1&t=' + Date.now());
-        if (!meta || meta.source !== 'live_slam') {
+        // Terima live map selama memiliki resolusi dan dimensi width/height yang valid
+        if (!meta || !meta.width || !meta.height) {
             MAP_STATE.slamFetchInFlight = false;
             return false;
         }
@@ -529,8 +530,8 @@ function drawOriginCrosshair(ctx, px, py) {
 function drawLiveSlamMap(canvas, ctx) {
     if (!canvas || !canvas.parentElement) return;
 
-    // Periodically refresh live SLAM image every 1.2s when live map is available
-    if (APP.hasLiveMap && (Date.now() - MAP_STATE.lastSlamFetch > 1200)) {
+    // Periodically refresh live SLAM image every 1.0s so map updates in real-time like RViz
+    if (Date.now() - MAP_STATE.lastSlamFetch > 1000) {
         MAP_STATE.lastSlamFetch = Date.now();
         loadLiveSlamMapData();
     }
@@ -652,6 +653,7 @@ async function initMappingMap(canvasId = 'mapping-map-canvas') {
     const canvas = document.getElementById(canvasId);
     if (!canvas) return;
 
+    MAP_STATE.lastSlamFetch = 0;
     await loadLiveSlamMapData();
     const ctx = canvas.getContext('2d');
 
