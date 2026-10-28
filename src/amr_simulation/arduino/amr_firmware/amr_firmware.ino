@@ -320,27 +320,29 @@ void loop() {
       prev_error_R = error_R;
     }
 
-  driveMotors(pwm_L, pwm_R);
+    driveMotors(pwm_L, pwm_R);
 
-  // Kirim Serial tiap 2 siklus (40 ms = 25 Hz) agar buffer Arduino Uno tidak tersedak
-  static byte div_serial = 0;
-  if (++div_serial >= 2) {
-    div_serial = 0;
+    // Kirim Serial tiap 2 siklus (40 ms = 25 Hz) agar buffer Arduino Uno tidak tersedak
+    static byte div_serial = 0;
+    if (++div_serial >= 2) {
+      div_serial = 0;
 
-    // Output Serial untuk ROS 2 /odom
-    Serial.print("ENC:");
-    Serial.print(tot_L);
-    Serial.print(",");
-    Serial.println(tot_R);
+      // Output Serial untuk ROS 2 /odom
+      Serial.print("ENC:");
+      Serial.print(tot_L);
+      Serial.print(",");
+      Serial.println(tot_R);
 
-    // Output Serial Tambahan untuk Logging Skripsi
-    Serial.print("LOG:");
-    Serial.print((float)waktuSekarang / 1000.0, 2); Serial.print(",");
-    Serial.print(rpm_L, 1); Serial.print(",");
-    Serial.print(rpm_R, 1); Serial.print(",");
-    Serial.print(pwm_L, 0); Serial.print(",");
-    Serial.print(pwm_R, 0); Serial.print(",");
-    Serial.print(odom_x, 3); Serial.print(",");
-    Serial.print(odom_y, 3); Serial.print(",");
-    Serial.println(odom_theta * 180.0 / PI, 1);
+      // Output Serial Tambahan untuk Logging Skripsi
+      Serial.print("LOG:");
+      Serial.print((float)waktuSekarang / 1000.0, 2); Serial.print(",");
+      Serial.print(rpm_L, 1); Serial.print(",");
+      Serial.print(rpm_R, 1); Serial.print(",");
+      Serial.print(pwm_L, 0); Serial.print(",");
+      Serial.print(pwm_R, 0); Serial.print(",");
+      Serial.print(odom_x, 3); Serial.print(",");
+      Serial.print(odom_y, 3); Serial.print(",");
+      Serial.println(odom_theta * 180.0 / PI, 1);
+    }
   }
+}
