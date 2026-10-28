@@ -75,6 +75,8 @@ class ArduinoBridgeNode(Node):
 
         # --- INISIALISASI SERIAL ARDUINO ---
         self.ser = None
+        self.connection_time = self.get_clock().now()
+        self.first_packet_received = False
         self.connect_serial()
 
         # --- ROS 2 PUB / SUB / TF ---
@@ -110,18 +112,22 @@ class ArduinoBridgeNode(Node):
     def connect_serial(self):
         try:
             self.ser = serial.Serial(self.port, self.baud, timeout=0)
-            # 1. Hardware auto-reset via DTR/RTS pulse (persis seperti saat kabel dicopot-pasang)
+            # 1. Hardware auto-reset via DTR/RTS pulse (persis seperti saat upload sketch)
             self.ser.dtr = False
             self.ser.rts = False
-            time.sleep(0.1)
+            time.sleep(0.05)
             self.ser.dtr = True
             self.ser.rts = True
-            # 2. Beri waktu bootloader Optiboot Arduino Uno selesai (~1.6 detik)
-            time.sleep(1.6)
+            time.sleep(0.1)
+            self.ser.dtr = False
+            self.ser.rts = False
+            # 2. Beri waktu bootloader Optiboot Arduino Uno selesai (~1.5 detik)
+            time.sleep(1.5)
             # 3. Bersihkan buffer sisa bootloader & kirim heartbeat nol
             self.ser.reset_input_buffer()
             self.ser.reset_output_buffer()
             self.ser.write(b"V,0.0,0.0\n")
+            self.connection_time = self.get_clock().now()
             self.get_logger().info(f"✅ Berhasil terhubung ke Arduino di {self.port} (DTR reset OK)")
         except Exception as e:
             self.get_logger().warn(f"⚠️ Menunggu koneksi port Arduino {self.port} ({e})")
@@ -223,11 +229,37 @@ class ArduinoBridgeNode(Node):
             self.get_logger().warn(f"Serial read error: {e}")
             self.ser = None
 
-        # 4. Kontinu broadcast TF & Odometry pada 50Hz (mencegah SLAM/RViz drop message)
+        # 4. Watchdog: jika serial terbuka > 3.5 detik tapi belum ada paket pertama sama sekali
+        if not self.first_packet_received and self.ser and self.ser.is_open:
+            dt_wait = (now - self.connection_time).nanoseconds / 1e9
+            if dt_wait > 3.5:
+                self.get_logger().warn(
+                    "⚠️ Tidak ada data dari Arduino selama > 3.5 detik. Melakukan recovery reset via DTR..."
+                )
+                try:
+                    self.ser.dtr = False
+                    self.ser.rts = False
+                    time.sleep(0.05)
+                    self.ser.dtr = True
+                    self.ser.rts = True
+                    time.sleep(0.1)
+                    self.ser.dtr = False
+                    self.ser.rts = False
+                    time.sleep(1.5)
+                    self.ser.reset_input_buffer()
+                    self.ser.reset_output_buffer()
+                    self.ser.write(b"V,0.0,0.0\n")
+                    self.connection_time = now
+                except Exception as e:
+                    self.get_logger().warn(f"Recovery reset error: {e}")
+                    self.ser = None
+
+        # 5. Kontinu broadcast TF & Odometry pada 50Hz (mencegah SLAM/RViz drop message)
         self.broadcast_tf_and_odom(now)
 
     def process_encoder_ticks(self, left_ticks: int, right_ticks: int, now):
         if self.prev_left_ticks is None:
+            self.first_packet_received = True
             self.prev_left_ticks = left_ticks
             self.prev_right_ticks = right_ticks
             self.prev_odom_time = now

@@ -84,8 +84,31 @@ class RPLidarBridgeNode(Node):
             self.get_logger().info(f"✅ Port serial {self.port} terdeteksi dan memiliki izin akses OK.")
         return True
 
+    def reset_lidar_hardware(self):
+        """Kirim frame STOP & RESET resmi Slamtec agar sisa stream biner dibersihkan."""
+        try:
+            import serial
+            s = serial.Serial(self.port, self.baud, timeout=0.3)
+            # 1. Hentikan pemindaian aktif (STOP: 0xA5 0x25)
+            s.write(b'\xA5\x25')
+            time.sleep(0.05)
+            # 2. Reset mikroprosesor internal RPLiDAR (RESET: 0xA5 0x40)
+            s.write(b'\xA5\x40')
+            time.sleep(0.1)
+            # 3. Kuras buffer serial
+            s.reset_input_buffer()
+            s.reset_output_buffer()
+            s.close()
+            time.sleep(0.4)
+            self.get_logger().info("🔄 Pre-flight reset RPLiDAR OK (STOP + RESET frame terkirim, buffer bersih).")
+        except Exception as e:
+            self.get_logger().warn(f"⚠️ Pre-flight reset RPLiDAR dilewati: {e}")
+
     def launch_rplidar_driver(self):
         """Jalankan rplidar_composition sebagai subprocess terkelola."""
+        # Bersihkan hardware & buffer terlebih dahulu agar driver tidak timeout
+        self.reset_lidar_hardware()
+
         cmd = [
             'ros2', 'run', 'rplidar_ros', 'rplidar_composition',
             '--ros-args',
@@ -98,11 +121,11 @@ class RPLidarBridgeNode(Node):
 
         try:
             self.get_logger().info(f"🚀 Menjalankan driver rplidar_composition...")
-            # Buat process group terpisah agar Ctrl+C bisa membunuh driver dengan rapi
+            # Buat process group terpisah dan teruskan output ke terminal agar error/diagnostik terlihat jelas
             self.driver_proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
+                stdout=None,
+                stderr=None,
                 preexec_fn=os.setsid
             )
         except Exception as e:
@@ -184,6 +207,14 @@ class RPLidarBridgeNode(Node):
                     os.killpg(os.getpgid(self.driver_proc.pid), signal.SIGKILL)
                 except Exception:
                     pass
+        try:
+            import serial
+            s = serial.Serial(self.port, self.baud, timeout=0.2)
+            s.write(b'\xA5\x25')
+            time.sleep(0.02)
+            s.close()
+        except Exception:
+            pass
 
 
 def main(args=None):

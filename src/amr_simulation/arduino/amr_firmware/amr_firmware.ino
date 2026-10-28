@@ -242,6 +242,9 @@ void setup() {
   driveMotors(0, 0);
   waktuSebelumnya = millis();
   lastSerialCmdTime = millis();
+
+  // Kirim paket encoder awal segera setelah boot selesai
+  Serial.println("ENC:0,0");
 }
 
 // ====================== 11. LOOP UTAMA (50 Hz / 20 ms) ===================
