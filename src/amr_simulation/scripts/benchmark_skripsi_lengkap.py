@@ -324,9 +324,11 @@ class UnifiedBenchmarkNode(Node):
                 if remaining <= 0.005:
                     break
 
-                # Deselerasi halus di 25 cm terakhir
-                if remaining < 0.25:
-                    v_cmd = max(0.10, test_speed * (remaining / 0.25))
+                # Soft-Start Ramp 0.4s & Deselerasi halus di 25 cm terakhir
+                if t_now < 0.40:
+                    v_cmd = max(0.08, test_speed * (t_now / 0.40))
+                elif remaining < 0.25:
+                    v_cmd = max(0.08, test_speed * (remaining / 0.25))
                 else:
                     v_cmd = test_speed
 
