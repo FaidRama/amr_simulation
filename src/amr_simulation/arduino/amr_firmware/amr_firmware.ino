@@ -40,7 +40,7 @@ const bool INVERT_ENC_R   = true;
 
 // ====================== 3. PARAMETER FISIK ROBOT =========================
 const float WHEEL_DIAMETER = 0.127; // meter (5 inci = 0.127 meter sesuai Proposal Skripsi)
-const float WHEEL_BASE_B   = 0.458; // meter (45.8 cm sesuai Proposal Skripsi)
+const float WHEEL_BASE_B   = 0.483; // meter (Kalibrasi UMBmark: 48.3 cm efektif kontak ban)
 const float CPR_WHEEL      = 350.7; // Ticks per revolusi PG36 (7 PPR * 50.1 gearbox)
 
 // ====================== 4. PARAMETER KENDALI PID-PSO =====================

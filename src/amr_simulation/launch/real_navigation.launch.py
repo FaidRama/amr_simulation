@@ -97,7 +97,7 @@ def generate_launch_description():
             'serial_port': '/dev/arduino',
             'baudrate': 115200,
             'wheel_diameter': 0.127,
-            'wheel_separation': 0.458,
+            'wheel_separation': 0.483,
             'ticks_per_rev': 350.7,
             'odom_frame': 'odom',
             'base_frame': 'base_link',

@@ -68,7 +68,7 @@ class UnifiedBenchmarkNode(Node):
         # 2. PARAMETER FISIK ROBOT AMR-01 (SESUAI PROPOSAL SKRIPSI)
         # =====================================================================
         self.wheel_diameter = 0.127       # D = 0.127 m (5 inch)
-        self.wheel_separation = 0.458     # B = 0.458 m (jarak antar roda)
+        self.wheel_separation = 0.483     # B = 0.483 m (Kalibrasi UMBmark: efektif kontak ban)
 
         # Publishers & Subscribers (Depth 10)
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
@@ -426,9 +426,9 @@ class UnifiedBenchmarkNode(Node):
                     'target_deg': target_deg
                 })
 
-                # KONDISI HENTI 1: Target sudut tercapai (toleransi 0.8 derajat)
+                # KONDISI HENTI 1: Target sudut tercapai (toleransi presisi 0.3 derajat)
                 remaining = target_rad - abs(accumulated_yaw)
-                if remaining <= math.radians(0.8):
+                if remaining <= math.radians(0.3):
                     print(f"\n[🎯 TARGET TERCAPAI] Sudut {math.degrees(abs(accumulated_yaw)):.2f}° tercapai! Robot Berhenti.")
                     break
 
@@ -437,9 +437,9 @@ class UnifiedBenchmarkNode(Node):
                     print(f"\n[⚠️ TIMEOUT] Batas waktu maksimal {max_timeout:.0f}s tercapai. Robot dipaksa berhenti.")
                     break
 
-                # Perlambatan halus di 12 derajat terakhir (dengan batas bawah 0.22 rad/s agar motor tidak macet di lantai)
-                if remaining < math.radians(12.0):
-                    w_cmd = max(0.22, rot_speed * (remaining / math.radians(12.0)))
+                # Perlambatan halus di 15 derajat terakhir (merayap hingga 0.12 rad/s agar presisi tanpa inersia)
+                if remaining < math.radians(15.0):
+                    w_cmd = max(0.12, rot_speed * (remaining / math.radians(15.0)))
                 else:
                     w_cmd = rot_speed
 
@@ -619,17 +619,20 @@ class UnifiedBenchmarkNode(Node):
                     accum_yaw += dyaw
                     prev_yaw = self.odom_yaw
                     target_rad = math.radians(duration_or_dist)
-                    if abs(accum_yaw) >= target_rad or t_now > 15.0:
+                    rem_rot = target_rad - abs(accum_yaw)
+                    if rem_rot <= math.radians(0.3) or t_now > 15.0:
                         break
+                    w_cmd = max(0.12, ang_vel * (rem_rot / math.radians(15.0))) if rem_rot < math.radians(15.0) else ang_vel
+                    self.send_cmd(0.0, w_cmd)
                     sys.stdout.write(f"\r[*] Putaran: {math.degrees(abs(accum_yaw)):5.1f}° / {duration_or_dist:.0f}°")
                 else:
                     dist = math.hypot(self.odom_x - start_x, self.odom_y - start_y)
                     if dist >= duration_or_dist or t_now > 20.0:
                         break
                     sys.stdout.write(f"\r[*] Jarak: {dist:5.2f}m / {duration_or_dist:.2f}m")
+                    self.send_cmd(lin_vel, ang_vel)
 
                 sys.stdout.flush()
-                self.send_cmd(lin_vel, ang_vel)
 
         except KeyboardInterrupt:
             print("\n[!] Dibatalkan pengguna.")
