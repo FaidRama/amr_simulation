@@ -368,10 +368,16 @@ function updateCockpitData(data) {
         at_delivery: 'Tiba di Titik Tujuan',
         waiting_delivery: 'Menunggu Ambil Barang',
         returning_home: 'Kembali ke Home Base',
+        waiting_door: '🚪 Menunggu Pintu Dibuka...',
+        path_blocked: '⚠️ Jalur Terhalang Rintangan'
     };
     const phaseText = document.getElementById('cockpit-phase-text');
     if (phaseText) {
-        phaseText.textContent = phaseLabels[d.current_phase] || d.current_phase || 'Standby';
+        if (d.waiting_info && d.waiting_info.message) {
+            phaseText.textContent = d.waiting_info.message;
+        } else {
+            phaseText.textContent = phaseLabels[d.current_phase] || d.current_phase || 'Standby';
+        }
     }
 
     const progressFill = document.getElementById('cockpit-progress-fill');

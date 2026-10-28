@@ -830,6 +830,7 @@ def apply_mode_profile(mode, custom_map_file=None, save=True):
     waypoints_config['predefined_points'] = list(prof.get('predefined_points', []))
     waypoints_config['home_position'] = dict(prof.get('home_position', {'x': 0.0, 'y': 0.0, 'yaw': 0.0}))
     waypoints_config['settings'] = dict(prof.get('settings', {}))
+    waypoints_config['doors'] = list(prof.get('doors', []))
 
     find_map_files(map_to_load)
     if save:
@@ -1419,9 +1420,11 @@ def api_saved_points():
     """Daftar titik predefined + custom untuk mode aktif."""
     points = waypoints_config.get('predefined_points', [])
     home = waypoints_config.get('home_position', {'x': 0, 'y': 0, 'yaw': 0})
+    doors = waypoints_config.get('doors', [])
     return jsonify({
         'points': points,
         'home': home,
+        'doors': doors,
         'mode': waypoints_config.get('operation_mode', 'real'),
         'map_file': ACTIVE_MAP_FILE
     })
@@ -1470,6 +1473,61 @@ def api_delete_point():
         waypoints_config['profiles'][active_mode]['predefined_points'] = list(waypoints_config['predefined_points'])
     
     save_waypoints_config()
+    return jsonify({'success': True})
+
+
+@app.route('/api/doors', methods=['GET', 'POST'])
+def api_doors():
+    """Daftar pintu dan tambah/edit zona koordinat pintu."""
+    if request.method == 'GET':
+        return jsonify({
+            'doors': waypoints_config.get('doors', []),
+            'mode': waypoints_config.get('operation_mode', 'real')
+        })
+    
+    data = request.get_json()
+    door = {
+        'name': data.get('name', 'Pintu'),
+        'x': round(float(data.get('x', 0)), 3),
+        'y': round(float(data.get('y', 0)), 3),
+        'radius': round(float(data.get('radius', 1.5)), 2)
+    }
+    
+    if 'doors' not in waypoints_config:
+        waypoints_config['doors'] = []
+    
+    existing_idx = next((i for i, d in enumerate(waypoints_config['doors']) if d.get('name') == door['name']), None)
+    if existing_idx is not None:
+        waypoints_config['doors'][existing_idx] = door
+    else:
+        waypoints_config['doors'].append(door)
+    
+    active_mode = waypoints_config.get('operation_mode', 'real')
+    if 'profiles' in waypoints_config and active_mode in waypoints_config['profiles']:
+        waypoints_config['profiles'][active_mode]['doors'] = list(waypoints_config['doors'])
+    
+    save_waypoints_config()
+    if ros_node is not None:
+        ros_node.send_control('reload_config')
+    return jsonify({'success': True, 'door': door})
+
+
+@app.route('/api/doors/delete', methods=['POST'])
+def api_delete_door():
+    """Hapus zona pintu dari konfigurasi mode aktif."""
+    data = request.get_json()
+    name = data.get('name', '')
+    
+    doors = waypoints_config.get('doors', [])
+    waypoints_config['doors'] = [d for d in doors if d.get('name') != name]
+    
+    active_mode = waypoints_config.get('operation_mode', 'real')
+    if 'profiles' in waypoints_config and active_mode in waypoints_config['profiles']:
+        waypoints_config['profiles'][active_mode]['doors'] = list(waypoints_config['doors'])
+    
+    save_waypoints_config()
+    if ros_node is not None:
+        ros_node.send_control('reload_config')
     return jsonify({'success': True})
 
 

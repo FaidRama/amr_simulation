@@ -184,24 +184,6 @@ function drawMap(canvas, ctx, options = {}) {
         });
     }
 
-    // Record & Draw Robot Trajectory Trail
-    if (showRobot && typeof recordRobotTrailPoint === 'function') {
-        recordRobotTrailPoint(APP.pose.x || 0, APP.pose.y || 0);
-        if (MAP_STATE.robotTrail.length > 1) {
-            ctx.save();
-            ctx.beginPath();
-            MAP_STATE.robotTrail.forEach((pt, idx) => {
-                const { px, py } = worldToPixel(pt.x, pt.y);
-                if (idx === 0) ctx.moveTo(px, py);
-                else ctx.lineTo(px, py);
-            });
-            ctx.strokeStyle = 'rgba(16, 185, 129, 0.75)';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-            ctx.restore();
-        }
-    }
-
     // Draw Active Nav2 Navigation Planned Path (/plan)
     if (APP.navPath && APP.navPath.length > 1) {
         ctx.save();
@@ -515,18 +497,8 @@ async function loadLiveSlamMapData() {
 }
 
 function recordRobotTrailPoint(wx, wy) {
-    if (typeof wx !== 'number' || typeof wy !== 'number' || isNaN(wx) || isNaN(wy)) return;
-    const trail = MAP_STATE.robotTrail;
-    if (trail.length === 0) {
-        trail.push({ x: wx, y: wy });
-        return;
-    }
-    const last = trail[trail.length - 1];
-    const dist = Math.hypot(wx - last.x, wy - last.y);
-    if (dist >= 0.06) {
-        trail.push({ x: wx, y: wy });
-        if (trail.length > 600) trail.shift();
-    }
+    // Disabled: jejak riwayat gerakan tidak ditampilkan agar tampilan peta bersih dan rapi
+    return;
 }
 
 function drawOriginCrosshair(ctx, px, py) {
@@ -556,11 +528,6 @@ function drawOriginCrosshair(ctx, px, py) {
 
 function drawLiveSlamMap(canvas, ctx) {
     if (!canvas || !canvas.parentElement) return;
-
-    // Record live robot movement trail
-    if (APP.pose) {
-        recordRobotTrailPoint(APP.pose.x || 0, APP.pose.y || 0);
-    }
 
     // Periodically refresh live SLAM image every 1.2s when live map is available
     if (APP.hasLiveMap && (Date.now() - MAP_STATE.lastSlamFetch > 1200)) {
@@ -616,21 +583,6 @@ function drawLiveSlamMap(canvas, ctx) {
         const origPt = toSlamPixel(0, 0);
         drawOriginCrosshair(ctx, origPt.px, origPt.py);
 
-        // Draw Robot Trajectory Trail
-        if (MAP_STATE.robotTrail.length > 1) {
-            ctx.save();
-            ctx.beginPath();
-            MAP_STATE.robotTrail.forEach((pt, idx) => {
-                const { px, py } = toSlamPixel(pt.x, pt.y);
-                if (idx === 0) ctx.moveTo(px, py);
-                else ctx.lineTo(px, py);
-            });
-            ctx.strokeStyle = 'rgba(16, 185, 129, 0.78)';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-            ctx.restore();
-        }
-
         // Draw Live Robot Pose & Heading
         const robotPt = toSlamPixel(APP.pose.x || 0, APP.pose.y || 0);
         drawRobot(ctx, robotPt.px, robotPt.py, APP.pose.yaw || 0);
@@ -674,19 +626,6 @@ function drawLiveSlamMap(canvas, ctx) {
     });
 
     drawOriginCrosshair(ctx, cx, cy);
-
-    // Draw Robot Trail on Standby Grid
-    if (MAP_STATE.robotTrail.length > 1) {
-        ctx.beginPath();
-        MAP_STATE.robotTrail.forEach((pt, idx) => {
-            const { px, py } = toStandbyPixel(pt.x, pt.y);
-            if (idx === 0) ctx.moveTo(px, py);
-            else ctx.lineTo(px, py);
-        });
-        ctx.strokeStyle = 'rgba(16, 185, 129, 0.65)';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-    }
 
     // Draw Robot on Standby Grid
     const rPt = toStandbyPixel(APP.pose.x || 0, APP.pose.y || 0);

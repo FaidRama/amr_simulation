@@ -16,6 +16,11 @@ predefined_points:
   type: delivery
   x: 2.0
   y: 0.5
+doors:
+- name: "Pintu Lab DDC"
+  x: 1.8
+  y: 0.2
+  radius: 1.5
 profiles:
   real:
     home_position:
@@ -28,8 +33,16 @@ profiles:
     predefined_points:
     - *id001
     - *id002
+    doors:
+    - name: "Pintu Lab DDC"
+      x: 1.8
+      y: 0.2
+      radius: 1.5
     settings:
       arrival_sound_mode: human
+      door_wait_interval: 8.0
+      door_max_retries: 15
+      obstacle_max_retries: 2
       max_angular_speed: 0.5
       max_linear_speed: 0.35
       theme: nordic-slate
@@ -53,8 +66,25 @@ profiles:
       type: delivery
       x: -17.0
       y: 3.0
+    doors:
+    - name: "Pintu Ruang 1B"
+      x: -12.0
+      y: 5.0
+      radius: 2.0
+    settings:
+      arrival_sound_mode: human
+      door_wait_interval: 8.0
+      door_max_retries: 15
+      obstacle_max_retries: 2
+      max_angular_speed: 0.5
+      max_linear_speed: 0.35
+      theme: nordic-slate
+      waypoint_pause_duration: 3
 settings:
   arrival_sound_mode: human
+  door_wait_interval: 8.0
+  door_max_retries: 15
+  obstacle_max_retries: 2
   max_angular_speed: 0.5
   max_linear_speed: 0.35
   theme: nordic-slate
