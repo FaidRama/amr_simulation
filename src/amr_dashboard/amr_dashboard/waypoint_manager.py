@@ -17,6 +17,10 @@ Fitur:
 3. Konfirmasi operator di titik pickup ("Barang Sudah Dimuat")
    dan delivery ("Barang Sudah Diambil")
 4. Status publisher berkala untuk monitoring di dashboard
+5. Mitigasi Pintu Tertutup (Solusi A - Zona Koordinat Pintu):
+   Jika robot terhalang di area pintu terdaftar, robot TIDAK abort,
+   melainkan menunggu dengan status 'waiting_door' dan auto-retry saat pintu dibuka.
+6. Penanganan Rintangan Koridor ('path_blocked') dengan retry berkala.
 =================================================================
 """
 import os
@@ -30,10 +34,18 @@ import threading
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+from rclpy.duration import Duration
 from nav2_msgs.action import NavigateToPose
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import PoseStamped, Twist, PoseWithCovarianceStamped
+from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 from action_msgs.msg import GoalStatus
+
+try:
+    from tf2_ros import Buffer, TransformListener
+    HAS_TF2 = True
+except ImportError:
+    HAS_TF2 = False
 
 
 class WaypointManager(Node):
@@ -56,10 +68,31 @@ class WaypointManager(Node):
         # Menerima perintah kontrol (cancel, pause, resume)
         self.control_sub = self.create_subscription(
             String, '/amr/delivery_control', self.on_control_received, 10)
+            
+        # Posisi robot (AMCL & Odom fallback)
+        self.current_robot_pose = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+        self.amcl_sub = self.create_subscription(
+            PoseWithCovarianceStamped, '/amcl_pose', self._on_amcl_pose, 10)
+        self.odom_sub = self.create_subscription(
+            Odometry, '/odom', self._on_odom_pose, 10)
+            
+        # TF2 Buffer & Listener untuk real-time map -> base_footprint / base_link
+        self.tf_buffer = None
+        self.tf_listener = None
+        if HAS_TF2:
+            try:
+                self.tf_buffer = Buffer()
+                self.tf_listener = TransformListener(self.tf_buffer, self)
+            except Exception as e:
+                self.get_logger().warn(f'TF2 listener init error: {e}')
         
         # === CONFIGURATION (waypoints.yaml) ===
         self.home_position = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
         self.auto_return_home = True
+        self.doors = []
+        self.door_wait_interval = 8.0
+        self.door_max_retries = 15
+        self.obstacle_max_retries = 2
         self.load_config()
         
         # === STATE MANAGEMENT ===
@@ -85,11 +118,56 @@ class WaypointManager(Node):
         self.get_logger().info(' WAYPOINT MANAGER NODE - AKTIF')
         self.get_logger().info(f' Home Position: ({self.home_position.get("x", 0.0):.2f}, {self.home_position.get("y", 0.0):.2f})')
         self.get_logger().info(f' Auto Return Home: {self.auto_return_home}')
+        self.get_logger().info(f' Pintu Terdaftar: {len(self.doors)} zona pintu')
         self.get_logger().info(' Menunggu perintah dari dashboard...')
         self.get_logger().info('='*55)
     
+    def _on_amcl_pose(self, msg):
+        """Simpan estimasi posisi robot dari AMCL."""
+        self.current_robot_pose['x'] = float(msg.pose.pose.position.x)
+        self.current_robot_pose['y'] = float(msg.pose.pose.position.y)
+
+    def _on_odom_pose(self, msg):
+        """Simpan estimasi posisi robot dari Odom sebagai fallback."""
+        if not HAS_TF2 and self.current_robot_pose['x'] == 0.0 and self.current_robot_pose['y'] == 0.0:
+            self.current_robot_pose['x'] = float(msg.pose.pose.position.x)
+            self.current_robot_pose['y'] = float(msg.pose.pose.position.y)
+
+    def get_current_pose(self):
+        """Mendapatkan koordinat (x, y) robot saat ini di frame 'map'."""
+        if HAS_TF2 and self.tf_buffer:
+            for frame in ('base_footprint', 'base_link'):
+                try:
+                    t = self.tf_buffer.lookup_transform(
+                        'map', frame,
+                        rclpy.time.Time(),
+                        timeout=Duration(seconds=0.05)
+                    )
+                    return float(t.transform.translation.x), float(t.transform.translation.y)
+                except Exception:
+                    pass
+        return float(self.current_robot_pose['x']), float(self.current_robot_pose['y'])
+
+    def check_near_door(self):
+        """
+        Memeriksa apakah posisi robot saat ini berada dalam radius area pintu.
+        Mengembalikan (is_near, door_dict, distance).
+        """
+        if not self.doors:
+            return False, None, 0.0
+        
+        rx, ry = self.get_current_pose()
+        for door in self.doors:
+            dx = float(door.get('x', 0.0))
+            dy = float(door.get('y', 0.0))
+            radius = float(door.get('radius', 1.5))
+            dist = math.hypot(rx - dx, ry - dy)
+            if dist <= radius:
+                return True, door, dist
+        return False, None, 0.0
+
     def load_config(self):
-        """Load home_position dan settings dari waypoints.yaml sesuai mode aktif."""
+        """Load home_position, doors, dan settings dari waypoints.yaml sesuai mode aktif."""
         config_paths = [
             os.path.join(os.path.expanduser('~'), 'deliver_amr', 'src', 'amr_dashboard', 'config', 'waypoints.yaml'),
             os.path.join(os.path.expanduser('~'), 'Documents', 'amr_ws', 'src', 'amr_dashboard', 'config', 'waypoints.yaml'),
@@ -109,13 +187,35 @@ class WaypointManager(Node):
                         cfg = yaml.safe_load(f) or {}
                     mode = cfg.get('operation_mode', 'sim')
                     profile = cfg.get('profiles', {}).get(mode, {})
+                    
                     if 'home_position' in profile:
                         self.home_position = profile['home_position']
                     elif 'home_position' in cfg:
                         self.home_position = cfg['home_position']
-                    if 'settings' in cfg and 'auto_return_home' in cfg['settings']:
-                        self.auto_return_home = cfg['settings']['auto_return_home']
-                    self.get_logger().info(f'Loaded config [{mode.upper()}] dari {path} | Home: ({self.home_position.get("x", 0.0):.2f}, {self.home_position.get("y", 0.0):.2f})')
+                    
+                    # Muat daftar pintu (doors)
+                    if 'doors' in profile:
+                        self.doors = profile['doors']
+                    elif 'doors' in cfg:
+                        self.doors = cfg['doors']
+                    else:
+                        self.doors = []
+                    
+                    # Muat settings
+                    settings = profile.get('settings', cfg.get('settings', {}))
+                    if 'auto_return_home' in settings:
+                        self.auto_return_home = settings['auto_return_home']
+                    if 'door_wait_interval' in settings:
+                        self.door_wait_interval = float(settings['door_wait_interval'])
+                    if 'door_max_retries' in settings:
+                        self.door_max_retries = int(settings['door_max_retries'])
+                    if 'obstacle_max_retries' in settings:
+                        self.obstacle_max_retries = int(settings['obstacle_max_retries'])
+                        
+                    self.get_logger().info(
+                        f'Loaded config [{mode.upper()}] dari {path} | '
+                        f'Home: ({self.home_position.get("x", 0.0):.2f}, {self.home_position.get("y", 0.0):.2f}) | '
+                        f'Doors: {len(self.doors)}')
                     return
                 except Exception as e:
                     self.get_logger().warn(f'Gagal membaca config {path}: {e}')
@@ -143,7 +243,8 @@ class WaypointManager(Node):
                 'current_phase': 'idle',
                 'start_time': time.time(),
                 'completed_tasks': 0,
-                'total_tasks': len(tasks)
+                'total_tasks': len(tasks),
+                'waiting_info': None
             }
             self.is_paused = False
             self.is_cancelled = False
@@ -183,6 +284,7 @@ class WaypointManager(Node):
                 if self.mission:
                     self.mission['status'] = 'cancelled'
                     self.mission['current_phase'] = 'idle'
+                    self.mission['waiting_info'] = None
                 return
             
             # Pembatalan pertama: batalkan task antrian & goal aktif saat ini,
@@ -199,6 +301,7 @@ class WaypointManager(Node):
             self.emergency_stop()
             if self.mission:
                 self.mission['current_phase'] = 'returning_home'
+                self.mission['waiting_info'] = None
             
         elif command == 'pause':
             self.get_logger().info('PERINTAH PAUSE DITERIMA')
@@ -228,7 +331,7 @@ class WaypointManager(Node):
             self.confirm_received = True
         
         elif command == 'reload_config':
-            self.get_logger().info('↻ RELOAD CONFIG: Memperbarui konfigurasi mode & home position...')
+            self.get_logger().info('↻ RELOAD CONFIG: Memperbarui konfigurasi mode, pintu & home position...')
             self.load_config()
     
     def emergency_stop(self):
@@ -236,6 +339,121 @@ class WaypointManager(Node):
         stop = Twist()
         self.cmd_vel_pub.publish(stop)
     
+    def navigate_with_door_handling(self, target_x, target_y, target_yaw=0.0, target_phase='navigating', target_name='Target'):
+        """
+        Navigasi ke target dengan penanganan cerdas untuk pintu tertutup dan rintangan jalur.
+        - Jika Nav2 gagal dan posisi robot berada dalam radius pintu terdaftar:
+            Status beralih ke 'waiting_door', robot berhenti dan menunggu pintu dibuka (auto-retry).
+        - Jika Nav2 gagal di tempat lain:
+            Status beralih ke 'path_blocked', robot mencoba ulang beberapa kali (menghindari rintangan dinamis).
+        """
+        self.mission['current_phase'] = target_phase
+        self.mission['waiting_info'] = None
+        self.publish_status()
+        
+        # Percobaan awal navigasi normal
+        success = self.navigate_to_point(target_x, target_y, target_yaw)
+        if success or self.is_cancelled or self.stop_navigation:
+            return success
+        
+        # Jika navigasi gagal, periksa apakah posisi robot berada di area pintu
+        is_door, door, dist = self.check_near_door()
+        if is_door:
+            door_name = door.get('name', 'Pintu')
+            self.get_logger().warn(
+                f'🚪 [PINTU TERTUTUP] AMR terhalang di dekat [{door_name}] (jarak: {dist:.2f} m). '
+                f'Robot TIDAK abort! Menunggu pintu dibuka...')
+            
+            for attempt in range(1, self.door_max_retries + 1):
+                if self.is_cancelled or self.stop_navigation:
+                    return False
+                
+                # Pasang status waiting_door untuk dashboard
+                self.mission['current_phase'] = 'waiting_door'
+                self.mission['waiting_info'] = {
+                    'type': 'door',
+                    'door_name': door_name,
+                    'attempt': attempt,
+                    'max_retries': self.door_max_retries,
+                    'dist': round(dist, 2),
+                    'message': f'Menunggu {door_name} dibuka ({attempt}/{self.door_max_retries})'
+                }
+                self.publish_status()
+                
+                # Tunggu jeda (default 8 detik) sambil memantau perintah cancel / skip
+                wait_ticks = int(self.door_wait_interval * 2)
+                for _ in range(wait_ticks):
+                    if self.is_cancelled or self.stop_navigation:
+                        return False
+                    time.sleep(0.5)
+                
+                if self.is_cancelled or self.stop_navigation:
+                    return False
+                
+                self.get_logger().info(
+                    f'🔄 [RETRY {attempt}/{self.door_max_retries}] Mencoba navigasi ulang melalui [{door_name}]...')
+                self.mission['current_phase'] = target_phase
+                self.publish_status()
+                
+                # Coba kirim ulang goal navigasi
+                retry_success = self.navigate_to_point(target_x, target_y, target_yaw)
+                if retry_success:
+                    self.get_logger().info(
+                        f'✅ Pintu [{door_name}] telah dibuka! Robot melanjutkan perjalanan ke [{target_name}].')
+                    self.mission['waiting_info'] = None
+                    return True
+                
+                # Cek apakah robot masih berada di dekat pintu
+                is_still_door, _, dist = self.check_near_door()
+                if not is_still_door:
+                    self.get_logger().warn('Posisi robot sudah bergeser dari area pintu.')
+                    break
+            
+            self.get_logger().error(
+                f'❌ Timeout: Pintu [{door_name}] tidak dibuka setelah {self.door_max_retries} percobaan.')
+            self.mission['waiting_info'] = None
+            return False
+        
+        else:
+            # Gagal di koridor / open area (rintangan umum)
+            self.get_logger().warn(
+                f'⚠️ [JALUR TERHALANG] Terhalang obstacle di koridor menuju [{target_name}].')
+            
+            for attempt in range(1, self.obstacle_max_retries + 1):
+                if self.is_cancelled or self.stop_navigation:
+                    return False
+                
+                self.mission['current_phase'] = 'path_blocked'
+                self.mission['waiting_info'] = {
+                    'type': 'obstacle',
+                    'target_name': target_name,
+                    'attempt': attempt,
+                    'max_retries': self.obstacle_max_retries,
+                    'message': f'Jalur terhalang rintangan ({attempt}/{self.obstacle_max_retries})'
+                }
+                self.publish_status()
+                
+                # Tunggu jeda singkat (4 detik) agar orang / obstacle dinamis berlalu
+                for _ in range(8):
+                    if self.is_cancelled or self.stop_navigation:
+                        return False
+                    time.sleep(0.5)
+                
+                self.mission['current_phase'] = target_phase
+                self.publish_status()
+                self.get_logger().info(
+                    f'🔄 [OBSTACLE RETRY {attempt}/{self.obstacle_max_retries}] Mencoba replan jalur...')
+                
+                retry_success = self.navigate_to_point(target_x, target_y, target_yaw)
+                if retry_success:
+                    self.get_logger().info(f'✅ Jalur menuju [{target_name}] kembali bersih!')
+                    self.mission['waiting_info'] = None
+                    return True
+            
+            self.get_logger().error(f'❌ Gagal mencapai [{target_name}]: Jalur tetap terhalang rintangan.')
+            self.mission['waiting_info'] = None
+            return False
+
     def execute_mission(self):
         """Eksekusi semua task dalam misi secara sequential."""
         if not self.mission:
@@ -265,10 +483,10 @@ class WaypointManager(Node):
             # === FASE 1: Navigasi ke titik PICKUP ===
             self.get_logger().info(
                 f'--- Task {i+1}/{len(tasks)}: Menuju pickup [{pickup["name"]}] ---')
-            self.mission['current_phase'] = 'navigating_pickup'
             
-            success = self.navigate_to_point(
-                pickup['x'], pickup['y'], pickup.get('yaw', 0.0))
+            success = self.navigate_with_door_handling(
+                pickup['x'], pickup['y'], pickup.get('yaw', 0.0),
+                target_phase='navigating_pickup', target_name=pickup['name'])
             
             if self.is_cancelled:
                 break
@@ -277,6 +495,7 @@ class WaypointManager(Node):
                 self.get_logger().warn(
                     f'Gagal mencapai pickup [{pickup["name"]}], skip ke task berikutnya.')
                 task['status'] = 'failed'
+                self.stop_navigation = False
                 continue
             
             # Sampai di pickup — tunggu konfirmasi dari operator
@@ -305,10 +524,10 @@ class WaypointManager(Node):
             # === FASE 2: Navigasi ke titik DELIVERY ===
             self.get_logger().info(
                 f'--- Task {i+1}/{len(tasks)}: Menuju delivery [{delivery["name"]}] ---')
-            self.mission['current_phase'] = 'navigating_delivery'
             
-            success = self.navigate_to_point(
-                delivery['x'], delivery['y'], delivery.get('yaw', 0.0))
+            success = self.navigate_with_door_handling(
+                delivery['x'], delivery['y'], delivery.get('yaw', 0.0),
+                target_phase='navigating_delivery', target_name=delivery['name'])
             
             if self.is_cancelled:
                 break
@@ -317,6 +536,7 @@ class WaypointManager(Node):
                 self.get_logger().warn(
                     f'Gagal mencapai delivery [{delivery["name"]}].')
                 task['status'] = 'failed'
+                self.stop_navigation = False
                 continue
             
             # Sampai di delivery — tunggu konfirmasi dari operator
@@ -348,6 +568,7 @@ class WaypointManager(Node):
             if self.mission:
                 self.mission['status'] = 'running'
                 self.mission['current_phase'] = 'returning_home'
+                self.mission['waiting_info'] = None
             
             self.is_returning_home = True
             self.stop_navigation = False
@@ -357,12 +578,15 @@ class WaypointManager(Node):
             home_y = self.home_position.get('y', 0.0)
             home_yaw = self.home_position.get('yaw', 0.0)
             
-            self.navigate_to_point(home_x, home_y, home_yaw)
+            self.navigate_with_door_handling(
+                home_x, home_y, home_yaw,
+                target_phase='returning_home', target_name='Home')
             self.is_returning_home = False
             
             if self.mission:
                 self.mission['status'] = 'cancelled'
                 self.mission['current_phase'] = 'idle'
+                self.mission['waiting_info'] = None
             self.get_logger().info('AMR telah kembali ke titik awal setelah pembatalan misi.')
             
         elif self.auto_return_home:
@@ -372,6 +596,7 @@ class WaypointManager(Node):
             if self.mission:
                 self.mission['status'] = 'running'
                 self.mission['current_phase'] = 'returning_home'
+                self.mission['waiting_info'] = None
             
             self.is_returning_home = True
             self.stop_navigation = False
@@ -381,12 +606,15 @@ class WaypointManager(Node):
             home_y = self.home_position.get('y', 0.0)
             home_yaw = self.home_position.get('yaw', 0.0)
             
-            self.navigate_to_point(home_x, home_y, home_yaw)
+            self.navigate_with_door_handling(
+                home_x, home_y, home_yaw,
+                target_phase='returning_home', target_name='Home')
             self.is_returning_home = False
             
             if self.mission:
                 self.mission['status'] = 'completed'
                 self.mission['current_phase'] = 'idle'
+                self.mission['waiting_info'] = None
             self.get_logger().info('='*50)
             self.get_logger().info(' MISI SELESAI — AMR telah kembali ke Home!')
             self.get_logger().info('='*50)
@@ -395,6 +623,7 @@ class WaypointManager(Node):
             if self.mission:
                 self.mission['status'] = 'completed'
                 self.mission['current_phase'] = 'idle'
+                self.mission['waiting_info'] = None
             self.get_logger().info('='*50)
             self.get_logger().info(' MISI SELESAI — Semua task telah diproses!')
             self.get_logger().info('='*50)
@@ -535,7 +764,8 @@ class WaypointManager(Node):
                 'completed_tasks': self.mission['completed_tasks'],
                 'total_tasks': self.mission['total_tasks'],
                 'elapsed_time': time.time() - self.mission['start_time'],
-                'tasks': self.mission['tasks']
+                'tasks': self.mission['tasks'],
+                'waiting_info': self.mission.get('waiting_info', None)
             }
         
         msg = String()
@@ -553,9 +783,10 @@ class WaypointManager(Node):
                 'completed_tasks': self.mission['completed_tasks'],
                 'total_tasks': self.mission['total_tasks'],
                 'elapsed_time': time.time() - self.mission['start_time'],
-                'tasks': self.mission['tasks']
+                'tasks': self.mission['tasks'],
+                'waiting_info': self.mission.get('waiting_info', None)
             }
-        return {'status': 'idle', 'current_phase': 'idle'}
+        return {'status': 'idle', 'current_phase': 'idle', 'waiting_info': None}
 
 
 def main(args=None):

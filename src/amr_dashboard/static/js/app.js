@@ -306,7 +306,9 @@ function renderHome() {
         navigating_delivery: 'Menuju Titik Tujuan',
         waiting_delivery: 'Menunggu Ambil Barang',
         at_delivery: 'Tiba di Tujuan',
-        returning_home: 'Kembali ke Home Base'
+        returning_home: 'Kembali ke Home Base',
+        waiting_door: '🚪 Menunggu Pintu Dibuka...',
+        path_blocked: '⚠️ Jalur Terhalang Rintangan'
     };
 
     const yawDeg = ((APP.pose.yaw || 0) * 180 / Math.PI).toFixed(1);
@@ -345,7 +347,7 @@ function renderHome() {
                 <div class="kpi-main" id="home-status">${statusText}</div>
                 <div class="kpi-sub">
                     <span>FASE</span>
-                    <span class="text-accent" id="home-phase">${phaseLabels[APP.delivery.current_phase] || APP.delivery.current_phase}</span>
+                    <span class="text-accent" id="home-phase">${(APP.delivery.waiting_info && APP.delivery.waiting_info.message) ? APP.delivery.waiting_info.message : (phaseLabels[APP.delivery.current_phase] || APP.delivery.current_phase)}</span>
                 </div>
             </div>
 
@@ -856,7 +858,16 @@ function handleDeliveryStatusUpdate(d) {
             updateInPageConfirmCard(d);
         }
     } else {
-        _lastNotifiedPhase = null;
+        if (d.current_phase === 'waiting_door' && _lastNotifiedPhase !== 'waiting_door') {
+            _lastNotifiedPhase = 'waiting_door';
+            const doorName = (d.waiting_info && d.waiting_info.door_name) || 'Pintu';
+            showToast(`🚪 Terhalang ${doorName}. Menunggu pintu dibuka...`, 'warning');
+        } else if (d.current_phase === 'path_blocked' && _lastNotifiedPhase !== 'path_blocked') {
+            _lastNotifiedPhase = 'path_blocked';
+            showToast('⚠️ Jalur navigasi terhalang rintangan. Mencoba replan...', 'warning');
+        } else if (d.current_phase !== 'waiting_door' && d.current_phase !== 'path_blocked') {
+            _lastNotifiedPhase = null;
+        }
         _modalDismissedForCurrentPhase = false;
         hideArrivalModal();
         hideGlobalMissionBanner();
@@ -1055,10 +1066,13 @@ function updateMissionUI() {
             at_delivery: 'Tiba di delivery',
             waiting_delivery: 'Menunggu barang diambil',
             returning_home: 'Kembali ke titik awal...',
+            waiting_door: 'Menunggu pintu dibuka...',
+            path_blocked: 'Jalur terhalang rintangan...',
             idle: 'Selesai'
         };
         if (progressText) {
-            progressText.textContent = `TASK ${(d.current_task_index || 0) + 1}/${d.total_tasks} // ${phaseLabels[d.current_phase] || d.current_phase}`;
+            const phaseMsg = (d.waiting_info && d.waiting_info.message) ? d.waiting_info.message : (phaseLabels[d.current_phase] || d.current_phase);
+            progressText.textContent = `TASK ${(d.current_task_index || 0) + 1}/${d.total_tasks} // ${phaseMsg}`;
         }
     }
 
@@ -3021,10 +3035,15 @@ async function globalStatusPoll() {
                 navigating_delivery: 'Menuju Titik Tujuan',
                 waiting_delivery: 'Menunggu Ambil Barang',
                 at_delivery: 'Tiba di Tujuan',
-                returning_home: 'Kembali ke Home Base'
+                returning_home: 'Kembali ke Home Base',
+                waiting_door: '🚪 Menunggu Pintu Dibuka...',
+                path_blocked: '⚠️ Jalur Terhalang Rintangan'
             };
             const homePhase = document.getElementById('home-phase');
-            if (homePhase) homePhase.textContent = phaseLabels[APP.delivery.current_phase] || APP.delivery.current_phase;
+            if (homePhase) {
+                const phaseMsg = (APP.delivery.waiting_info && APP.delivery.waiting_info.message) ? APP.delivery.waiting_info.message : (phaseLabels[APP.delivery.current_phase] || APP.delivery.current_phase);
+                homePhase.textContent = phaseMsg;
+            }
 
             const homePos = document.getElementById('home-pos');
             if (homePos) homePos.textContent = `${APP.pose.x.toFixed(2)}, ${APP.pose.y.toFixed(2)}`;
