@@ -36,7 +36,7 @@ class ArduinoBridgeNode(Node):
         self.declare_parameter('wheel_diameter', 0.127)      # 5 inci = 0.127 meter
         self.declare_parameter('wheel_separation', 0.483)    # Kalibrasi UMBmark: 48.3 cm (efektif kontak ban)
         self.declare_parameter('ticks_per_rev', 350.7)       # 7 PPR * 50.1 gearbox = 350.7 ticks/rev
-        self.declare_parameter('cmd_vel_timeout', 1.0)       # Timeout 1.0s (halus, tidak getar saat Nav2 menghitung)
+        self.declare_parameter('cmd_vel_timeout', 0.5)       # Timeout 0.5s (halus, tidak getar saat Nav2 menghitung)
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_footprint')
         self.declare_parameter('publish_tf', True)
@@ -84,7 +84,7 @@ class ArduinoBridgeNode(Node):
         self.pid_left_pub = self.create_publisher(Point, '/pid/motor_left', 10)
         self.pid_right_pub = self.create_publisher(Point, '/pid/motor_right', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
-        self.cmd_sub = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
+        self.cmd_sub = self.create_subscription(Twist, '/cmd_vel_safe', self.cmd_vel_callback, 10)
 
         # Telemetri PID (Setpoint vs Aktual RPM)
         self.setpoint_rpm_l = 0.0
