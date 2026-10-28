@@ -11,7 +11,7 @@ amcl:
     alpha3: 0.1
     alpha4: 0.1
     alpha5: 0.2
-    base_frame_id: "base_footprint"
+    base_frame_id: "base_link"
     beam_skip_distance: 0.5
     beam_skip_error_threshold: 0.9
     beam_skip_threshold: 0.3
@@ -54,7 +54,7 @@ bt_navigator:
   ros__parameters:
     use_sim_time: False
     global_frame: map
-    robot_base_frame: base_footprint
+    robot_base_frame: base_link
     odom_topic: /odom
     transform_tolerance: 1.5
     default_bt_xml_filename: "navigate_w_replanning_and_recovery.xml"
@@ -170,7 +170,7 @@ local_costmap:
       update_frequency: 6.0
       publish_frequency: 3.0
       global_frame: odom
-      robot_base_frame: base_footprint
+      robot_base_frame: base_link
       use_sim_time: False
       transform_tolerance: 1.5
       rolling_window: true
@@ -212,7 +212,7 @@ global_costmap:
       update_frequency: 2.0
       publish_frequency: 1.0
       global_frame: map
-      robot_base_frame: base_footprint
+      robot_base_frame: base_link
       use_sim_time: False
       transform_tolerance: 1.5
       robot_radius: 0.29
@@ -291,7 +291,7 @@ recoveries_server:
     back_up:
       plugin: "nav2_recoveries/BackUp"
     global_frame: odom
-    robot_base_frame: base_footprint
+    robot_base_frame: base_link
     transform_timeout: 0.2
     use_sim_time: False
     simulate_ahead_time: 1.5

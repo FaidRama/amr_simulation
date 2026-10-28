@@ -88,13 +88,14 @@ def generate_launch_description():
     )
 
     # 3. Arduino Bridge (Odometry Asli & Motor Control via /dev/arduino)
+    arduino_port = '/dev/arduino' if os.path.exists('/dev/arduino') else ('/dev/ttyACM0' if os.path.exists('/dev/ttyACM0') else '/dev/ttyUSB1')
     start_arduino_bridge = Node(
         package='amr_simulation',
         executable='arduino_bridge.py',
         name='arduino_bridge',
         output='screen',
         parameters=[{
-            'serial_port': '/dev/arduino',
+            'serial_port': arduino_port,
             'baudrate': 115200,
             'wheel_diameter': 0.127,
             'wheel_separation': 0.483,
@@ -112,12 +113,14 @@ def generate_launch_description():
     tf_base_to_laser = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
+        name='tf_base_to_laser',
         arguments=['0', '0', '0', '3.14159', '0', '0', 'base_link', 'laser']
     )
 
     tf_base_to_footprint = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
+        name='tf_base_to_footprint',
         arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
     )
 
@@ -153,9 +156,9 @@ def generate_launch_description():
     )
 
 
-    # Nav2 dan Adaptive Velocity dijalankan setelah sensor stabil (delay 3 detik)
+    # Nav2 dan Adaptive Velocity dijalankan setelah sensor & odometry stabil (delay 5.0 detik)
     delayed_nav2_and_adaptor = TimerAction(
-        period=3.0,
+        period=5.0,
         actions=[start_nav2, start_adaptive_velocity]
     )
 
