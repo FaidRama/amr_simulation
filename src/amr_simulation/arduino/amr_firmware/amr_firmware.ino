@@ -37,7 +37,7 @@ const byte PIN_ENCB_R = A1;
 const bool INVERT_MOTOR_L = false;
 const bool INVERT_MOTOR_R = true;
 const bool INVERT_ENC_L = true;
-const bool INVERT_ENC_R = true;
+const bool INVERT_ENC_R = false;
 
 // ====================== 3. PARAMETER FISIK ROBOT =========================
 const float WHEEL_DIAMETER =
