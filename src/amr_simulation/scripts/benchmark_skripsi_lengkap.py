@@ -382,7 +382,7 @@ class UnifiedBenchmarkNode(Node):
     # =========================================================================
     # BAGIAN A.3: ODOMETRI ROTASI DI TEMPAT (90°, 180°, 360°) - SEKALI JALAN
     # =========================================================================
-    def run_odometry_rotation_test(self, target_deg: float = 90.0, rot_speed: float = 0.50):
+    def run_odometry_rotation_test(self, target_deg: float = 90.0, rot_speed: float = 0.35):
         self.wait_for_connections()
 
         target_rad = math.radians(target_deg)
@@ -426,9 +426,9 @@ class UnifiedBenchmarkNode(Node):
                     'target_deg': target_deg
                 })
 
-                # KONDISI HENTI 1: Target sudut tercapai (toleransi presisi 0.3 derajat)
+                # KONDISI HENTI 1: Target sudut tercapai (toleransi 0.5 derajat)
                 remaining = target_rad - abs(accumulated_yaw)
-                if remaining <= math.radians(0.3):
+                if remaining <= math.radians(0.5):
                     print(f"\n[🎯 TARGET TERCAPAI] Sudut {math.degrees(abs(accumulated_yaw)):.2f}° tercapai! Robot Berhenti.")
                     break
 
@@ -437,14 +437,12 @@ class UnifiedBenchmarkNode(Node):
                     print(f"\n[⚠️ TIMEOUT] Batas waktu maksimal {max_timeout:.0f}s tercapai. Robot dipaksa berhenti.")
                     break
 
-                # Deselerasi melandai halus (smooth linear ramp down)
-                decel_angle = math.radians(20.0)
-                if remaining < decel_angle:
-                    w_cmd = max(0.18, rot_speed * (remaining / decel_angle))
-                else:
-                    w_cmd = rot_speed
+                # Kecepatan putar tetap / konstan (tanpa deselerasi rumit agar 1 kali jalan mulus)
+                w_cmd = rot_speed
 
                 self.send_cmd(0.0, w_cmd)
+                time.sleep(0.05)  # Rate limiter 20 Hz (jeda stabil 50 ms agar komunikasi serial lancar)
+
                 sys.stdout.write(f"\r[*] Sudut Putaran Odom: {math.degrees(abs(accumulated_yaw)):6.2f}° / {target_deg:.0f}°")
                 sys.stdout.flush()
 
@@ -722,7 +720,7 @@ def main():
                 elif pilih_a == '6':
                     sub_deg = input("Pilih sudut rotasi (90 / 180 / 360) [default 90]: ").strip() or "90"
                     try:
-                        node.run_odometry_rotation_test(target_deg=float(sub_deg), rot_speed=0.50)
+                        node.run_odometry_rotation_test(target_deg=float(sub_deg), rot_speed=0.35)
                     except ValueError:
                         print("[!] Sudut tidak valid.")
                 elif pilih_a == '7':
