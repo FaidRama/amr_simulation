@@ -405,14 +405,16 @@ class UnifiedBenchmarkNode(Node):
 
         log_data = []
         start_time = time.time()
+        last_tx_time = 0.0  # Timer non-blocking rate limiter 20 Hz (bebas delay/sleep)
         
-        # Safety Timeout: Untuk 90° maksimal 8 detik (mencegah berputar terus-menerus jika odometri drop)
+        # Safety Timeout: Untuk 90 derajat maksimal 8 detik (mencegah berputar terus jika odometri drop)
         max_timeout = max(8.0, (target_deg / 90.0) * 6.0)
-        print(f"[*] 🔄 Robot berputar 1 kali menuju {target_deg:.0f}° (Safety Timeout: {max_timeout:.0f}s)...")
+        print(f"[*] Robot berputar 1 kali menuju {target_deg:.0f} deg (Safety Timeout: {max_timeout:.0f}s)...")
 
         try:
             while True:
-                rclpy.spin_once(self, timeout_sec=0.03)
+                # 1. Baca odometri secara non-blocking & real-time (tanpa packet drop)
+                rclpy.spin_once(self, timeout_sec=0.01)
                 curr_yaw = self.odom_yaw
 
                 dyaw = normalize_angle(curr_yaw - prev_yaw)
@@ -426,24 +428,26 @@ class UnifiedBenchmarkNode(Node):
                     'target_deg': target_deg
                 })
 
-                # KONDISI HENTI 1: Target sudut tercapai (toleransi 0.5 derajat)
+                # 2. Kondisi Henti: Target sudut tercapai (toleransi 0.5 derajat)
                 remaining = target_rad - abs(accumulated_yaw)
                 if remaining <= math.radians(0.5):
-                    print(f"\n[🎯 TARGET TERCAPAI] Sudut {math.degrees(abs(accumulated_yaw)):.2f}° tercapai! Robot Berhenti.")
+                    print(f"\n[TARGET TERCAPAI] Sudut {math.degrees(abs(accumulated_yaw)):.2f} deg tercapai! Robot Berhenti.")
                     break
 
-                # KONDISI HENTI 2: Pengaman Waktu Maksimal (Mencegah berputar berkali-kali)
+                # 3. Pengaman Waktu Maksimal (Mencegah berputar terus jika macet)
                 if t_now > max_timeout:
-                    print(f"\n[⚠️ TIMEOUT] Batas waktu maksimal {max_timeout:.0f}s tercapai. Robot dipaksa berhenti.")
+                    print(f"\n[TIMEOUT] Batas waktu maksimal {max_timeout:.0f}s tercapai. Robot dipaksa berhenti.")
                     break
 
-                # Kecepatan putar tetap / konstan (tanpa deselerasi rumit agar 1 kali jalan mulus)
+                # 4. Kecepatan putar konstan (tanpa deselerasi rumit agar gerak 1 kali jalan mulus)
                 w_cmd = rot_speed
 
-                self.send_cmd(0.0, w_cmd)
-                time.sleep(0.05)  # Rate limiter 20 Hz (jeda stabil 50 ms agar komunikasi serial lancar)
+                # 5. Rate limiter 20 Hz non-blocking: Kirim perintah hanya tiap 50ms tanpa menidurkan odometri
+                if (time.time() - last_tx_time) >= 0.05:
+                    self.send_cmd(0.0, w_cmd)
+                    last_tx_time = time.time()
 
-                sys.stdout.write(f"\r[*] Sudut Putaran Odom: {math.degrees(abs(accumulated_yaw)):6.2f}° / {target_deg:.0f}°")
+                sys.stdout.write(f"\r[*] Sudut Putaran Odom: {math.degrees(abs(accumulated_yaw)):6.2f} deg / {target_deg:.0f} deg")
                 sys.stdout.flush()
 
         except KeyboardInterrupt:
