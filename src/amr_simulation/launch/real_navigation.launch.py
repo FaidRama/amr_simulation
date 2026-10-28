@@ -156,12 +156,6 @@ def generate_launch_description():
     )
 
 
-    # Nav2 dan Adaptive Velocity dijalankan setelah sensor & odometry stabil (delay 5.0 detik)
-    delayed_nav2_and_adaptor = TimerAction(
-        period=5.0,
-        actions=[start_nav2, start_adaptive_velocity]
-    )
-
     # 7. RViz2 Visualizer (Opsional di laptop)
     start_rviz2 = Node(
         package='rviz2',
@@ -171,6 +165,12 @@ def generate_launch_description():
         arguments=['-d', default_rviz_config],
         parameters=[{'use_sim_time': False}],
         condition=IfCondition(LaunchConfiguration('rviz'))
+    )
+
+    # Nav2, Adaptive Velocity, dan RViz2 dijalankan setelah sensor & odometry stabil (delay 5.0 detik)
+    delayed_nav2_and_adaptor = TimerAction(
+        period=5.0,
+        actions=[start_nav2, start_adaptive_velocity, start_rviz2]
     )
 
     return LaunchDescription([
@@ -186,6 +186,5 @@ def generate_launch_description():
         tf_base_to_laser,
         tf_base_to_footprint,
         # tf_odom_to_base,
-        delayed_nav2_and_adaptor,
-        start_rviz2
+        delayed_nav2_and_adaptor
     ])
