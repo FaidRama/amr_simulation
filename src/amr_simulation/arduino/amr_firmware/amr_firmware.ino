@@ -320,7 +320,12 @@ void loop() {
       prev_error_R = error_R;
     }
 
-    driveMotors(pwm_L, pwm_R);
+  driveMotors(pwm_L, pwm_R);
+
+  // Kirim Serial tiap 2 siklus (40 ms = 25 Hz) agar buffer Arduino Uno tidak tersedak
+  static byte div_serial = 0;
+  if (++div_serial >= 2) {
+    div_serial = 0;
 
     // Output Serial untuk ROS 2 /odom
     Serial.print("ENC:");
@@ -339,4 +344,3 @@ void loop() {
     Serial.print(odom_y, 3); Serial.print(",");
     Serial.println(odom_theta * 180.0 / PI, 1);
   }
-}
