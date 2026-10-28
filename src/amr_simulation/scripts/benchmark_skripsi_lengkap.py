@@ -437,9 +437,10 @@ class UnifiedBenchmarkNode(Node):
                     print(f"\n[⚠️ TIMEOUT] Batas waktu maksimal {max_timeout:.0f}s tercapai. Robot dipaksa berhenti.")
                     break
 
-                # Perlambatan halus di 15 derajat terakhir (merayap hingga 0.12 rad/s agar presisi tanpa inersia)
-                if remaining < math.radians(15.0):
-                    w_cmd = max(0.12, rot_speed * (remaining / math.radians(15.0)))
+                # Deselerasi melandai halus (smooth linear ramp down)
+                decel_angle = math.radians(20.0)
+                if remaining < decel_angle:
+                    w_cmd = max(0.18, rot_speed * (remaining / decel_angle))
                 else:
                     w_cmd = rot_speed
 
