@@ -45,16 +45,17 @@ def generate_launch_description():
     )
 
     # 2A. Node Arduino Bridge (Odometry Asli & Motor Control via /dev/arduino)
+    arduino_port = '/dev/arduino' if os.path.exists('/dev/arduino') else ('/dev/ttyACM0' if os.path.exists('/dev/ttyACM0') else '/dev/ttyUSB1')
     start_arduino_bridge = Node(
         package='amr_simulation',
         executable='arduino_bridge.py',
         name='arduino_bridge',
         output='screen',
         parameters=[{
-            'serial_port': '/dev/arduino',
+            'serial_port': arduino_port,
             'baudrate': 115200,
             'wheel_diameter': 0.127,
-            'wheel_separation': 0.458,
+            'wheel_separation': 0.483,
             'ticks_per_rev': 350.7,
             'odom_frame': 'odom',
             'base_frame': 'base_link',

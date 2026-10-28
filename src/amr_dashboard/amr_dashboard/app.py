@@ -549,7 +549,7 @@ class DashboardNode(Node):
                 'origin': [ox, oy, 0.0],
                 'width': w,
                 'height': h,
-                'source': 'live_ros_topic'
+                'source': 'live_slam'
             }
             with self.lock:
                 self.latest_map_msg = msg
@@ -990,15 +990,18 @@ def api_mapping_start():
             'message': 'SLAM Mapping sudah aktif! Mode peta dialihkan ke Live /map.'
         })
 
-    # Matikan node navigasi (AMCL/Nav2) jika masih jalan agar tidak bentrok port serial LiDAR & Arduino
-    subprocess.run(
-        ['pkill', '-9', '-f', '(real_navigation\\.launch\\.py|real_mapping\\.launch\\.py|amcl|bt_navigator|controller_server|planner_server|recoveries_server|lifecycle_manager|async_slam_toolbox_node|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py)'],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
-    time.sleep(0.8)
+    # Matikan node navigasi / mapping lama secara bertahap agar driver serial RPLiDAR & Arduino merilis port
+    targets_regex = '(real_navigation\\.launch\\.py|real_mapping\\.launch\\.py|amcl|bt_navigator|controller_server|planner_server|recoveries_server|lifecycle_manager|async_slam_toolbox_node|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py)'
+    subprocess.run(['pkill', '-15', '-f', targets_regex], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
+    subprocess.run(['pkill', '-9', '-f', targets_regex], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.5)
 
     ws_roots = get_workspace_roots()
-    setup_parts = ['source /opt/ros/foxy/setup.bash 2>/dev/null || true']
+    setup_parts = [
+        'source ~/.bashrc 2>/dev/null || true',
+        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
+    ]
     for wr in reversed(ws_roots):
         setup_bash = os.path.join(wr, 'install', 'setup.bash')
         if os.path.exists(setup_bash):
@@ -1255,6 +1258,7 @@ def api_map_metadata():
         if live_meta:
             meta = dict(live_meta)
             meta['map_file'] = 'live'
+            meta['source'] = 'live_slam'
             meta['mode'] = waypoints_config.get('operation_mode', 'real')
             return jsonify(meta)
         if force_live:
