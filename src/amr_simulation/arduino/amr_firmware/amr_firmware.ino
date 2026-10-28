@@ -49,8 +49,8 @@ const float CPR_WHEEL = 350.7; // Ticks per revolusi PG36 (7 PPR * 50.1 gearbox)
 const float KP_L = 0.9531, KI_L = 21.0829, KD_L = 0.0000;
 const float KP_R = 0.7861, KI_R = 23.2146, KD_R = 0.0000;
 
-const unsigned long SAMPLING_MS = 50;
-const float DT = SAMPLING_MS / 1000.0; // 0.05 s (20 Hz)
+const unsigned long SAMPLING_MS = 20;
+const float DT = SAMPLING_MS / 1000.0; // 0.0 s (50 Hz)
 
 // ====================== 5. VARIABEL ENCODER & ODOMETRI ===================
 volatile long totalPulsa_L = 0, totalPulsa_R = 0;
@@ -285,8 +285,10 @@ void loop() {
     interrupts();
 
     // Hitung RPM Aktual
-    rpm_L = ((float)dC_L / CPR_WHEEL) * (60.0 / DT);
-    rpm_R = ((float)dC_R / CPR_WHEEL) * (60.0 / DT);
+    float rpm_raw_L = ((float)dC_L / CPR_WHEEL) * (60.0 / DT);
+    rpm_L = (0.65 * rpm_raw_L) + (0.35 * rpm_L);
+    float rpm_raw_R = ((float)dC_R / CPR_WHEEL) * (60.0 / DT);
+    rpm_R = (0.65 * rpm_raw_R) + (0.35 * rpm_R);
 
     // Hitung Odometri Lokal
     float ds_L = ((float)dC_L / CPR_WHEEL) * (PI * WHEEL_DIAMETER);
@@ -358,7 +360,7 @@ void loop() {
       prev_error_L = 0.0;
     } else {
       error_L = setpoint_L - rpm_L;
-      integral_L = constrain(integral_L + (KI_L * error_L * DT), -200.0, 200.0);
+      integral_L = constrain(integral_L + (KI_L * error_L * DT), -255.0, 255.0);
       pwm_L = constrain((KP_L * error_L) + integral_L +
                             (KD_L * (error_L - prev_error_L) / DT),
                         -255.0, 255.0);
@@ -372,7 +374,7 @@ void loop() {
       prev_error_R = 0.0;
     } else {
       error_R = setpoint_R - rpm_R;
-      integral_R = constrain(integral_R + (KI_R * error_R * DT), -200.0, 200.0);
+      integral_R = constrain(integral_R + (KI_R * error_R * DT), -255.0, 255.0);
       pwm_R = constrain((KP_R * error_R) + integral_R +
                             (KD_R * (error_R - prev_error_R) / DT),
                         -255.0, 255.0);
@@ -381,28 +383,35 @@ void loop() {
 
     driveMotors(pwm_L, pwm_R);
 
-    // Output Serial untuk ROS 2 /odom
-    Serial.print("ENC:");
-    Serial.print(tot_L);
-    Serial.print(",");
-    Serial.println(tot_R);
+    // Kirim Serial tiap 2 siklus (40 ms = 25 Hz) agar buffer Arduino Uno tidak
+    // tersedak
+    static byte div_serial = 0;
+    if (++div_serial >= 2) {
+      div_serial = 0;
 
-    // Output Serial Tambahan untuk Logging Skripsi
-    Serial.print("LOG:");
-    Serial.print((float)waktuSekarang / 1000.0, 2);
-    Serial.print(",");
-    Serial.print(rpm_L, 1);
-    Serial.print(",");
-    Serial.print(rpm_R, 1);
-    Serial.print(",");
-    Serial.print(pwm_L, 0);
-    Serial.print(",");
-    Serial.print(pwm_R, 0);
-    Serial.print(",");
-    Serial.print(odom_x, 3);
-    Serial.print(",");
-    Serial.print(odom_y, 3);
-    Serial.print(",");
-    Serial.println(odom_theta * 180.0 / PI, 1);
+      // Output Serial untuk ROS 2 /odom
+      Serial.print("ENC:");
+      Serial.print(tot_L);
+      Serial.print(",");
+      Serial.println(tot_R);
+
+      // Output Serial Tambahan untuk Logging Skripsi
+      Serial.print("LOG:");
+      Serial.print((float)waktuSekarang / 1000.0, 2);
+      Serial.print(",");
+      Serial.print(rpm_L, 1);
+      Serial.print(",");
+      Serial.print(rpm_R, 1);
+      Serial.print(",");
+      Serial.print(pwm_L, 0);
+      Serial.print(",");
+      Serial.print(pwm_R, 0);
+      Serial.print(",");
+      Serial.print(odom_x, 3);
+      Serial.print(",");
+      Serial.print(odom_y, 3);
+      Serial.print(",");
+      Serial.println(odom_theta * 180.0 / PI, 1);
+    }
   }
 }
