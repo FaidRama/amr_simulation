@@ -939,6 +939,8 @@ def _read_mapping_stdout(proc):
 
 CAMERA_PROC = None
 CAMERA_LOCK = threading.Lock()
+HUMAN_NODE_PROC = None
+HUMAN_NODE_LOCK = threading.Lock()
 
 # =====================================================================
 # ASYNC RUNTIME PROCESS STATE CACHE (ZERO-LATENCY FOR TELEOP)
@@ -948,6 +950,7 @@ RUNTIME_CACHE = {
     'arduino_active': False,
     'nav_active': False,
     'camera_active': False,
+    'human_node_active': False,
     'last_updated': 0
 }
 
@@ -1003,10 +1006,23 @@ def _update_process_states_loop():
                 except Exception:
                     pass
 
+            # 5. Cek Human Awareness Node (YOLO AI)
+            human_act = False
+            with HUMAN_NODE_LOCK:
+                if HUMAN_NODE_PROC is not None and HUMAN_NODE_PROC.poll() is None:
+                    human_act = True
+            if not human_act:
+                try:
+                    res = subprocess.run(['pgrep', '-f', 'human_awareness_node'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                    human_act = (res.returncode == 0 and bool(res.stdout.strip()))
+                except Exception:
+                    pass
+
             RUNTIME_CACHE['slam_active'] = slam_act
             RUNTIME_CACHE['arduino_active'] = ard_act
             RUNTIME_CACHE['nav_active'] = nav_act
             RUNTIME_CACHE['camera_active'] = cam_act
+            RUNTIME_CACHE['human_node_active'] = human_act
             RUNTIME_CACHE['last_updated'] = time.time()
         except Exception:
             pass
@@ -1173,6 +1189,43 @@ def stop_camera_process():
     if ros_node is not None:
         with ros_node.lock:
             ros_node.latest_frame = None
+
+
+# =====================================================================
+# HUMAN AWARENESS AI PROCESS MANAGER
+# =====================================================================
+def is_human_node_active():
+    """Cek apakah Human Awareness Node (YOLO AI) sedang berjalan (instant O(1))."""
+    with HUMAN_NODE_LOCK:
+        if HUMAN_NODE_PROC is not None and HUMAN_NODE_PROC.poll() is None:
+            return True
+    return bool(RUNTIME_CACHE.get('human_node_active', False))
+
+
+def stop_human_node_process():
+    """Hentikan proses human_awareness_node.py."""
+    global HUMAN_NODE_PROC
+    with HUMAN_NODE_LOCK:
+        proc = HUMAN_NODE_PROC
+        HUMAN_NODE_PROC = None
+    if proc is not None and proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            proc.wait(timeout=2.0)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
+    subprocess.run(
+        ['pkill', '-f', 'human_awareness_node'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    if ros_node is not None:
+        with ros_node.lock:
+            ros_node.human_info = None
+            ros_node.human_state = None
+            ros_node.human_status = 'NO_HUMAN'
 
 
 # =====================================================================
@@ -1700,6 +1753,7 @@ def api_status():
             'arduino_active': is_arduino_active(),
             'nav_active': is_navigation_active(),
             'camera_active': is_camera_active(),
+            'human_node_active': is_human_node_active(),
             'connected': True,
             'timestamp': time.time()
         })
@@ -2488,6 +2542,90 @@ def api_camera_stop():
         'success': True,
         'active': False,
         'message': 'Kamera USB berhasil dimatikan.'
+    })
+
+
+@app.route('/api/human/status')
+def api_human_status():
+    """Status proses Human Awareness AI node."""
+    info = None
+    if ros_node is not None:
+        with ros_node.lock:
+            info = ros_node.human_info
+    return jsonify({
+        'active': is_human_node_active(),
+        'info': info
+    })
+
+
+@app.route('/api/human/start', methods=['POST'])
+def api_human_start():
+    """Jalankan human_awareness_node.py di background (mandiri tanpa navigasi)."""
+    global HUMAN_NODE_PROC
+    if is_human_node_active():
+        return jsonify({
+            'success': True,
+            'active': True,
+            'message': 'Human Awareness AI sudah aktif!'
+        })
+
+    # Pastikan kamera USB aktif terlebih dahulu agar node menerima frame
+    if not is_camera_active():
+        api_camera_start()
+        time.sleep(1.0)
+
+    ws_roots = get_workspace_roots()
+    domain_id = os.environ.get('ROS_DOMAIN_ID', '1')
+    setup_parts = [
+        f'export ROS_DOMAIN_ID={domain_id}',
+        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
+    ]
+    for wr in reversed(ws_roots):
+        setup_bash = os.path.join(wr, 'install', 'setup.bash')
+        if os.path.exists(setup_bash):
+            setup_parts.append(f'source "{setup_bash}"')
+
+    human_script = None
+    for wr in ws_roots:
+        cand = os.path.join(wr, 'src', 'amr_simulation', 'scripts', 'human_awareness_node.py')
+        if os.path.exists(cand):
+            human_script = cand
+            break
+
+    cmd_args = '--source ros --image-topic /camera/image_raw/compressed --no-display'
+    if human_script:
+        setup_parts.append(f'exec python3 "{human_script}" {cmd_args}')
+    else:
+        setup_parts.append(f'exec ros2 run amr_simulation human_awareness_node.py {cmd_args}')
+
+    full_cmd = ' && '.join(setup_parts)
+
+    try:
+        with HUMAN_NODE_LOCK:
+            HUMAN_NODE_PROC = subprocess.Popen(
+                ['/bin/bash', '-c', full_cmd],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid
+            )
+        time.sleep(0.8)
+        return jsonify({
+            'success': True,
+            'active': True,
+            'message': 'Human Awareness AI (YOLO) berhasil dijalankan! Kamera siap mendeteksi orang.'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/human/stop', methods=['POST'])
+def api_human_stop():
+    """Hentikan proses human_awareness_node."""
+    stop_human_node_process()
+    return jsonify({
+        'success': True,
+        'active': False,
+        'message': 'Human Awareness AI berhasil dihentikan.'
     })
 
 
