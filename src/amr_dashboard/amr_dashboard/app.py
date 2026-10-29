@@ -989,6 +989,77 @@ def stop_arduino_process():
     )
 
 
+# =====================================================================
+# REAL NAVIGATION (NAV2) PROCESS MANAGER
+# =====================================================================
+NAVIGATION_PROC = None
+NAVIGATION_LOCK = threading.Lock()
+NAVIGATION_LOGS = []
+
+
+def _append_navigation_log(line):
+    global NAVIGATION_LOGS
+    ts = datetime.now().strftime('%H:%M:%S')
+    NAVIGATION_LOGS.append(f'[{ts}] {line}')
+    if len(NAVIGATION_LOGS) > 80:
+        NAVIGATION_LOGS = NAVIGATION_LOGS[-80:]
+
+
+def _read_navigation_stdout(proc):
+    try:
+        for line in iter(proc.stdout.readline, ''):
+            if not line:
+                break
+            clean = line.strip()
+            if clean:
+                _append_navigation_log(clean)
+    except Exception:
+        pass
+
+
+def is_navigation_active():
+    """Cek apakah Nav2 / Real Navigation sedang berjalan (via dashboard, terminal, dll)."""
+    with NAVIGATION_LOCK:
+        if NAVIGATION_PROC is not None and NAVIGATION_PROC.poll() is None:
+            return True
+    if ros_node is not None:
+        try:
+            names = [n.lower() for n in ros_node.get_node_names()]
+            if any(k in names for k in ['bt_navigator', 'controller_server', 'planner_server', 'amcl']):
+                return True
+        except Exception:
+            pass
+    try:
+        res = subprocess.run(['pgrep', '-f', '(real_navigation\\.launch\\.py|bt_navigator)'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        if res.returncode == 0 and res.stdout.strip():
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def stop_navigation_process():
+    """Hentikan proses real_navigation.launch.py dan bersihkan node Nav2."""
+    global NAVIGATION_PROC
+    with NAVIGATION_LOCK:
+        proc = NAVIGATION_PROC
+        NAVIGATION_PROC = None
+    if proc is not None and proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            proc.wait(timeout=3.0)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
+    subprocess.run(
+        ['pkill', '-f', '(real_navigation\\.launch\\.py|amcl|bt_navigator|controller_server|planner_server|recoveries_server|lifecycle_manager|adaptive_velocity_node)'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    _append_navigation_log('🛑 Proses Navigasi (Nav2) dihentikan.')
+
+
 # --- ROUTES ---
 
 @app.route('/')
@@ -1160,6 +1231,100 @@ def api_arduino_stop():
     })
 
 
+@app.route('/api/navigation/status')
+def api_navigation_status():
+    """Status real-time proses Nav2 Navigation."""
+    return jsonify({
+        'active': is_navigation_active(),
+        'map_file': ACTIVE_MAP_FILE,
+        'logs': NAVIGATION_LOGS[-35:]
+    })
+
+
+@app.route('/api/navigation/start', methods=['POST'])
+def api_navigation_start():
+    """Jalankan ros2 launch amr_simulation real_navigation.launch.py di background."""
+    global NAVIGATION_PROC
+    if is_navigation_active():
+        return jsonify({
+            'success': True,
+            'active': True,
+            'message': 'Navigasi Nav2 sudah aktif!'
+        })
+
+    # Hentikan mapping jika aktif agar port serial LiDAR & Arduino dilepas
+    stop_slam_process()
+    time.sleep(0.8)
+
+    ws_roots = get_workspace_roots()
+    domain_id = os.environ.get('ROS_DOMAIN_ID', '1')
+    setup_parts = [
+        f'export ROS_DOMAIN_ID={domain_id}',
+        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
+    ]
+    for wr in reversed(ws_roots):
+        setup_bash = os.path.join(wr, 'install', 'setup.bash')
+        if os.path.exists(setup_bash):
+            setup_parts.append(f'source "{setup_bash}"')
+
+    # Cari file peta aktif
+    map_to_use = None
+    if MAP_YAML_PATH and os.path.exists(MAP_YAML_PATH):
+        map_to_use = MAP_YAML_PATH
+    else:
+        for wr in ws_roots:
+            cand = os.path.join(wr, 'src', 'amr_simulation', 'maps', ACTIVE_MAP_FILE if ACTIVE_MAP_FILE != 'live' else 'peta_1b.yaml')
+            if os.path.exists(cand):
+                map_to_use = cand
+                break
+        if not map_to_use:
+            for wr in ws_roots:
+                cand = os.path.join(wr, 'src', 'amr_simulation', 'maps', 'peta_1b.yaml')
+                if os.path.exists(cand):
+                    map_to_use = cand
+                    break
+
+    map_arg = f'map:="{map_to_use}"' if map_to_use else ''
+    setup_parts.append(f'exec ros2 launch amr_simulation real_navigation.launch.py {map_arg} use_sim_time:=False')
+    full_cmd = ' && '.join(setup_parts)
+
+    try:
+        with NAVIGATION_LOCK:
+            NAVIGATION_LOGS.clear()
+            _append_navigation_log(f'🚀 Meluncurkan Navigasi dengan peta: {os.path.basename(map_to_use or "default")} ...')
+            NAVIGATION_PROC = subprocess.Popen(
+                ['/bin/bash', '-c', full_cmd],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                preexec_fn=os.setsid
+            )
+            t = threading.Thread(target=_read_navigation_stdout, args=(NAVIGATION_PROC,), daemon=True)
+            t.start()
+
+        return jsonify({
+            'success': True,
+            'active': True,
+            'message': f'Navigasi Nav2 berhasil dijalankan! Tunggu ~5-8 detik hingga sensor & AMCL siap.'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/navigation/stop', methods=['POST'])
+def api_navigation_stop():
+    """Hentikan proses Navigasi Nav2."""
+    if ros_node is not None:
+        ros_node.send_cmd_vel(0.0, 0.0)
+    stop_navigation_process()
+    return jsonify({
+        'success': True,
+        'active': False,
+        'message': 'Proses Navigasi Nav2 berhasil dihentikan.'
+    })
+
+
 @app.route('/api/mapping/save', methods=['POST'])
 def api_mapping_save():
     """Simpan peta OccupancyGrid dari topik /map langsung ke file .pgm dan .yaml (Anti-Timeout)."""
@@ -1317,6 +1482,7 @@ def api_status():
             'has_live_map': ros_node.live_map_png is not None,
             'nav_path': getattr(ros_node, 'nav_path', []),
             'arduino_active': is_arduino_active(),
+            'nav_active': is_navigation_active(),
             'connected': True,
             'timestamp': time.time()
         })

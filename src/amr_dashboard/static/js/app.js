@@ -127,6 +127,7 @@ const APP = {
     hasLiveMap: false,
     mappingActive: false,
     arduinoActive: false,
+    navActive: false,
     poseSource: 'NONE',
     pose: { x: 0, y: 0, yaw: 0 },
     delivery: { status: 'idle', current_phase: 'idle' },
@@ -307,7 +308,8 @@ function renderHome() {
         navigating_delivery: 'Menuju Titik Tujuan',
         waiting_delivery: 'Menunggu Ambil Barang',
         at_delivery: 'Tiba di Tujuan',
-        returning_home: 'Kembali ke Home Base'
+        returning_home: 'Kembali ke Home Base',
+        waiting_human: '🚶 Menunggu Manusia Lewat'
     };
 
     const yawDeg = ((APP.pose.yaw || 0) * 180 / Math.PI).toFixed(1);
@@ -534,6 +536,24 @@ function renderDelivery() {
                     <div class="section-title">
                         <span>01 // PETA SLAM & TITIK TUJUAN</span>
                         <span class="mono" style="color:var(--accent-bright);">${modeBadgeText}</span>
+                    </div>
+
+                    <!-- NAV2 NAVIGATION RUNTIME CONTROLLER -->
+                    <div class="nav-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:12px; gap:12px;">
+                        <div style="display:flex; align-items:center; gap:10px;">
+                            <span id="nav-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.navActive ? 'var(--success)' : 'var(--danger)'}; box-shadow:${APP.navActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
+                            <div>
+                                <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="nav-status-text">
+                                    NAV2 NAVIGATION: ${APP.navActive ? '<span style="color:var(--success)">ONLINE (AMCL + Costmap)</span>' : '<span style="color:var(--danger)">OFFLINE</span>'}
+                                </div>
+                                <div style="font-size:0.68rem; color:var(--text-muted);" id="nav-sub-text">
+                                    ${APP.navActive ? 'Navigasi siap menerima perintah pengantaran' : 'Nyalakan Nav2 sebelum memulai misi pengantaran'}
+                                </div>
+                            </div>
+                        </div>
+                        <button type="button" id="nav-toggle-btn" class="btn btn-sm ${APP.navActive ? 'btn-danger' : 'btn-success'}" onclick="toggleNavigation()" style="min-width:130px; font-weight:600; border-radius:6px;">
+                            ${APP.navActive ? '🛑 Stop Navigasi' : '🚀 Jalankan Navigasi'}
+                        </button>
                     </div>
 
                     <div class="map-toolbar-strip">
@@ -772,7 +792,82 @@ function renderTaskList() {
     `).join('');
 }
 
+async function toggleNavigation() {
+    const btn = document.getElementById('nav-toggle-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.style.opacity = '0.6';
+    }
+    try {
+        if (APP.navActive) {
+            showToast('Menghentikan Navigasi Nav2...', 'info');
+            const res = await apiPost('/api/navigation/stop', {});
+            if (res && res.success) {
+                APP.navActive = false;
+                updateNavigationUI(false);
+                showToast('Navigasi Nav2 berhasil dihentikan.', 'warning');
+            } else {
+                showToast(res ? (res.error || res.message) : 'Gagal menghentikan navigasi', 'error');
+            }
+        } else {
+            showToast('Meluncurkan Navigasi Nav2... Tunggu ~5-8 detik.', 'info');
+            const res = await apiPost('/api/navigation/start', {});
+            if (res && res.success) {
+                APP.navActive = true;
+                updateNavigationUI(true);
+                showToast(res.message || 'Navigasi Nav2 berhasil dijalankan!', 'success');
+            } else {
+                showToast(res ? (res.error || res.message) : 'Gagal meluncurkan navigasi', 'error');
+            }
+        }
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.style.opacity = '1';
+        }
+    }
+}
+
+function updateNavigationUI(active) {
+    const ind = document.getElementById('nav-status-indicator');
+    const text = document.getElementById('nav-status-text');
+    const sub = document.getElementById('nav-sub-text');
+    const btn = document.getElementById('nav-toggle-btn');
+    const startDelBtn = document.getElementById('btn-start-delivery');
+    if (!ind || !text || !btn) return;
+
+    if (active) {
+        ind.style.background = 'var(--success)';
+        ind.style.boxShadow = '0 0 8px var(--success)';
+        text.innerHTML = 'NAV2 NAVIGATION: <span style="color:var(--success)">ONLINE (AMCL + Costmap)</span>';
+        if (sub) sub.textContent = 'Navigasi siap menerima perintah pengantaran';
+        btn.className = 'btn btn-sm btn-danger';
+        btn.innerHTML = '🛑 Stop Navigasi';
+        if (startDelBtn) {
+            startDelBtn.title = 'Mulai Eksekusi Misi';
+            startDelBtn.style.opacity = '1';
+        }
+    } else {
+        ind.style.background = 'var(--danger)';
+        ind.style.boxShadow = 'none';
+        text.innerHTML = 'NAV2 NAVIGATION: <span style="color:var(--danger)">OFFLINE</span>';
+        if (sub) sub.textContent = 'Nyalakan Nav2 sebelum memulai misi pengantaran';
+        btn.className = 'btn btn-sm btn-success';
+        btn.innerHTML = '🚀 Jalankan Navigasi';
+        if (startDelBtn) {
+            startDelBtn.title = 'Nyalakan navigasi terlebih dahulu';
+        }
+    }
+}
+
 async function startDelivery() {
+    if (!APP.navActive) {
+        showToast('Navigasi Nav2 belum aktif! Tekan tombol "Jalankan Navigasi" terlebih dahulu.', 'warning');
+        return;
+    }
+
     if (APP.taskQueue.length === 0) {
         showToast('Tambahkan minimal 1 task ke antrean', 'error');
         return;
@@ -1056,6 +1151,7 @@ function updateMissionUI() {
             at_delivery: 'Tiba di delivery',
             waiting_delivery: 'Menunggu barang diambil',
             returning_home: 'Kembali ke titik awal...',
+            waiting_human: '🚶 Menunggu manusia melintas...',
             idle: 'Selesai'
         };
         if (progressText) {
@@ -3060,6 +3156,11 @@ async function globalStatusPoll() {
             updateArduinoBridgeUI(APP.arduinoActive);
         }
 
+        if (data.hasOwnProperty('nav_active')) {
+            APP.navActive = !!data.nav_active;
+            updateNavigationUI(APP.navActive);
+        }
+
         if (typeof handleDeliveryStatusUpdate === 'function') {
             handleDeliveryStatusUpdate(APP.delivery);
         }
@@ -3107,7 +3208,8 @@ async function globalStatusPoll() {
                 navigating_delivery: 'Menuju Titik Tujuan',
                 waiting_delivery: 'Menunggu Ambil Barang',
                 at_delivery: 'Tiba di Tujuan',
-                returning_home: 'Kembali ke Home Base'
+                returning_home: 'Kembali ke Home Base',
+                waiting_human: '🚶 Menunggu Manusia Lewat'
             };
             const homePhase = document.getElementById('home-phase');
             if (homePhase) homePhase.textContent = phaseLabels[APP.delivery.current_phase] || APP.delivery.current_phase;
