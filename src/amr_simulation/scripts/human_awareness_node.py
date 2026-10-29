@@ -841,35 +841,60 @@ def main():
                 )
 
             # 3. CENTRAL CORRIDOR + TARGET SELECTION
-            # Koridor tengah dipakai sebagai proxy area lintasan di depan robot.
-            # Bounding box dianggap menghalangi bila ada irisan horizontal
-            # dengan koridor, bukan hanya karena titik tengah bbox berada di sana.
+            # Koridor tengah menjadi proxy area lintasan AMR.
+            # Manusia dianggap berada di koridor jika minimal 60%
+            # lebar bounding box-nya berada di dalam koridor.
+
             corridor_half = (width * args.corridor_width) / 2.0
             corridor_x1 = int((width / 2.0) - corridor_half)
             corridor_x2 = int((width / 2.0) + corridor_half)
 
             corridor_persons = []
+
             for person in persons:
-                person["in_corridor"] = (
-                    person["x2"] > corridor_x1
-                    and person["x1"] < corridor_x2
+                # Hitung lebar bounding box yang beririsan
+                # dengan koridor tengah.
+                overlap_left = max(
+                    person["x1"], corridor_x1
                 )
+                overlap_right = min(
+                    person["x2"], corridor_x2
+                )
+
+                overlap_width = max(
+                    0.0, overlap_right - overlap_left
+                )
+
+                # Proporsi bbox yang berada di dalam koridor.
+                person["corridor_overlap"] = (
+                    overlap_width / max(person["w"], 1.0)
+                )
+
+                # Minimal 60% bbox harus berada di koridor.
+                person["in_corridor"] = (
+                    person["corridor_overlap"] >= 0.60
+                )
+
                 if person["in_corridor"]:
                     corridor_persons.append(person)
 
-            # Hanya orang yang beririsan dengan koridor tengah yang memengaruhi
-            # proximity zone dan FSM. Jika beberapa orang masuk koridor, pilih
-            # yang paling dekat berdasarkan fitur bbox yang sedang digunakan.
+            # Pilih target terdekat hanya dari manusia yang
+            # memenuhi syarat koridor.
             target = None
+
             if corridor_persons:
                 if args.feature == "height":
                     target = max(
-                        corridor_persons, key=lambda p: p["h"]
+                        corridor_persons,
+                        key=lambda p: p["h"]
                     )
+
                 elif args.feature == "width":
                     target = max(
-                        corridor_persons, key=lambda p: p["w"]
+                        corridor_persons,
+                        key=lambda p: p["w"]
                     )
+
                 else:
                     target = max(
                         corridor_persons,
