@@ -99,6 +99,7 @@ def generate_launch_description():
             'wheel_diameter': 0.127,
             'wheel_separation': 0.458,
             'ticks_per_rev': 350.7,
+            'cmd_vel_topic': '/cmd_vel_safe',
             'odom_frame': 'odom',
             'base_frame': 'base_link',
             'publish_tf': True

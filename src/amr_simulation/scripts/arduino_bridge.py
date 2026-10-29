@@ -37,6 +37,7 @@ class ArduinoBridgeNode(Node):
         self.declare_parameter('wheel_separation', 0.458 )    #  cm = 0.458 meter
         self.declare_parameter('ticks_per_rev', 350.7)       # 7 PPR * 50.1 gearbox = 350.7 ticks/rev
         self.declare_parameter('cmd_vel_timeout', 0.5)       # Timeout 1.0s (halus, tidak getar saat Nav2 menghitung)
+        self.declare_parameter('cmd_vel_topic', '/cmd_vel')
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_footprint')
         self.declare_parameter('publish_tf', True)
@@ -47,6 +48,7 @@ class ArduinoBridgeNode(Node):
         self.wheel_separation = float(self.get_parameter('wheel_separation').value)
         self.ticks_per_rev = float(self.get_parameter('ticks_per_rev').value)
         self.cmd_vel_timeout = float(self.get_parameter('cmd_vel_timeout').value)
+        self.cmd_vel_topic = self.get_parameter('cmd_vel_topic').value
         self.odom_frame = self.get_parameter('odom_frame').value
         self.base_frame = self.get_parameter('base_frame').value
         self.publish_tf = bool(self.get_parameter('publish_tf').value)
@@ -82,7 +84,7 @@ class ArduinoBridgeNode(Node):
         self.pid_left_pub = self.create_publisher(Point, '/pid/motor_left', 10)
         self.pid_right_pub = self.create_publisher(Point, '/pid/motor_right', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
-        self.cmd_sub = self.create_subscription(Twist, '/cmd_vel_safe', self.cmd_vel_callback, 10)
+        self.cmd_sub = self.create_subscription(Twist, self.cmd_vel_topic, self.cmd_vel_callback, 10)
 
         # Telemetri PID (Setpoint vs Aktual RPM)
         self.setpoint_rpm_l = 0.0
@@ -96,6 +98,7 @@ class ArduinoBridgeNode(Node):
         self.timer = self.create_timer(0.02, self.update_loop)
         self.get_logger().info(
             f"Arduino Bridge PID aktif di {self.port} ({self.baud} baud) | "
+            f"Topic: {self.cmd_vel_topic} | "
             f"D={self.wheel_diameter}m, L={self.wheel_separation}m, CPR={self.ticks_per_rev}"
         )
 
