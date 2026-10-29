@@ -482,12 +482,20 @@ function startMonitoringPolling() {
 }
 
 // ====================== LIVE SLAM MAPPING STUDIO CANVAS ======================
-async function loadLiveSlamMapData() {
+async function loadLiveSlamMapData(force = false) {
+    if (force) {
+        MAP_STATE.slamFetchInFlight = false;
+    }
     if (MAP_STATE.slamFetchInFlight) return MAP_STATE.liveSlamLoaded;
     MAP_STATE.slamFetchInFlight = true;
     try {
         const meta = await apiGet('/api/map/metadata?live=1&t=' + Date.now());
-        if (!meta || meta.source !== 'live_slam') {
+        const isLive = meta && (
+            meta.source === 'live_slam' ||
+            meta.source === 'live_ros_topic' ||
+            meta.map_file === 'live'
+        );
+        if (!meta || !isLive) {
             MAP_STATE.slamFetchInFlight = false;
             return false;
         }
@@ -500,6 +508,7 @@ async function loadLiveSlamMapData() {
                 MAP_STATE.liveSlamLoaded = true;
                 MAP_STATE.lastSlamFetch = Date.now();
                 MAP_STATE.slamFetchInFlight = false;
+                APP.hasLiveMap = true;
                 resolve(true);
             };
             img.onerror = () => {
@@ -562,8 +571,8 @@ function drawLiveSlamMap(canvas, ctx) {
         recordRobotTrailPoint(APP.pose.x || 0, APP.pose.y || 0);
     }
 
-    // Periodically refresh live SLAM image every 1.2s when live map is available
-    if (APP.hasLiveMap && (Date.now() - MAP_STATE.lastSlamFetch > 1200)) {
+    // Periodically refresh live SLAM image every 1.0s when live map is available or mapping is active
+    if ((APP.hasLiveMap || APP.mappingActive) && (Date.now() - MAP_STATE.lastSlamFetch > 1000)) {
         MAP_STATE.lastSlamFetch = Date.now();
         loadLiveSlamMapData();
     }
@@ -605,6 +614,18 @@ function drawLiveSlamMap(canvas, ctx) {
         ctx.imageSmoothingEnabled = false; // Crisp occupancy grid cells like RViz
         ctx.drawImage(MAP_STATE.liveSlamImage, offsetX, offsetY, drawW, drawH);
         ctx.restore();
+
+        // Subtle Live Map HUD Tag in top-left corner
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
+        ctx.fillRect(10, 10, 210, 26);
+        ctx.strokeStyle = 'rgba(16, 185, 129, 0.45)';
+        ctx.strokeRect(10, 10, 210, 26);
+        ctx.font = '600 10.5px "JetBrains Mono", monospace';
+        ctx.fillStyle = '#34d399';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`● LIVE /map [${imgW}×${imgH} px]`, 18, 23);
+        ctx.textBaseline = 'alphabetic';
 
         const toSlamPixel = (wx, wy) => {
             const px = offsetX + ((wx - origin[0]) / resolution) * fitScale;

@@ -561,7 +561,7 @@ class DashboardNode(Node):
                 'origin': [ox, oy, 0.0],
                 'width': w,
                 'height': h,
-                'source': 'live_ros_topic'
+                'source': 'live_slam'
             }
             with self.lock:
                 self.latest_map_msg = msg
@@ -1808,6 +1808,7 @@ def api_map_metadata():
         if live_meta:
             meta = dict(live_meta)
             meta['map_file'] = 'live'
+            meta['source'] = 'live_slam'
             meta['mode'] = waypoints_config.get('operation_mode', 'real')
             return jsonify(meta)
         if force_live:
