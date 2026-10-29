@@ -33,6 +33,12 @@ from nav_msgs.msg import OccupancyGrid, Odometry, Path
 import numpy as np
 
 try:
+    from std_srvs.srv import Empty
+    HAS_STD_SRVS = True
+except ImportError:
+    HAS_STD_SRVS = False
+
+try:
     from tf2_ros import Buffer, TransformListener
     HAS_TF2 = True
 except ImportError:
@@ -377,6 +383,12 @@ class DashboardNode(Node):
         # Initial pose AMCL (/initialpose)
         self.initialpose_pub = self.create_publisher(
             PoseWithCovarianceStamped, '/initialpose', 10)
+        
+        # Service client untuk AMCL global localization (sebar partikel)
+        if HAS_STD_SRVS:
+            self.relocalize_client = self.create_client(Empty, '/reinitialize_global_localization')
+        else:
+            self.relocalize_client = None
         
         # === CAMERA SUBSCRIBER ===
         if HAS_CAMERA:
@@ -738,6 +750,29 @@ class DashboardNode(Node):
                 'yaw': round(float(yaw), 3)
             }
         self.get_logger().info(f'Initial Pose dikirim ke /initialpose: ({x:.2f}, {y:.2f}, yaw={yaw:.2f})')
+
+    def request_global_localization(self):
+        """Panggil service /reinitialize_global_localization untuk menyebarkan partikel AMCL."""
+        if not self.relocalize_client:
+            try:
+                subprocess.Popen(
+                    ['ros2', 'service', 'call', '/reinitialize_global_localization', 'std_srvs/srv/Empty', '{}'],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                return True
+            except Exception:
+                return False
+        try:
+            if not self.relocalize_client.service_is_ready():
+                ready = self.relocalize_client.wait_for_service(timeout_sec=1.5)
+                if not ready:
+                    return False
+            req = Empty.Request()
+            self.relocalize_client.call_async(req)
+            return True
+        except Exception as e:
+            self.get_logger().error(f'Error call /reinitialize_global_localization: {e}')
+            return False
 
 
 # =====================================================================
@@ -1140,6 +1175,106 @@ def stop_camera_process():
             ros_node.latest_frame = None
 
 
+# =====================================================================
+# AUTO-RELOCALIZATION PROCESS MANAGER (360° SPIN CALIBRATION)
+# =====================================================================
+RELOCALIZE_STATE = {
+    'active': False,
+    'phase': 'idle',        # 'idle', 'starting', 'resetting', 'spinning', 'converging', 'completed', 'failed', 'cancelled'
+    'progress': 0,          # 0 - 100
+    'message': '',
+    'cancel_requested': False
+}
+RELOCALIZE_LOCK = threading.Lock()
+RELOCALIZE_THREAD = None
+
+
+def _run_relocalize_sequence():
+    """Sequence relokalisasi: sebar partikel AMCL -> putar robot 360° -> konvergensi partikel."""
+    global RELOCALIZE_STATE
+    try:
+        # Phase 1: Reset partikel AMCL
+        with RELOCALIZE_LOCK:
+            RELOCALIZE_STATE['phase'] = 'resetting'
+            RELOCALIZE_STATE['progress'] = 10
+            RELOCALIZE_STATE['message'] = 'Menyebarkan partikel AMCL ke seluruh ruangan...'
+
+        if ros_node is not None:
+            ros_node.request_global_localization()
+        time.sleep(1.2)
+
+        with RELOCALIZE_LOCK:
+            if RELOCALIZE_STATE['cancel_requested']:
+                raise InterruptedError('Dibatalkan oleh pengguna')
+            RELOCALIZE_STATE['phase'] = 'spinning'
+            RELOCALIZE_STATE['progress'] = 20
+            RELOCALIZE_STATE['message'] = 'Robot berputar 360° membaca dinding dengan LiDAR...'
+
+        # Phase 2: Putar robot ~360° perlahan
+        # Kecepatan sudut 0.35 rad/s. Putaran 360° (6.28 rad) butuh ~18 detik
+        spin_speed = 0.35
+        spin_duration = 18.0  # detik
+        start_t = time.time()
+
+        while (time.time() - start_t) < spin_duration:
+            with RELOCALIZE_LOCK:
+                if RELOCALIZE_STATE['cancel_requested']:
+                    raise InterruptedError('Dibatalkan oleh pengguna')
+                elapsed = time.time() - start_t
+                pct = int(20 + (elapsed / spin_duration) * 65)  # 20% s.d. 85%
+                RELOCALIZE_STATE['progress'] = min(pct, 85)
+                deg_done = int((elapsed / spin_duration) * 360)
+                RELOCALIZE_STATE['message'] = f'Robot berputar mencocokkan LiDAR ({deg_done}° / 360°)...'
+
+            if ros_node is not None:
+                ros_node.send_cmd_vel(0.0, spin_speed)
+            time.sleep(0.1)
+
+        # Phase 3: Hentikan robot
+        if ros_node is not None:
+            for _ in range(5):
+                ros_node.send_cmd_vel(0.0, 0.0)
+                time.sleep(0.05)
+
+        # Phase 4: Konvergensi AMCL
+        with RELOCALIZE_LOCK:
+            RELOCALIZE_STATE['phase'] = 'converging'
+            RELOCALIZE_STATE['progress'] = 90
+            RELOCALIZE_STATE['message'] = 'Mengunci koordinat posisi akhir AMCL...'
+
+        time.sleep(2.0)
+
+        # Selesai
+        cur_pose = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+        if ros_node is not None:
+            with ros_node.lock:
+                cur_pose = dict(ros_node.robot_pose)
+
+        yaw_deg = int(math.degrees(cur_pose.get('yaw', 0.0)))
+        with RELOCALIZE_LOCK:
+            RELOCALIZE_STATE['active'] = False
+            RELOCALIZE_STATE['phase'] = 'completed'
+            RELOCALIZE_STATE['progress'] = 100
+            RELOCALIZE_STATE['message'] = f'Relokalisasi AMCL berhasil! Robot terkunci di X: {cur_pose.get("x", 0.0):.2f}m, Y: {cur_pose.get("y", 0.0):.2f}m ({yaw_deg}°)'
+
+    except InterruptedError:
+        if ros_node is not None:
+            ros_node.send_cmd_vel(0.0, 0.0)
+        with RELOCALIZE_LOCK:
+            RELOCALIZE_STATE['active'] = False
+            RELOCALIZE_STATE['phase'] = 'cancelled'
+            RELOCALIZE_STATE['progress'] = 0
+            RELOCALIZE_STATE['message'] = 'Relokalisasi dibatalkan. Robot dihentikan.'
+    except Exception as e:
+        if ros_node is not None:
+            ros_node.send_cmd_vel(0.0, 0.0)
+        with RELOCALIZE_LOCK:
+            RELOCALIZE_STATE['active'] = False
+            RELOCALIZE_STATE['phase'] = 'failed'
+            RELOCALIZE_STATE['progress'] = 0
+            RELOCALIZE_STATE['message'] = f'Relokalisasi gagal: {str(e)}'
+
+
 # --- ROUTES ---
 
 @app.route('/')
@@ -1332,8 +1467,9 @@ def api_navigation_start():
             'message': 'Navigasi Nav2 sudah aktif!'
         })
 
-    # Hentikan mapping jika aktif agar port serial LiDAR & Arduino dilepas
+    # Hentikan mapping & bridge standalone jika aktif agar port serial LiDAR & Arduino dilepas
     stop_slam_process()
+    stop_arduino_process()
     time.sleep(0.8)
 
     ws_roots = get_workspace_roots()
@@ -1694,6 +1830,72 @@ def api_initialpose():
         'pose': {'x': x, 'y': y, 'yaw': yaw},
         'set_as_home': set_as_home,
         'message': f'Initial Pose ({x:.2f}, {y:.2f}) dikirim ke AMCL'
+    })
+
+
+@app.route('/api/relocalize/status')
+def api_relocalize_status():
+    """Status proses relokalisasi AMCL saat ini."""
+    with RELOCALIZE_LOCK:
+        st = dict(RELOCALIZE_STATE)
+    return jsonify(st)
+
+
+@app.route('/api/relocalize/start', methods=['POST'])
+def api_relocalize_start():
+    """Mulai proses relokalisasi otomatis (sebar partikel AMCL + putar robot 360°)."""
+    global RELOCALIZE_THREAD
+    if not is_navigation_active():
+        return jsonify({
+            'success': False,
+            'error': 'Navigasi Nav2 / AMCL belum aktif! Nyalakan Navigasi terlebih dahulu.'
+        }), 400
+
+    if not is_arduino_active():
+        return jsonify({
+            'success': False,
+            'error': 'Arduino Bridge belum aktif! Nyalakan Arduino Bridge agar motor dapat berputar.'
+        }), 400
+
+    if ros_node is not None:
+        with ros_node.lock:
+            if ros_node.delivery_status.get('status') == 'running':
+                return jsonify({
+                    'success': False,
+                    'error': 'Tidak dapat melakukan relokalisasi saat misi pengantaran sedang berjalan!'
+                }), 400
+
+    with RELOCALIZE_LOCK:
+        if RELOCALIZE_STATE['active']:
+            return jsonify({
+                'success': False,
+                'error': 'Proses relokalisasi sudah sedang berjalan!'
+            }), 400
+        RELOCALIZE_STATE['active'] = True
+        RELOCALIZE_STATE['cancel_requested'] = False
+        RELOCALIZE_STATE['phase'] = 'starting'
+        RELOCALIZE_STATE['progress'] = 5
+        RELOCALIZE_STATE['message'] = 'Memulai proses relokalisasi AMCL...'
+
+    RELOCALIZE_THREAD = threading.Thread(target=_run_relocalize_sequence, daemon=True)
+    RELOCALIZE_THREAD.start()
+
+    return jsonify({
+        'success': True,
+        'message': 'Relokalisasi otomatis dimulai! Robot akan berputar 360° perlahan.'
+    })
+
+
+@app.route('/api/relocalize/cancel', methods=['POST'])
+def api_relocalize_cancel():
+    """Batalkan proses relokalisasi dan hentikan robot segera."""
+    with RELOCALIZE_LOCK:
+        RELOCALIZE_STATE['cancel_requested'] = True
+    if ros_node is not None:
+        ros_node.send_cmd_vel(0.0, 0.0)
+    return jsonify({
+        'success': True,
+        'message': 'Perintah pembatalan relokalisasi telah dikirim.'
     })
 
 

@@ -570,7 +570,10 @@ function renderDelivery() {
                         </div>
                         <div class="map-toolbar-group">
                             <button class="btn btn-outline btn-sm" style="padding:4px 9px; font-size:0.7rem;" onclick="openInitialPoseModal()" title="Set 2D Pose Estimate (/initialpose) untuk lokalisasi AMCL">
-                                📍 Set Posisi Awal (AMCL)
+                                📍 Set Posisi Awal
+                            </button>
+                            <button class="btn btn-outline btn-sm" style="padding:4px 9px; font-size:0.7rem;" onclick="openAutoRelocalizeModal()" title="Kalibrasi posisi otomatis dengan memutar robot 360° menggunakan AMCL & LiDAR">
+                                🔄 Relokalisasi (360°)
                             </button>
                         </div>
                     </div>
@@ -2638,6 +2641,9 @@ window.toggleCamera = toggleCamera;
 window.updateCameraUI = updateCameraUI;
 
 async function emergencyStop() {
+    if (typeof cancelAutoRelocalize === 'function') {
+        cancelAutoRelocalize();
+    }
     await apiPost('/api/cmd_vel', { linear: 0, angular: 0 });
     await apiPost('/api/delivery/control', { command: 'cancel' });
     _modalDismissedForCurrentPhase = false;
@@ -2727,6 +2733,9 @@ function renderSettings() {
                         </select>
                         <button type="button" class="btn btn-outline btn-sm" onclick="openInitialPoseModal()">
                             📍 Set Initial Pose (AMCL)
+                        </button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="openAutoRelocalizeModal()">
+                            🔄 Relokalisasi (360°)
                         </button>
                     </div>
                 </div>
@@ -3041,6 +3050,12 @@ function openInitialPoseModal() {
             <input type="checkbox" id="initpose-set-home" checked>
             Simpan juga titik ini sebagai posisi <strong>Home / Docking</strong> untuk mode ${APP.mode.toUpperCase()}
         </label>
+        <div style="margin-top:12px; padding:9px 12px; background:rgba(255,255,255,0.03); border:1px solid var(--border-subtle); border-radius:6px; font-size:0.72rem; color:var(--text-secondary); display:flex; justify-content:space-between; align-items:center; gap:8px;">
+            <span>Tidak tahu koordinat robot saat ini?</span>
+            <button type="button" class="btn btn-sm btn-outline" style="font-size:0.68rem; padding:3px 8px; white-space:nowrap;" onclick="hideModal(); openAutoRelocalizeModal();">
+                🔄 Relokalisasi Otomatis (360°)
+            </button>
+        </div>
     `;
     const actionsEl = document.getElementById('modal-actions');
     actionsEl.innerHTML = '';
@@ -3074,6 +3089,196 @@ function openInitialPoseModal() {
     actionsEl.appendChild(btnZero);
     actionsEl.appendChild(btnSend);
     document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
+let _relocalizePollTimer = null;
+
+function openAutoRelocalizeModal() {
+    const isNavOnline = !!APP.navActive;
+    const isArdOnline = !!APP.arduinoActive;
+    const canStart = isNavOnline && isArdOnline;
+
+    document.getElementById('modal-title').textContent = '🔄 Relokalisasi Posisi Robot (AMCL 360°)';
+    document.getElementById('modal-body').innerHTML = `
+        <p style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:12px; line-height:1.5;">
+            Gunakan fitur ini jika robot diletakkan di sembarang lokasi di dalam ruangan.
+            AMCL akan menyebarkan partikel ke seluruh area peta, lalu robot akan <strong>berputar 360° di tempat</strong> untuk mencocokkan pantulan sensor LiDAR dengan dinding peta.
+        </p>
+
+        <!-- STATUS HARDWARE CEK -->
+        <div style="background:var(--bg-tertiary, rgba(255,255,255,0.02)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; padding:10px 14px; margin-bottom:12px;">
+            <div style="font-size:0.7rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:8px;">
+                Status Kesiapan Sistem:
+            </div>
+            <div style="display:flex; flex-direction:column; gap:6px;">
+                <div class="flex-between" style="font-size:0.75rem;">
+                    <span>1. Navigasi (Nav2 / AMCL):</span>
+                    <span style="font-weight:700; color:${isNavOnline ? 'var(--success)' : 'var(--danger)'};">
+                        ${isNavOnline ? '✅ READY (ONLINE)' : '❌ OFFLINE (Nyalakan Navigasi)'}
+                    </span>
+                </div>
+                <div class="flex-between" style="font-size:0.75rem;">
+                    <span>2. Hardware Motor (Arduino Bridge):</span>
+                    <span style="font-weight:700; color:${isArdOnline ? 'var(--success)' : 'var(--danger)'};">
+                        ${isArdOnline ? '✅ READY (ONLINE)' : '❌ OFFLINE (Nyalakan Bridge)'}
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- SAFETY WARNING -->
+        <div style="padding:10px 12px; background:rgba(234, 88, 12, 0.1); border:1px solid rgba(234, 88, 12, 0.3); border-radius:8px; font-size:0.74rem; color:var(--warning); margin-bottom:14px; line-height:1.45;">
+            <strong>⚠️ Peringatan Keamanan:</strong>
+            Pastikan area radius minimal <strong>50 cm di sekeliling robot bebas dari rintangan</strong> manusia atau barang agar robot dapat berputar di tempat dengan aman.
+        </div>
+
+        <div id="relocalize-progress-wrap" style="display:none; margin-bottom:12px;">
+            <div class="flex-between" style="font-size:0.75rem; font-weight:600; margin-bottom:6px;">
+                <span id="relocalize-status-label">Menyebarkan partikel...</span>
+                <span id="relocalize-pct-label" class="mono text-accent">0%</span>
+            </div>
+            <div style="width:100%; height:8px; background:var(--bg-tertiary); border-radius:4px; overflow:hidden; border:1px solid var(--border-subtle);">
+                <div id="relocalize-progress-bar" style="width:0%; height:100%; background:var(--accent); transition:width 0.3s ease;"></div>
+            </div>
+        </div>
+    `;
+
+    const actionsEl = document.getElementById('modal-actions');
+    actionsEl.innerHTML = '';
+
+    const btnCancel = document.createElement('button');
+    btnCancel.className = 'btn btn-outline';
+    btnCancel.id = 'relocalize-btn-cancel';
+    btnCancel.textContent = 'Batal';
+    btnCancel.onclick = () => {
+        cancelAutoRelocalize();
+        hideModal();
+    };
+
+    const btnStart = document.createElement('button');
+    btnStart.className = `btn ${canStart ? 'btn-primary' : 'btn-secondary'}`;
+    btnStart.id = 'relocalize-btn-start';
+    btnStart.textContent = '🚀 Mulai Putar & Kalibrasi (360°)';
+    btnStart.disabled = !canStart;
+    btnStart.onclick = startAutoRelocalize;
+
+    actionsEl.appendChild(btnCancel);
+    actionsEl.appendChild(btnStart);
+
+    document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
+async function startAutoRelocalize() {
+    const btnStart = document.getElementById('relocalize-btn-start');
+    const btnCancel = document.getElementById('relocalize-btn-cancel');
+    const progWrap = document.getElementById('relocalize-progress-wrap');
+
+    if (btnStart) {
+        btnStart.disabled = true;
+        btnStart.style.display = 'none';
+    }
+    if (btnCancel) {
+        btnCancel.className = 'btn btn-danger';
+        btnCancel.textContent = '⏹️ Batalkan Relokalisasi';
+        btnCancel.onclick = cancelAutoRelocalize;
+    }
+    if (progWrap) {
+        progWrap.style.display = 'block';
+    }
+
+    showToast('Memulai relokalisasi AMCL...', 'info');
+    const res = await apiPost('/api/relocalize/start', {});
+    if (!res || !res.success) {
+        showToast(res ? (res.error || res.message) : 'Gagal memulai relokalisasi', 'error');
+        if (btnStart) {
+            btnStart.disabled = false;
+            btnStart.style.display = 'inline-block';
+        }
+        if (btnCancel) {
+            btnCancel.className = 'btn btn-outline';
+            btnCancel.textContent = 'Batal';
+            btnCancel.onclick = hideModal;
+        }
+        return;
+    }
+
+    showToast(res.message, 'success');
+    if (_relocalizePollTimer) clearInterval(_relocalizePollTimer);
+    _relocalizePollTimer = setInterval(pollRelocalizeProgress, 600);
+}
+
+async function cancelAutoRelocalize() {
+    if (_relocalizePollTimer) {
+        clearInterval(_relocalizePollTimer);
+        _relocalizePollTimer = null;
+    }
+    await apiPost('/api/relocalize/cancel', {});
+    showToast('Relokalisasi dihentikan.', 'warning');
+
+    const btnCancel = document.getElementById('relocalize-btn-cancel');
+    if (btnCancel) {
+        btnCancel.className = 'btn btn-outline';
+        btnCancel.textContent = 'Tutup';
+        btnCancel.onclick = hideModal;
+    }
+    const lbl = document.getElementById('relocalize-status-label');
+    if (lbl) {
+        lbl.textContent = 'Dibatalkan oleh pengguna';
+        lbl.style.color = 'var(--danger)';
+    }
+}
+
+async function pollRelocalizeProgress() {
+    const st = await apiGet('/api/relocalize/status');
+    if (!st) return;
+
+    const bar = document.getElementById('relocalize-progress-bar');
+    const pctLbl = document.getElementById('relocalize-pct-label');
+    const statLbl = document.getElementById('relocalize-status-label');
+    const btnCancel = document.getElementById('relocalize-btn-cancel');
+
+    if (bar) bar.style.width = (st.progress || 0) + '%';
+    if (pctLbl) pctLbl.textContent = (st.progress || 0) + '%';
+    if (statLbl && st.message) statLbl.textContent = st.message;
+
+    if (!st.active) {
+        if (_relocalizePollTimer) {
+            clearInterval(_relocalizePollTimer);
+            _relocalizePollTimer = null;
+        }
+
+        if (st.phase === 'completed') {
+            if (bar) {
+                bar.style.width = '100%';
+                bar.style.background = 'var(--success)';
+            }
+            if (pctLbl) {
+                pctLbl.textContent = '100%';
+                pctLbl.style.color = 'var(--success)';
+            }
+            if (statLbl) {
+                statLbl.innerHTML = `<strong>✅ Selesai!</strong> ${st.message}`;
+                statLbl.style.color = 'var(--success)';
+            }
+            if (btnCancel) {
+                btnCancel.className = 'btn btn-success';
+                btnCancel.textContent = '✅ Selesai & Tutup';
+                btnCancel.onclick = hideModal;
+            }
+            showToast(st.message || 'Relokalisasi selesai!', 'success');
+        } else if (st.phase === 'failed') {
+            if (statLbl) {
+                statLbl.textContent = `❌ ${st.message || 'Gagal'}`;
+                statLbl.style.color = 'var(--danger)';
+            }
+            if (btnCancel) {
+                btnCancel.className = 'btn btn-outline';
+                btnCancel.textContent = 'Tutup';
+                btnCancel.onclick = hideModal;
+            }
+            showToast(st.message || 'Relokalisasi gagal', 'error');
+        }
+    }
 }
 
 function openSavePointFromMapModal(wx, wy) {
@@ -3140,6 +3345,9 @@ window.onChangeActiveMap = onChangeActiveMap;
 window.refreshActiveMap = refreshActiveMap;
 window.openInitialPoseModal = openInitialPoseModal;
 window.sendInitialPoseToRobot = sendInitialPoseToRobot;
+window.openAutoRelocalizeModal = openAutoRelocalizeModal;
+window.startAutoRelocalize = startAutoRelocalize;
+window.cancelAutoRelocalize = cancelAutoRelocalize;
 window.openSavePointFromMapModal = openSavePointFromMapModal;
 
 function renderSavedPointsList() {
