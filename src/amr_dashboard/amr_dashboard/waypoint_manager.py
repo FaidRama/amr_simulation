@@ -56,6 +56,11 @@ class WaypointManager(Node):
         # Menerima perintah kontrol (cancel, pause, resume)
         self.control_sub = self.create_subscription(
             String, '/amr/delivery_control', self.on_control_received, 10)
+        # Menerima status human awareness untuk pause/status khusus saat SAFE_STOP
+        self.human_state = 'NORMAL'
+        self.saved_phase_before_human = None
+        self.human_sub = self.create_subscription(
+            String, '/human_state', self.on_human_state_received, 10)
         
         # === CONFIGURATION (waypoints.yaml) ===
         self.home_position = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
@@ -230,6 +235,30 @@ class WaypointManager(Node):
         elif command == 'reload_config':
             self.get_logger().info('↻ RELOAD CONFIG: Memperbarui konfigurasi mode & home position...')
             self.load_config()
+
+    def on_human_state_received(self, msg):
+        """Menerima status human awareness dari human_awareness_node untuk mengelola fase tunggu manusia."""
+        new_state = msg.data.strip()
+        if new_state == self.human_state:
+            return
+        old_state = self.human_state
+        self.human_state = new_state
+        
+        # Jika robot sedang dalam fase navigasi aktif dan manusia memicu SAFE_STOP
+        if self.mission and self.mission['status'] == 'running':
+            active_phases = ('navigating_pickup', 'navigating_delivery', 'returning_home')
+            if new_state == 'SAFE_STOP':
+                if self.mission['current_phase'] in active_phases:
+                    self.saved_phase_before_human = self.mission['current_phase']
+                    self.mission['current_phase'] = 'waiting_human'
+                    self.get_logger().info('🚶 [HUMAN AWARE] Terdeteksi SAFE_STOP: AMR berhenti sejenak menunggu manusia lewat.')
+                    self.publish_status()
+            elif new_state in ('NORMAL', 'REDUCED_SPEED'):
+                if self.mission['current_phase'] == 'waiting_human':
+                    restored = self.saved_phase_before_human or 'navigating_pickup'
+                    self.mission['current_phase'] = restored
+                    self.get_logger().info(f'✅ [HUMAN AWARE] Jalur aman ({new_state}): AMR melanjutkan navigasi ({restored}).')
+                    self.publish_status()
     
     def emergency_stop(self):
         """Kirim cmd_vel zero untuk stop AMR."""
