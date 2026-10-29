@@ -940,6 +940,55 @@ def stop_slam_process():
     _append_mapping_log('🛑 Proses SLAM Mapping dihentikan.')
 
 
+# =====================================================================
+# ARDUINO BRIDGE PROCESS MANAGER
+# =====================================================================
+ARDUINO_PROC = None
+ARDUINO_LOCK = threading.Lock()
+
+
+def is_arduino_active():
+    """Cek apakah Arduino Bridge sedang berjalan (via dashboard, launch file, atau terminal)."""
+    with ARDUINO_LOCK:
+        if ARDUINO_PROC is not None and ARDUINO_PROC.poll() is None:
+            return True
+    if ros_node is not None:
+        try:
+            names = [n.lower() for n in ros_node.get_node_names()]
+            if any('arduino_bridge' in n for n in names):
+                return True
+        except Exception:
+            pass
+    try:
+        res = subprocess.run(['pgrep', '-f', 'arduino_bridge'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        if res.returncode == 0 and res.stdout.strip():
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def stop_arduino_process():
+    """Hentikan proses arduino_bridge.py."""
+    global ARDUINO_PROC
+    with ARDUINO_LOCK:
+        proc = ARDUINO_PROC
+        ARDUINO_PROC = None
+    if proc is not None and proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            proc.wait(timeout=2.0)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
+    subprocess.run(
+        ['pkill', '-f', 'arduino_bridge\\.py'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+
+
 # --- ROUTES ---
 
 @app.route('/')
@@ -1045,6 +1094,69 @@ def api_mapping_stop():
     return jsonify({
         'success': True,
         'message': 'Proses SLAM Mapping berhasil dihentikan.'
+    })
+
+
+@app.route('/api/arduino/status')
+def api_arduino_status():
+    """Status proses Arduino Bridge."""
+    return jsonify({
+        'active': is_arduino_active()
+    })
+
+
+@app.route('/api/arduino/start', methods=['POST'])
+def api_arduino_start():
+    """Jalankan arduino_bridge.py di background."""
+    global ARDUINO_PROC
+    if is_arduino_active():
+        return jsonify({
+            'success': True,
+            'active': True,
+            'message': 'Arduino Bridge sudah aktif!'
+        })
+
+    ws_roots = get_workspace_roots()
+    domain_id = os.environ.get('ROS_DOMAIN_ID', '1')
+    setup_parts = [
+        f'export ROS_DOMAIN_ID={domain_id}',
+        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
+    ]
+    for wr in reversed(ws_roots):
+        setup_bash = os.path.join(wr, 'install', 'setup.bash')
+        if os.path.exists(setup_bash):
+            setup_parts.append(f'source "{setup_bash}"')
+    setup_parts.append('exec ros2 run amr_simulation arduino_bridge.py')
+    full_cmd = ' && '.join(setup_parts)
+
+    try:
+        with ARDUINO_LOCK:
+            ARDUINO_PROC = subprocess.Popen(
+                ['/bin/bash', '-c', full_cmd],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid
+            )
+        time.sleep(0.5)
+        return jsonify({
+            'success': True,
+            'active': True,
+            'message': 'Arduino Bridge berhasil dinyalakan!'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/arduino/stop', methods=['POST'])
+def api_arduino_stop():
+    """Hentikan proses Arduino Bridge."""
+    if ros_node is not None:
+        ros_node.send_cmd_vel(0.0, 0.0)
+    stop_arduino_process()
+    return jsonify({
+        'success': True,
+        'active': False,
+        'message': 'Arduino Bridge berhasil dihentikan.'
     })
 
 
@@ -1204,6 +1316,7 @@ def api_status():
             'map_file': ACTIVE_MAP_FILE,
             'has_live_map': ros_node.live_map_png is not None,
             'nav_path': getattr(ros_node, 'nav_path', []),
+            'arduino_active': is_arduino_active(),
             'connected': True,
             'timestamp': time.time()
         })

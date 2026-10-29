@@ -126,6 +126,7 @@ const APP = {
     availableMaps: [],
     hasLiveMap: false,
     mappingActive: false,
+    arduinoActive: false,
     poseSource: 'NONE',
     pose: { x: 0, y: 0, yaw: 0 },
     delivery: { status: 'idle', current_phase: 'idle' },
@@ -2266,6 +2267,24 @@ function renderJoystick() {
                     <span>/cmd_vel</span>
                 </div>
                 <div class="panel">
+                    <!-- ARDUINO HARDWARE BRIDGE CONTROLLER -->
+                    <div class="arduino-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:14px; gap:12px;">
+                        <div style="display:flex; align-items:center; gap:10px;">
+                            <span id="arduino-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.arduinoActive ? 'var(--success)' : 'var(--text-muted)'}; box-shadow:${APP.arduinoActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
+                            <div>
+                                <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="arduino-status-text">
+                                    ARDUINO BRIDGE: ${APP.arduinoActive ? '<span style="color:var(--success)">ONLINE</span>' : '<span style="color:var(--text-muted)">OFFLINE</span>'}
+                                </div>
+                                <div style="font-size:0.68rem; color:var(--text-muted);" id="arduino-sub-text">
+                                    ${APP.arduinoActive ? 'Hardware motor & odometri aktif' : 'Nyalakan agar robot merespon /cmd_vel'}
+                                </div>
+                            </div>
+                        </div>
+                        <button type="button" id="arduino-toggle-btn" class="btn btn-sm ${APP.arduinoActive ? 'btn-danger' : 'btn-success'}" onclick="toggleArduinoBridge()" style="min-width:120px; font-weight:600; border-radius:6px;">
+                            ${APP.arduinoActive ? '🛑 Stop Bridge' : '⚡ Start Bridge'}
+                        </button>
+                    </div>
+
                     <div class="joystick-container">
                         <div class="joystick-canvas-wrap">
                             <canvas id="joystick-canvas" width="240" height="240"></canvas>
@@ -2295,6 +2314,68 @@ function renderJoystick() {
     }, 50);
 
     return div;
+}
+
+async function toggleArduinoBridge() {
+    const btn = document.getElementById('arduino-toggle-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.style.opacity = '0.6';
+    }
+    try {
+        if (APP.arduinoActive) {
+            showToast('Menghentikan Arduino Bridge...', 'info');
+            const res = await apiPost('/api/arduino/stop', {});
+            if (res && res.success) {
+                APP.arduinoActive = false;
+                updateArduinoBridgeUI(false);
+                showToast('Arduino Bridge berhasil dihentikan.', 'warning');
+            } else {
+                showToast(res ? (res.error || res.message) : 'Gagal menghentikan Arduino Bridge', 'error');
+            }
+        } else {
+            showToast('Menyalakan Arduino Bridge...', 'info');
+            const res = await apiPost('/api/arduino/start', {});
+            if (res && res.success) {
+                APP.arduinoActive = true;
+                updateArduinoBridgeUI(true);
+                showToast('Arduino Bridge berhasil dinyalakan!', 'success');
+            } else {
+                showToast(res ? (res.error || res.message) : 'Gagal menyalakan Arduino Bridge', 'error');
+            }
+        }
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.style.opacity = '1';
+        }
+    }
+}
+
+function updateArduinoBridgeUI(active) {
+    const ind = document.getElementById('arduino-status-indicator');
+    const text = document.getElementById('arduino-status-text');
+    const sub = document.getElementById('arduino-sub-text');
+    const btn = document.getElementById('arduino-toggle-btn');
+    if (!ind || !text || !btn) return;
+
+    if (active) {
+        ind.style.background = 'var(--success)';
+        ind.style.boxShadow = '0 0 8px var(--success)';
+        text.innerHTML = 'ARDUINO BRIDGE: <span style="color:var(--success)">ONLINE</span>';
+        if (sub) sub.textContent = 'Hardware motor & odometri aktif';
+        btn.className = 'btn btn-sm btn-danger';
+        btn.innerHTML = '🛑 Stop Bridge';
+    } else {
+        ind.style.background = 'var(--text-muted)';
+        ind.style.boxShadow = 'none';
+        text.innerHTML = 'ARDUINO BRIDGE: <span style="color:var(--text-muted)">OFFLINE</span>';
+        if (sub) sub.textContent = 'Nyalakan agar robot merespon /cmd_vel';
+        btn.className = 'btn btn-sm btn-success';
+        btn.innerHTML = '⚡ Start Bridge';
+    }
 }
 
 async function emergencyStop() {
@@ -2972,6 +3053,11 @@ async function globalStatusPoll() {
         if (data.map_file && data.map_file !== APP.mapFile) {
             APP.mapFile = data.map_file;
             if (typeof reloadMapData === 'function') reloadMapData();
+        }
+
+        if (data.hasOwnProperty('arduino_active')) {
+            APP.arduinoActive = !!data.arduino_active;
+            updateArduinoBridgeUI(APP.arduinoActive);
         }
 
         if (typeof handleDeliveryStatusUpdate === 'function') {
