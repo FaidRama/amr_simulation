@@ -367,6 +367,8 @@ class DashboardNode(Node):
         # Status delivery dari waypoint_manager
         self.status_sub = self.create_subscription(
             String, '/amr/delivery_status', self.on_delivery_status, 10)
+        self.delivery_log_sub = self.create_subscription(
+            String, '/amr/delivery_log', self.on_delivery_log, 20)
         
         # Status human awareness (/human_state, /human_status, dan /human_info)
         self.human_sub = self.create_subscription(
@@ -644,6 +646,15 @@ class DashboardNode(Node):
                 else:
                     self.delivery_status = {'status': 'idle', 'current_phase': 'idle'}
         except json.JSONDecodeError:
+            pass
+
+    def on_delivery_log(self, msg):
+        """Menerima stream log dari waypoint_manager dan menyalurkannya ke panel log dashboard."""
+        try:
+            line = msg.data.strip()
+            if line:
+                _append_navigation_log(line)
+        except Exception:
             pass
     
     def check_stale_status(self):
