@@ -183,7 +183,15 @@ def find_map_files(map_yaml_name=None):
     global MAP_PGM_PATH, MAP_YAML_PATH, MAP_METADATA, ACTIVE_MAP_FILE
 
     if map_yaml_name:
-        ACTIVE_MAP_FILE = map_yaml_name
+        raw = str(map_yaml_name).strip()
+        # Bersihkan nama jika membawa label UI (misal 'peta_l1_ddc.yaml (Peta Lantai 1 DDC)')
+        clean = raw.split(' ')[0].split('(')[0].strip()
+        if clean == 'live':
+            ACTIVE_MAP_FILE = 'live'
+        else:
+            if not clean.endswith('.yaml'):
+                clean += '.yaml'
+            ACTIVE_MAP_FILE = clean
 
     if ACTIVE_MAP_FILE == 'live':
         print('[MAP] Mode peta diset ke LIVE ROS2 /map topic')
@@ -201,6 +209,7 @@ def find_map_files(map_yaml_name=None):
             break
 
     if not yaml_candidate:
+        print(f'[WARN] File peta "{target_yaml}" tidak ditemukan, mencari fallback...')
         for d in get_maps_directories():
             for fallback in ('peta_1b.yaml', 'peta_dc.yaml'):
                 cand = os.path.join(d, fallback)
@@ -212,10 +221,11 @@ def find_map_files(map_yaml_name=None):
 
     if yaml_candidate and os.path.exists(yaml_candidate):
         MAP_YAML_PATH = yaml_candidate
+        ACTIVE_MAP_FILE = os.path.basename(yaml_candidate)
         with open(MAP_YAML_PATH, 'r') as f:
             MAP_METADATA = yaml.safe_load(f) or {}
 
-        img_field = MAP_METADATA.get('image', target_yaml.replace('.yaml', '.pgm'))
+        img_field = MAP_METADATA.get('image', ACTIVE_MAP_FILE.replace('.yaml', '.pgm'))
         map_dir = os.path.dirname(MAP_YAML_PATH)
         cand_pgm = os.path.join(map_dir, img_field)
         if not os.path.exists(cand_pgm):
@@ -568,8 +578,9 @@ class DashboardNode(Node):
                 self.live_map_png = png_bytes
                 self.live_map_meta = meta
 
-            # Auto-sinkronisasi file peta aktif jika origin /map berbeda dengan file statis saat ini
-            if ACTIVE_MAP_FILE != 'live':
+            # Auto-sinkronisasi file peta aktif HANYA jika Nav2 sedang berjalan aktif
+            # Jangan auto-sinkronisasi jika Nav2 mati agar tidak menimpa pilihan peta manual user di dashboard!
+            if is_navigation_active() and ACTIVE_MAP_FILE != 'live':
                 cur_orig = MAP_METADATA.get('origin', [0.0, 0.0, 0.0])
                 if abs(float(cur_orig[0]) - ox) > 0.05 or abs(float(cur_orig[1]) - oy) > 0.05:
                     matched_yaml = None
@@ -589,7 +600,7 @@ class DashboardNode(Node):
                         if matched_yaml:
                             break
                     if matched_yaml and matched_yaml != ACTIVE_MAP_FILE:
-                        self.get_logger().info(f'Auto-sync peta dashboard ke peta aktif ROS2: {matched_yaml}')
+                        self.get_logger().info(f'Auto-sync peta dashboard ke peta aktif Nav2: {matched_yaml}')
                         find_map_files(matched_yaml)
         except Exception as e:
             self.get_logger().warn(f'Gagal memproses /map OccupancyGrid: {e}')
@@ -859,7 +870,11 @@ def apply_mode_profile(mode, custom_map_file=None, save=True):
 
     prof = waypoints_config['profiles'][mode]
     if custom_map_file:
-        prof['map_file'] = custom_map_file
+        raw = str(custom_map_file).strip()
+        clean = raw.split(' ')[0].split('(')[0].strip()
+        if clean != 'live' and not clean.endswith('.yaml'):
+            clean += '.yaml'
+        prof['map_file'] = clean
 
     map_to_load = prof.get('map_file', default_map)
     waypoints_config['predefined_points'] = list(prof.get('predefined_points', []))
@@ -867,6 +882,7 @@ def apply_mode_profile(mode, custom_map_file=None, save=True):
     waypoints_config['settings'] = dict(prof.get('settings', {}))
 
     find_map_files(map_to_load)
+    prof['map_file'] = ACTIVE_MAP_FILE
     if save:
         save_waypoints_config()
     if ros_node is not None:

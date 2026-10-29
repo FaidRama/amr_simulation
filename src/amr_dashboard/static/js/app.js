@@ -527,9 +527,12 @@ function renderDelivery() {
     const modeBadgeText = APP.mode === 'sim' ? '🎮 MODE SIMULASI (GAZEBO)' : '🤖 MODE REAL ROBOT';
     const mapOptionsHtml = [
         `<option value="live" ${APP.mapFile === 'live' ? 'selected' : ''}>📡 Live ROS /map Topic (SLAM / Nav2)</option>`,
-        ...(APP.availableMaps || []).map(m =>
-            `<option value="${m.name}" ${APP.mapFile === m.name ? 'selected' : ''}>🗺️ ${m.name}</option>`
-        )
+        ...(APP.availableMaps || []).map(m => {
+            const mapId = (typeof m === 'object' && m.id) ? m.id : (typeof m === 'object' ? m.name : m);
+            const mapLabel = (typeof m === 'object' && m.name) ? m.name : mapId;
+            const isSelected = APP.mapFile === mapId || APP.mapFile === mapLabel;
+            return `<option value="${mapId}" ${isSelected ? 'selected' : ''}>🗺️ ${mapLabel}</option>`;
+        })
     ].join('');
 
     div.innerHTML = `
@@ -3011,9 +3014,12 @@ function renderSettings() {
 
     const mapOptionsHtml = [
         `<option value="live" ${APP.mapFile === 'live' ? 'selected' : ''}>📡 Live ROS /map Topic (SLAM / Nav2)</option>`,
-        ...(APP.availableMaps || []).map(m =>
-            `<option value="${m.name}" ${APP.mapFile === m.name ? 'selected' : ''}>🗺️ ${m.name}</option>`
-        )
+        ...(APP.availableMaps || []).map(m => {
+            const mapId = (typeof m === 'object' && m.id) ? m.id : (typeof m === 'object' ? m.name : m);
+            const mapLabel = (typeof m === 'object' && m.name) ? m.name : mapId;
+            const isSelected = APP.mapFile === mapId || APP.mapFile === mapLabel;
+            return `<option value="${mapId}" ${isSelected ? 'selected' : ''}>🗺️ ${mapLabel}</option>`;
+        })
     ].join('');
 
     const themeCardsHtml = STUDIO_THEMES.map(t => `

@@ -39,7 +39,7 @@ profiles:
       x: 0.0
       y: 0.0
       yaw: 0.0
-    map_file: peta_dc.yaml (Simulasi Gazebo Gudang)
+    map_file: peta_dc.yaml
     max_angular_speed: 0.9
     max_linear_speed: 1.0
     predefined_points:
