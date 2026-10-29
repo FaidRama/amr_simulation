@@ -514,7 +514,7 @@ def main():
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--conf", type=float, default=0.5)
     parser.add_argument(
-        "--corridor-width", type=float, default=0.50,
+        "--corridor-width", type=float, default=0.30,
         help="Lebar koridor tengah sebagai proporsi lebar frame (0.1-1.0); default 0.50"
     )
 
