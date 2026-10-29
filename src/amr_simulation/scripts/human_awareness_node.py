@@ -513,6 +513,10 @@ def main():
     )
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--conf", type=float, default=0.5)
+    parser.add_argument(
+        "--corridor-width", type=float, default=0.50,
+        help="Lebar koridor tengah sebagai proporsi lebar frame (0.1-1.0); default 0.50"
+    )
 
     parser.add_argument(
         "--feature",
@@ -552,6 +556,9 @@ def main():
     )
 
     args, _ = parser.parse_known_args()
+
+    if not 0.1 <= args.corridor_width <= 1.0:
+        parser.error("--corridor-width harus berada pada rentang 0.1 sampai 1.0")
 
     # --------------------------------------------------------
     # ROS INITIALIZATION
@@ -833,21 +840,39 @@ def main():
                     )
                 )
 
-            # 3. TARGET SELECTION
-            target = None
+            # 3. CENTRAL CORRIDOR + TARGET SELECTION
+            # Koridor tengah dipakai sebagai proxy area lintasan di depan robot.
+            # Bounding box dianggap menghalangi bila ada irisan horizontal
+            # dengan koridor, bukan hanya karena titik tengah bbox berada di sana.
+            corridor_half = (width * args.corridor_width) / 2.0
+            corridor_x1 = int((width / 2.0) - corridor_half)
+            corridor_x2 = int((width / 2.0) + corridor_half)
 
-            if persons:
+            corridor_persons = []
+            for person in persons:
+                person["in_corridor"] = (
+                    person["x2"] > corridor_x1
+                    and person["x1"] < corridor_x2
+                )
+                if person["in_corridor"]:
+                    corridor_persons.append(person)
+
+            # Hanya orang yang beririsan dengan koridor tengah yang memengaruhi
+            # proximity zone dan FSM. Jika beberapa orang masuk koridor, pilih
+            # yang paling dekat berdasarkan fitur bbox yang sedang digunakan.
+            target = None
+            if corridor_persons:
                 if args.feature == "height":
                     target = max(
-                        persons, key=lambda p: p["h"]
+                        corridor_persons, key=lambda p: p["h"]
                     )
                 elif args.feature == "width":
                     target = max(
-                        persons, key=lambda p: p["w"]
+                        corridor_persons, key=lambda p: p["w"]
                     )
                 else:
                     target = max(
-                        persons,
+                        corridor_persons,
                         key=lambda p: p["w"] * p["h"]
                     )
 
@@ -909,7 +934,12 @@ def main():
 
             # Publish juga ke /human_status untuk dashboard AMR
             status_msg = String()
-            status_msg.data = state.value if target is not None else "NO_HUMAN"
+            if target is not None:
+                status_msg.data = state.value
+            elif persons:
+                status_msg.data = "HUMAN_OUTSIDE_CORRIDOR"
+            else:
+                status_msg.data = "NO_HUMAN"
             status_pub.publish(status_msg)
 
             # 7. FPS
@@ -932,6 +962,9 @@ def main():
                 "zone": zone.value,
                 "response": STATE_RESPONSE.get(state, ""),
                 "persons": len(persons),
+                "corridor_persons": len(corridor_persons),
+                "corridor_width_ratio": args.corridor_width,
+                "target_in_corridor": bool(target is not None),
                 "distance_m": None,
                 "in_range": None,
                 "calibrated": None,
@@ -1000,6 +1033,27 @@ def main():
             # 9. VISUALIZATION / VIDEO / DASHBOARD STREAM
             need_render = (not args.no_display) or args.save_video or (annotated_pub is not None)
             if need_render:
+                # Visualisasi koridor tengah yang digunakan untuk keputusan.
+                overlay = frame.copy()
+                cv2.rectangle(
+                    overlay, (corridor_x1, 0),
+                    (corridor_x2, height - 1), (255, 180, 0), -1
+                )
+                cv2.addWeighted(overlay, 0.10, frame, 0.90, 0, frame)
+                cv2.line(
+                    frame, (corridor_x1, 0), (corridor_x1, height - 1),
+                    (255, 180, 0), max(1, int(2 * scale))
+                )
+                cv2.line(
+                    frame, (corridor_x2, 0), (corridor_x2, height - 1),
+                    (255, 180, 0), max(1, int(2 * scale))
+                )
+                put_text(
+                    frame, f"KORIDOR TENGAH {args.corridor_width:.0%}",
+                    (corridor_x1 + 5, min(height - 10, int(70 * scale))),
+                    0.5 * scale, (255, 180, 0)
+                )
+
                 for person in persons:
                     if person is not target:
                         draw_person(
@@ -1043,6 +1097,7 @@ def main():
 
                     rows = [
                         ("Orang terdeteksi", str(len(persons)), WHITE),
+                        ("Irisan koridor", f"{len(corridor_persons)} orang", (255, 180, 0)),
                         (
                             "Jarak estimasi",
                             distance_text,
@@ -1072,7 +1127,12 @@ def main():
 
                 else:
                     rows = [
-                        ("Orang terdeteksi", "0", WHITE),
+                        ("Orang terdeteksi", str(len(persons)), WHITE),
+                        (
+                            "Irisan koridor",
+                            "0 orang" if persons else "-",
+                            (255, 180, 0) if persons else GRAY
+                        ),
                         ("Jarak estimasi", "-", GRAY),
                         (
                             "Fitur aktif",
