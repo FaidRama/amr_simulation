@@ -997,7 +997,11 @@ def api_mapping_start():
     time.sleep(0.8)
 
     ws_roots = get_workspace_roots()
-    setup_parts = ['source /opt/ros/foxy/setup.bash 2>/dev/null || true']
+    domain_id = os.environ.get('ROS_DOMAIN_ID', '1')
+    setup_parts = [
+        f'export ROS_DOMAIN_ID={domain_id}',
+        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
+    ]
     for wr in reversed(ws_roots):
         setup_bash = os.path.join(wr, 'install', 'setup.bash')
         if os.path.exists(setup_bash):
