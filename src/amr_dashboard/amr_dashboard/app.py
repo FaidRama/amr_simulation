@@ -1258,19 +1258,27 @@ RELOCALIZE_LOCK = threading.Lock()
 RELOCALIZE_THREAD = None
 
 
-def _run_relocalize_sequence():
-    """Sequence relokalisasi: sebar partikel AMCL -> putar robot 360° -> konvergensi partikel."""
+def _run_relocalize_sequence(mode='local'):
+    """Sequence relokalisasi: (opsional) sebar partikel AMCL -> putar robot 360° -> konvergensi partikel."""
     global RELOCALIZE_STATE
     try:
-        # Phase 1: Reset partikel AMCL
-        with RELOCALIZE_LOCK:
-            RELOCALIZE_STATE['phase'] = 'resetting'
-            RELOCALIZE_STATE['progress'] = 10
-            RELOCALIZE_STATE['message'] = 'Menyebarkan partikel AMCL ke seluruh ruangan...'
+        if mode == 'global':
+            # Phase 1: Reset partikel AMCL global
+            with RELOCALIZE_LOCK:
+                RELOCALIZE_STATE['phase'] = 'resetting'
+                RELOCALIZE_STATE['progress'] = 10
+                RELOCALIZE_STATE['message'] = 'Menyebarkan partikel AMCL ke seluruh ruangan...'
 
-        if ros_node is not None:
-            ros_node.request_global_localization()
-        time.sleep(1.2)
+            if ros_node is not None:
+                ros_node.request_global_localization()
+            time.sleep(1.2)
+        else:
+            # Mode local: Pertahankan partikel di sekitar perkiraan posisi saat ini, langsung kalibrasi
+            with RELOCALIZE_LOCK:
+                RELOCALIZE_STATE['phase'] = 'starting'
+                RELOCALIZE_STATE['progress'] = 15
+                RELOCALIZE_STATE['message'] = 'Menyelaraskan orientasi robot dengan dinding sekitar (tanpa sebar ulang global)...'
+            time.sleep(0.5)
 
         with RELOCALIZE_LOCK:
             if RELOCALIZE_STATE['cancel_requested']:
@@ -1936,6 +1944,11 @@ def api_relocalize_start():
                     'error': 'Tidak dapat melakukan relokalisasi saat misi pengantaran sedang berjalan!'
                 }), 400
 
+    data = request.get_json(silent=True) or {}
+    reloc_mode = data.get('mode', 'local')
+    if reloc_mode not in ('local', 'global'):
+        reloc_mode = 'local'
+
     with RELOCALIZE_LOCK:
         if RELOCALIZE_STATE['active']:
             return jsonify({
@@ -1946,14 +1959,15 @@ def api_relocalize_start():
         RELOCALIZE_STATE['cancel_requested'] = False
         RELOCALIZE_STATE['phase'] = 'starting'
         RELOCALIZE_STATE['progress'] = 5
-        RELOCALIZE_STATE['message'] = 'Memulai proses relokalisasi AMCL...'
+        RELOCALIZE_STATE['message'] = f'Memulai proses relokalisasi AMCL (mode: {reloc_mode})...'
 
-    RELOCALIZE_THREAD = threading.Thread(target=_run_relocalize_sequence, daemon=True)
+    RELOCALIZE_THREAD = threading.Thread(target=_run_relocalize_sequence, args=(reloc_mode,), daemon=True)
     RELOCALIZE_THREAD.start()
 
+    mode_label = 'Kalibrasi Halus Posisi Saat Ini' if reloc_mode == 'local' else 'Pencarian Global'
     return jsonify({
         'success': True,
-        'message': 'Relokalisasi otomatis dimulai! Robot akan berputar 360° perlahan.'
+        'message': f'Relokalisasi AMCL ({mode_label}) dimulai! Robot akan berputar 360° perlahan.'
     })
 
 

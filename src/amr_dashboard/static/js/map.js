@@ -42,12 +42,13 @@ function stopAllMapLoops() {
     }
 }
 
-function clearRobotTrail() {
+function clearRobotTrail(showToastMsg = true) {
     MAP_STATE.robotTrail = [];
-    if (typeof showToast === 'function') {
+    if (showToastMsg && typeof showToast === 'function') {
         showToast('Jejak lintasan robot pada peta dibersihkan', 'info');
     }
 }
+window.clearRobotTrail = clearRobotTrail;
 
 // ====================== LOAD / RELOAD MAP ======================
 async function loadMapData(forceReload = false) {
@@ -190,10 +191,15 @@ function drawMap(canvas, ctx, options = {}) {
         if (MAP_STATE.robotTrail.length > 1) {
             ctx.save();
             ctx.beginPath();
+            let prevPt = null;
             MAP_STATE.robotTrail.forEach((pt, idx) => {
                 const { px, py } = worldToPixel(pt.x, pt.y);
-                if (idx === 0) ctx.moveTo(px, py);
-                else ctx.lineTo(px, py);
+                if (idx === 0 || !prevPt || Math.hypot(pt.x - prevPt.x, pt.y - prevPt.y) > 1.2) {
+                    ctx.moveTo(px, py);
+                } else {
+                    ctx.lineTo(px, py);
+                }
+                prevPt = pt;
             });
             ctx.strokeStyle = 'rgba(16, 185, 129, 0.75)';
             ctx.lineWidth = 2;
@@ -403,9 +409,11 @@ async function initDeliveryMap() {
                 },
                 {
                     label: '📍 Set Posisi Awal Robot (AMCL)', class: 'btn-warning',
-                    action: async () => {
-                        if (typeof sendInitialPoseToRobot === 'function') {
-                            await sendInitialPoseToRobot(wx, wy, 0.0, false);
+                    action: () => {
+                        if (typeof openInitialPoseModal === 'function') {
+                            openInitialPoseModal(wx, wy);
+                        } else if (typeof sendInitialPoseToRobot === 'function') {
+                            sendInitialPoseToRobot(wx, wy, 0.0, false);
                         }
                     }
                 },
@@ -532,6 +540,12 @@ function recordRobotTrailPoint(wx, wy) {
     }
     const last = trail[trail.length - 1];
     const dist = Math.hypot(wx - last.x, wy - last.y);
+    // Jika robot melompat/teleport > 1.2m (ganti peta, initial pose, relokasi):
+    // Reset jejak agar garis hijau tidak ditarik melintasi seluruh peta
+    if (dist > 1.2) {
+        MAP_STATE.robotTrail = [{ x: wx, y: wy }];
+        return;
+    }
     if (dist >= 0.06) {
         trail.push({ x: wx, y: wy });
         if (trail.length > 600) trail.shift();
@@ -641,10 +655,15 @@ function drawLiveSlamMap(canvas, ctx) {
         if (MAP_STATE.robotTrail.length > 1) {
             ctx.save();
             ctx.beginPath();
+            let prevPt = null;
             MAP_STATE.robotTrail.forEach((pt, idx) => {
                 const { px, py } = toSlamPixel(pt.x, pt.y);
-                if (idx === 0) ctx.moveTo(px, py);
-                else ctx.lineTo(px, py);
+                if (idx === 0 || !prevPt || Math.hypot(pt.x - prevPt.x, pt.y - prevPt.y) > 1.2) {
+                    ctx.moveTo(px, py);
+                } else {
+                    ctx.lineTo(px, py);
+                }
+                prevPt = pt;
             });
             ctx.strokeStyle = 'rgba(16, 185, 129, 0.78)';
             ctx.lineWidth = 2;
@@ -699,10 +718,15 @@ function drawLiveSlamMap(canvas, ctx) {
     // Draw Robot Trail on Standby Grid
     if (MAP_STATE.robotTrail.length > 1) {
         ctx.beginPath();
+        let prevPt = null;
         MAP_STATE.robotTrail.forEach((pt, idx) => {
             const { px, py } = toStandbyPixel(pt.x, pt.y);
-            if (idx === 0) ctx.moveTo(px, py);
-            else ctx.lineTo(px, py);
+            if (idx === 0 || !prevPt || Math.hypot(pt.x - prevPt.x, pt.y - prevPt.y) > 1.2) {
+                ctx.moveTo(px, py);
+            } else {
+                ctx.lineTo(px, py);
+            }
+            prevPt = pt;
         });
         ctx.strokeStyle = 'rgba(16, 185, 129, 0.65)';
         ctx.lineWidth = 2;

@@ -581,6 +581,9 @@ function renderDelivery() {
                             <button class="btn btn-outline btn-sm" style="padding:4px 9px; font-size:0.7rem;" onclick="openAutoRelocalizeModal()" title="Kalibrasi posisi otomatis dengan memutar robot 360° menggunakan AMCL & LiDAR">
                                 🔄 Relokalisasi (360°)
                             </button>
+                            <button class="btn btn-outline btn-sm" style="padding:4px 9px; font-size:0.7rem;" onclick="clearRobotTrail()" title="Hapus jejak lintasan hijau robot pada peta">
+                                🧹 Reset Jejak
+                            </button>
                         </div>
                     </div>
 
@@ -3370,42 +3373,90 @@ async function sendInitialPoseToRobot(x, y, yaw = 0.0, setAsHome = false) {
         if (setAsHome) {
             APP.homePosition = { x: parseFloat(x) || 0, y: parseFloat(y) || 0, yaw: parseFloat(yaw) || 0 };
         }
+        if (typeof clearRobotTrail === 'function') {
+            clearRobotTrail(false);
+        }
         showToast(res.message || 'Initial Pose dikirim ke AMCL!', 'success');
     } else {
         showToast(res ? res.error : 'Gagal mengirim Initial Pose', 'error');
     }
 }
 
-function openInitialPoseModal() {
-    const curX = (APP.pose && APP.pose.x) ? APP.pose.x.toFixed(2) : '0.0';
-    const curY = (APP.pose && APP.pose.y) ? APP.pose.y.toFixed(2) : '0.0';
-    const curYawDeg = (APP.pose && APP.pose.yaw) ? ((APP.pose.yaw * 180) / Math.PI).toFixed(0) : '0';
+function openInitialPoseModal(initX = null, initY = null, initYawDeg = null) {
+    const curX = (initX !== null && initX !== undefined)
+        ? (typeof initX === 'number' ? initX.toFixed(2) : initX)
+        : ((APP.pose && APP.pose.x != null) ? APP.pose.x.toFixed(2) : '0.00');
+
+    const curY = (initY !== null && initY !== undefined)
+        ? (typeof initY === 'number' ? initY.toFixed(2) : initY)
+        : ((APP.pose && APP.pose.y != null) ? APP.pose.y.toFixed(2) : '0.00');
+
+    const curYawDeg = (initYawDeg !== null && initYawDeg !== undefined)
+        ? Math.round(Number(initYawDeg))
+        : ((APP.pose && APP.pose.yaw != null) ? Math.round((APP.pose.yaw * 180) / Math.PI) : 0);
 
     document.getElementById('modal-title').textContent = '📍 Set Posisi Awal Robot (AMCL /initialpose)';
     document.getElementById('modal-body').innerHTML = `
-        <p style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:10px;">
-            Kirim <strong>2D Pose Estimate</strong> ke topik <code>/initialpose</code> agar AMCL tahu posisi awal robot di peta tanpa perlu membuka RViz2.
+        <p style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:10px; line-height:1.45;">
+            Kirim <strong>2D Pose Estimate</strong> ke topik <code>/initialpose</code> agar AMCL mengetahui koordinat dan arah hadap robot di peta secara presisi.
         </p>
-        <div class="input-row">
-            <div class="input-group">
+
+        <div class="input-row" style="margin-bottom:10px;">
+            <div class="input-group" style="flex:1;">
                 <div class="input-label">Koordinat X (m)</div>
-                <input class="input-field" id="initpose-x" type="number" step="0.1" value="${curX}">
+                <input class="input-field" id="initpose-x" type="number" step="0.05" value="${curX}">
             </div>
-            <div class="input-group">
+            <div class="input-group" style="flex:1;">
                 <div class="input-label">Koordinat Y (m)</div>
-                <input class="input-field" id="initpose-y" type="number" step="0.1" value="${curY}">
-            </div>
-            <div class="input-group">
-                <div class="input-label">Arah Yaw (°)</div>
-                <input class="input-field" id="initpose-yaw-deg" type="number" step="5" value="${curYawDeg}">
+                <input class="input-field" id="initpose-y" type="number" step="0.05" value="${curY}">
             </div>
         </div>
-        <label style="display:flex; align-items:center; gap:8px; font-size:0.76rem; color:var(--text-primary); cursor:pointer; margin-top:4px;">
+
+        <!-- QUICK DIRECTION BUTTONS -->
+        <div style="background:var(--bg-tertiary, rgba(255,255,255,0.02)); border:1px solid var(--border-subtle); border-radius:8px; padding:10px; margin-bottom:10px;">
+            <div style="font-size:0.71rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px;">
+                Pilih Cepat Arah Hadap (Mata Angin):
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px;">
+                <button type="button" class="btn btn-outline btn-sm" onclick="setInitPoseHeading(0)" style="font-size:0.72rem; padding:6px 2px; display:flex; flex-direction:column; align-items:center;">
+                    <span>➡️ Timur</span>
+                    <span class="mono" style="font-size:0.65rem; color:var(--text-muted);">(0°)</span>
+                </button>
+                <button type="button" class="btn btn-outline btn-sm" onclick="setInitPoseHeading(90)" style="font-size:0.72rem; padding:6px 2px; display:flex; flex-direction:column; align-items:center;">
+                    <span>⬆️ Utara</span>
+                    <span class="mono" style="font-size:0.65rem; color:var(--text-muted);">(+90°)</span>
+                </button>
+                <button type="button" class="btn btn-outline btn-sm" onclick="setInitPoseHeading(180)" style="font-size:0.72rem; padding:6px 2px; display:flex; flex-direction:column; align-items:center;">
+                    <span>⬅️ Barat</span>
+                    <span class="mono" style="font-size:0.65rem; color:var(--text-muted);">(180°)</span>
+                </button>
+                <button type="button" class="btn btn-outline btn-sm" onclick="setInitPoseHeading(-90)" style="font-size:0.72rem; padding:6px 2px; display:flex; flex-direction:column; align-items:center;">
+                    <span>⬇️ Selatan</span>
+                    <span class="mono" style="font-size:0.65rem; color:var(--text-muted);">(-90°)</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- FINE YAW SLIDER & NUMBER -->
+        <div class="input-group" style="margin-bottom:12px;">
+            <div class="input-label flex-between">
+                <span>Atur Sudut Yaw Robot (°)</span>
+                <span id="initpose-yaw-preview" class="mono text-accent" style="font-weight:700;">${curYawDeg}°</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <input class="input-field" id="initpose-yaw-slider" type="range" min="-180" max="180" step="5" value="${curYawDeg}"
+                       oninput="onInitPoseYawChange(this.value)" style="flex:1;">
+                <input class="input-field" id="initpose-yaw-num" type="number" step="5" min="-180" max="180" value="${curYawDeg}"
+                       oninput="onInitPoseYawChange(this.value)" style="width:75px; text-align:center;">
+            </div>
+        </div>
+
+        <label style="display:flex; align-items:center; gap:8px; font-size:0.75rem; color:var(--text-primary); cursor:pointer; margin-top:4px;">
             <input type="checkbox" id="initpose-set-home" checked>
             Simpan juga titik ini sebagai posisi <strong>Home / Docking</strong> untuk mode ${APP.mode.toUpperCase()}
         </label>
         <div style="margin-top:12px; padding:9px 12px; background:rgba(255,255,255,0.03); border:1px solid var(--border-subtle); border-radius:6px; font-size:0.72rem; color:var(--text-secondary); display:flex; justify-content:space-between; align-items:center; gap:8px;">
-            <span>Tidak tahu koordinat robot saat ini?</span>
+            <span>Mau kalibrasi otomatis dengan sensor LiDAR?</span>
             <button type="button" class="btn btn-sm btn-outline" style="font-size:0.68rem; padding:3px 8px; white-space:nowrap;" onclick="hideModal(); openAutoRelocalizeModal();">
                 🔄 Relokalisasi Otomatis (360°)
             </button>
@@ -3433,7 +3484,7 @@ function openInitialPoseModal() {
     btnSend.onclick = async () => {
         const x = parseFloat(document.getElementById('initpose-x').value) || 0.0;
         const y = parseFloat(document.getElementById('initpose-y').value) || 0.0;
-        const yawDeg = parseFloat(document.getElementById('initpose-yaw-deg').value) || 0.0;
+        const yawDeg = parseFloat(document.getElementById('initpose-yaw-num')?.value || document.getElementById('initpose-yaw-slider')?.value) || 0.0;
         const setHome = document.getElementById('initpose-set-home').checked;
         hideModal();
         await sendInitialPoseToRobot(x, y, (yawDeg * Math.PI) / 180.0, setHome);
@@ -3445,6 +3496,25 @@ function openInitialPoseModal() {
     document.getElementById('modal-overlay').classList.remove('hidden');
 }
 
+window.setInitPoseHeading = function(deg) {
+    const slider = document.getElementById('initpose-yaw-slider');
+    const num = document.getElementById('initpose-yaw-num');
+    const prev = document.getElementById('initpose-yaw-preview');
+    if (slider) slider.value = deg;
+    if (num) num.value = deg;
+    if (prev) prev.textContent = deg + '°';
+};
+
+window.onInitPoseYawChange = function(val) {
+    const deg = parseFloat(val) || 0;
+    const slider = document.getElementById('initpose-yaw-slider');
+    const num = document.getElementById('initpose-yaw-num');
+    const prev = document.getElementById('initpose-yaw-preview');
+    if (slider && slider.value != deg) slider.value = deg;
+    if (num && num.value != deg) num.value = deg;
+    if (prev) prev.textContent = deg + '°';
+};
+
 let _relocalizePollTimer = null;
 
 function openAutoRelocalizeModal() {
@@ -3455,9 +3525,35 @@ function openAutoRelocalizeModal() {
     document.getElementById('modal-title').textContent = '🔄 Relokalisasi Posisi Robot (AMCL 360°)';
     document.getElementById('modal-body').innerHTML = `
         <p style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:12px; line-height:1.5;">
-            Gunakan fitur ini jika robot diletakkan di sembarang lokasi di dalam ruangan.
-            AMCL akan menyebarkan partikel ke seluruh area peta, lalu robot akan <strong>berputar 360° di tempat</strong> untuk mencocokkan pantulan sensor LiDAR dengan dinding peta.
+            Gunakan fitur ini untuk menyelaraskan kembali posisi dan orientasi AMCL robot dengan dinding menggunakan pantulan sensor LiDAR dengan memutar robot 360°.
         </p>
+
+        <!-- PILIHAN METODE RELOKALISASI -->
+        <div style="background:var(--bg-tertiary, rgba(255,255,255,0.02)); border:1px solid var(--border-subtle); border-radius:8px; padding:10px 12px; margin-bottom:12px;">
+            <div style="font-size:0.71rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px;">
+                Pilih Metode Kalibrasi:
+            </div>
+            <div style="display:flex; flex-direction:column; gap:8px;">
+                <label style="display:flex; align-items:flex-start; gap:8px; padding:8px 10px; background:rgba(16, 185, 129, 0.08); border:1px solid rgba(16, 185, 129, 0.3); border-radius:6px; cursor:pointer;">
+                    <input type="radio" name="relocalize-mode" value="local" checked style="margin-top:2px;">
+                    <div style="font-size:0.74rem;">
+                        <strong style="color:var(--success);">Kalibrasi Halus Posisi Saat Ini (Putar 360°) [Direkomendasikan]</strong>
+                        <div style="color:var(--text-secondary); font-size:0.7rem; margin-top:2px; line-height:1.4;">
+                            Robot memutar 360° untuk mengunci dinding terhadap posisi perkiraan saat ini. <strong>Paling aman untuk koridor & lorong simetris agar hadap robot tidak tertukar 180°</strong>.
+                        </div>
+                    </div>
+                </label>
+                <label style="display:flex; align-items:flex-start; gap:8px; padding:8px 10px; background:rgba(255,255,255,0.02); border:1px solid var(--border-subtle); border-radius:6px; cursor:pointer;">
+                    <input type="radio" name="relocalize-mode" value="global" style="margin-top:2px;">
+                    <div style="font-size:0.74rem;">
+                        <strong>Pencarian Global (Sebar Partikel ke Seluruh Peta)</strong>
+                        <div style="color:var(--text-secondary); font-size:0.7rem; margin-top:2px; line-height:1.4;">
+                            AMCL menyebarkan partikel ke seluruh area peta. Gunakan hanya jika robot benar-benar diletakkan di lokasi yang tidak diketahui sama sekali.
+                        </div>
+                    </div>
+                </label>
+            </div>
+        </div>
 
         <!-- STATUS HARDWARE CEK -->
         <div style="background:var(--bg-tertiary, rgba(255,255,255,0.02)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; padding:10px 14px; margin-bottom:12px;">
@@ -3540,8 +3636,15 @@ async function startAutoRelocalize() {
         progWrap.style.display = 'block';
     }
 
-    showToast('Memulai relokalisasi AMCL...', 'info');
-    const res = await apiPost('/api/relocalize/start', {});
+    const modeEl = document.querySelector('input[name="relocalize-mode"]:checked');
+    const relocMode = modeEl ? modeEl.value : 'local';
+
+    if (typeof clearRobotTrail === 'function') {
+        clearRobotTrail(false);
+    }
+
+    showToast(`Memulai relokalisasi AMCL (${relocMode === 'local' ? 'Kalibrasi Halus' : 'Pencarian Global'})...`, 'info');
+    const res = await apiPost('/api/relocalize/start', { mode: relocMode });
     if (!res || !res.success) {
         showToast(res ? (res.error || res.message) : 'Gagal memulai relokalisasi', 'error');
         if (btnStart) {
