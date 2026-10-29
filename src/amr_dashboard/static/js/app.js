@@ -129,6 +129,9 @@ const APP = {
     arduinoActive: false,
     navActive: false,
     cameraActive: false,
+    humanNodeActive: false,
+    showBbox: (localStorage.getItem('amr_show_bbox') !== 'false'),
+    humanInfo: null,
     poseSource: 'NONE',
     pose: { x: 0, y: 0, yaw: 0 },
     delivery: { status: 'idle', current_phase: 'idle' },
@@ -1424,20 +1427,22 @@ function renderMonitoring() {
                     <!-- Viewport Container -->
                     <div class="viewport-display" id="cockpit-viewport">
                         <!-- View 1: Camera Live -->
-                        <div class="viewport-view active" id="view-camera">
+                        <div class="viewport-view active" id="view-camera" style="position:relative;">
                             <img id="cockpit-cam-img" class="cockpit-cam-img" src="/api/camera/stream" alt="Live Kamera"
                                  onerror="this.style.display='none'; document.getElementById('cockpit-cam-offline').style.display='flex';">
+                            <canvas id="cockpit-cam-canvas" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:2;"></canvas>
                             <div id="cockpit-cam-offline" class="flex-center mono" style="display:none; width:100%; height:100%; color:var(--text-muted); font-size:0.78rem; flex-direction:column; gap:8px;">
                                 ${getIcon('video', 32)}
                                 STREAM KAMERA OFFLINE
                             </div>
-                            <div class="viewport-hud">
+                            <div class="viewport-hud" style="z-index:3;">
                                 <div class="viewport-hud-left">
                                     <span class="hud-badge hud-badge-rec"><span class="rec-dot"></span>CAM_01 // LIVE</span>
                                     <span class="hud-badge hud-badge-human" id="hud-human-badge">AI: AMAN</span>
                                 </div>
                             </div>
-                            <div class="viewport-tools">
+                            <div class="viewport-tools" style="z-index:4;">
+                                <button class="tool-btn" id="cockpit-bbox-toggle-btn" onclick="toggleBboxOverlay()" title="Toggle Bbox HUD" style="color:${APP.showBbox ? 'var(--accent)' : 'var(--text-muted)'};">${getIcon('eye', 15)}</button>
                                 <button class="tool-btn" onclick="captureScreenshot()" title="Ambil Screenshot">${getIcon('camera', 15)}</button>
                             </div>
                         </div>
@@ -1646,7 +1651,7 @@ function renderCamera() {
                     <span>/api/camera/stream</span>
                 </div>
                 <!-- CAMERA CONTROL BAR -->
-                <div class="camera-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:12px; gap:12px;">
+                <div class="camera-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:10px; gap:12px;">
                     <div style="display:flex; align-items:center; gap:10px;">
                         <span id="cam-page-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.cameraActive ? 'var(--success)' : 'var(--text-muted)'}; box-shadow:${APP.cameraActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
                         <div>
@@ -1663,10 +1668,34 @@ function renderCamera() {
                     </button>
                 </div>
 
+                <!-- HUMAN AWARENESS AI CONTROL BAR -->
+                <div class="human-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:12px; gap:12px; flex-wrap:wrap;">
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <span id="human-node-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.humanNodeActive ? 'var(--success)' : 'var(--text-muted)'}; box-shadow:${APP.humanNodeActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
+                        <div>
+                            <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="human-node-status-text">
+                                HUMAN AI NODE: ${APP.humanNodeActive ? '<span style="color:var(--success)">RUNNING</span>' : '<span style="color:var(--text-muted)">STOPPED</span>'}
+                            </div>
+                            <div style="font-size:0.68rem; color:var(--text-muted);" id="human-node-sub-text">
+                                ${APP.humanNodeActive ? 'Deteksi YOLO & estimasi jarak aktif (/human_info)' : 'Tes deteksi manusia mandiri tanpa perlu navigasi'}
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        <button type="button" id="bbox-toggle-btn" class="btn btn-sm ${APP.showBbox ? 'btn-accent' : 'btn-outline'}" onclick="toggleBboxOverlay()" style="font-weight:600; border-radius:6px;">
+                            ${APP.showBbox ? '👁️ Bbox HUD: ON' : '👁️ Bbox HUD: OFF'}
+                        </button>
+                        <button type="button" id="human-node-toggle-btn" class="btn btn-sm ${APP.humanNodeActive ? 'btn-danger' : 'btn-primary'}" onclick="toggleHumanAwareness()" style="min-width:130px; font-weight:600; border-radius:6px;">
+                            ${APP.humanNodeActive ? '🛑 Stop Human AI' : '🚀 Start Human AI'}
+                        </button>
+                    </div>
+                </div>
+
                 <div class="camera-frame">
                     <img id="camera-feed" src="/api/camera/stream" alt="Kamera AMR"
                          onerror="this.style.display='none'; document.getElementById('cam-offline').style.display='flex';">
-                    <div class="camera-overlay">
+                    <canvas id="camera-feed-canvas" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:2;"></canvas>
+                    <div class="camera-overlay" style="z-index:3;">
                         <div class="camera-badge"><span class="rec-dot"></span>CAM_01 // LIVE</div>
                     </div>
                     <div id="cam-offline" class="flex-center mono" style="display:none; min-height:280px; color:var(--text-muted); font-size:0.8rem; flex-direction:column; gap:8px;">
@@ -1752,6 +1781,18 @@ function startCameraPolling() {
             if (data.delivery && typeof handleDeliveryStatusUpdate === 'function') {
                 handleDeliveryStatusUpdate(data.delivery);
             }
+            if (data.hasOwnProperty('human_node_active')) {
+                APP.humanNodeActive = !!data.human_node_active;
+                updateHumanAwarenessUI(APP.humanNodeActive);
+            }
+            if (data.hasOwnProperty('camera_active')) {
+                APP.cameraActive = !!data.camera_active;
+                updateCameraUI(APP.cameraActive);
+            }
+            if (data.human_info) {
+                APP.humanInfo = data.human_info;
+            }
+            drawBboxHUD('camera-feed-canvas', 'camera-feed', APP.humanInfo);
             const camPos = document.getElementById('cam-pos');
             updateCameraReadout(data);
             if (camPos && data.pose) camPos.textContent = `${data.pose.x.toFixed(2)}, ${data.pose.y.toFixed(2)}`;
@@ -2369,7 +2410,7 @@ function renderJoystick() {
                 </div>
 
                 <!-- CAMERA HARDWARE CONTROLLER BAR -->
-                <div class="camera-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:14px; gap:12px;">
+                <div class="camera-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:14px; gap:12px; flex-wrap:wrap;">
                     <div style="display:flex; align-items:center; gap:10px;">
                         <span id="camera-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.cameraActive ? 'var(--success)' : 'var(--text-muted)'}; box-shadow:${APP.cameraActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
                         <div>
@@ -2381,15 +2422,21 @@ function renderJoystick() {
                             </div>
                         </div>
                     </div>
-                    <button type="button" id="camera-toggle-btn" class="btn btn-sm ${APP.cameraActive ? 'btn-danger' : 'btn-success'}" onclick="toggleCamera()" style="min-width:120px; font-weight:600; border-radius:6px;">
-                        ${APP.cameraActive ? '🛑 Stop Kamera' : '📷 Start Kamera'}
-                    </button>
+                    <div style="display:flex; gap:8px;">
+                        <button type="button" id="teleop-bbox-toggle-btn" class="btn btn-sm ${APP.showBbox ? 'btn-accent' : 'btn-outline'}" onclick="toggleBboxOverlay()" style="font-weight:600; border-radius:6px;">
+                            ${APP.showBbox ? '👁️ Bbox HUD: ON' : '👁️ Bbox HUD: OFF'}
+                        </button>
+                        <button type="button" id="camera-toggle-btn" class="btn btn-sm ${APP.cameraActive ? 'btn-danger' : 'btn-success'}" onclick="toggleCamera()" style="min-width:120px; font-weight:600; border-radius:6px;">
+                            ${APP.cameraActive ? '🛑 Stop Kamera' : '📷 Start Kamera'}
+                        </button>
+                    </div>
                 </div>
 
                 <div class="camera-frame">
                     <img id="teleop-cam-img" src="/api/camera/stream" alt="Kamera AMR"
                          onerror="this.style.display='none'; this.nextElementSibling.style.display='none'; this.parentElement.querySelector('.teleop-cam-offline').style.display='flex';">
-                    <div class="camera-overlay">
+                    <canvas id="teleop-cam-canvas" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:2;"></canvas>
+                    <div class="camera-overlay" style="z-index:3;">
                         <div class="camera-badge"><span class="rec-dot"></span>TELEOP_CAM // LIVE</div>
                     </div>
                     <div class="teleop-cam-offline flex-center mono" style="display:none; min-height:240px; color:var(--text-muted); font-size:0.78rem; flex-direction:column; gap:8px;">
@@ -2634,11 +2681,312 @@ function updateCameraUI(active) {
                 }
             }
         });
+    } else {
+        ['camera-feed-canvas', 'teleop-cam-canvas', 'cockpit-cam-canvas'].forEach(id => {
+            const c = document.getElementById(id);
+            if (c) {
+                const ctx = c.getContext('2d');
+                ctx.clearRect(0, 0, c.width, c.height);
+            }
+        });
     }
 }
 
 window.toggleCamera = toggleCamera;
 window.updateCameraUI = updateCameraUI;
+window.toggleArduinoBridge = toggleArduinoBridge;
+window.updateArduinoBridgeUI = updateArduinoBridgeUI;
+
+// ====================== HUMAN AWARENESS AI CONTROLLER ======================
+async function toggleHumanAwareness() {
+    const btns = [
+        document.getElementById('human-node-toggle-btn')
+    ].filter(Boolean);
+
+    btns.forEach(b => {
+        b.disabled = true;
+        b.style.opacity = '0.6';
+    });
+
+    try {
+        if (APP.humanNodeActive) {
+            showToast('Menghentikan Human Awareness AI...', 'info');
+            const res = await apiPost('/api/human/stop', {});
+            if (res && res.success) {
+                APP.humanNodeActive = false;
+                updateHumanAwarenessUI(false);
+                ['camera-feed-canvas', 'teleop-cam-canvas', 'cockpit-cam-canvas'].forEach(id => {
+                    const c = document.getElementById(id);
+                    if (c) {
+                        const ctx = c.getContext('2d');
+                        ctx.clearRect(0, 0, c.width, c.height);
+                    }
+                });
+                showToast('Human Awareness AI dihentikan.', 'warning');
+            } else {
+                showToast(res ? (res.error || res.message) : 'Gagal menghentikan Human AI', 'error');
+            }
+        } else {
+            showToast('Menjalankan Human Awareness AI...', 'info');
+            const res = await apiPost('/api/human/start', {});
+            if (res && res.success) {
+                APP.humanNodeActive = true;
+                APP.cameraActive = true;
+                updateCameraUI(true);
+                updateHumanAwarenessUI(true);
+                showToast('Human Awareness AI aktif! Kamera & YOLO berjalan.', 'success');
+            } else {
+                showToast(res ? (res.error || res.message) : 'Gagal menjalankan Human AI', 'error');
+            }
+        }
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    } finally {
+        btns.forEach(b => {
+            b.disabled = false;
+            b.style.opacity = '1';
+        });
+    }
+}
+
+function updateHumanAwarenessUI(active) {
+    const ind = document.getElementById('human-node-status-indicator');
+    const text = document.getElementById('human-node-status-text');
+    const sub = document.getElementById('human-node-sub-text');
+    const btn = document.getElementById('human-node-toggle-btn');
+
+    if (ind && text && btn) {
+        if (active) {
+            ind.style.background = 'var(--success)';
+            ind.style.boxShadow = '0 0 8px var(--success)';
+            text.innerHTML = 'HUMAN AI NODE: <span style="color:var(--success)">RUNNING</span>';
+            if (sub) sub.textContent = 'Deteksi YOLO & estimasi jarak aktif (/human_info)';
+            btn.className = 'btn btn-sm btn-danger';
+            btn.innerHTML = '🛑 Stop Human AI';
+        } else {
+            ind.style.background = 'var(--text-muted)';
+            ind.style.boxShadow = 'none';
+            text.innerHTML = 'HUMAN AI NODE: <span style="color:var(--text-muted)">STOPPED</span>';
+            if (sub) sub.textContent = 'Tes deteksi manusia mandiri tanpa perlu navigasi';
+            btn.className = 'btn btn-sm btn-primary';
+            btn.innerHTML = '🚀 Start Human AI';
+        }
+    }
+}
+
+function toggleBboxOverlay() {
+    APP.showBbox = !APP.showBbox;
+    localStorage.setItem('amr_show_bbox', APP.showBbox ? 'true' : 'false');
+    updateBboxUI();
+
+    ['camera-feed-canvas', 'teleop-cam-canvas', 'cockpit-cam-canvas'].forEach(id => {
+        const c = document.getElementById(id);
+        if (c) {
+            const ctx = c.getContext('2d');
+            ctx.clearRect(0, 0, c.width, c.height);
+        }
+    });
+
+    if (APP.showBbox && APP.humanInfo) {
+        renderActiveBboxHUD();
+    }
+    showToast(`Bounding Box HUD: ${APP.showBbox ? 'ON (Ditampilkan)' : 'OFF (Disembunyikan)'}`, 'info');
+}
+
+function updateBboxUI() {
+    const mainBtns = [
+        document.getElementById('bbox-toggle-btn'),
+        document.getElementById('teleop-bbox-toggle-btn')
+    ].filter(Boolean);
+
+    mainBtns.forEach(b => {
+        if (APP.showBbox) {
+            b.className = 'btn btn-sm btn-accent';
+            b.innerHTML = '👁️ Bbox HUD: ON';
+        } else {
+            b.className = 'btn btn-sm btn-outline';
+            b.innerHTML = '👁️ Bbox HUD: OFF';
+        }
+    });
+
+    const cockpitBtn = document.getElementById('cockpit-bbox-toggle-btn');
+    if (cockpitBtn) {
+        cockpitBtn.style.color = APP.showBbox ? 'var(--accent)' : 'var(--text-muted)';
+        cockpitBtn.title = APP.showBbox ? 'Bbox HUD: ON (Klik untuk sembunyikan)' : 'Bbox HUD: OFF (Klik untuk tampilkan)';
+    }
+}
+
+function drawBboxHUD(canvasId, imgId, humanInfo) {
+    const canvas = document.getElementById(canvasId);
+    const img = document.getElementById(imgId);
+    if (!canvas || !img) return;
+
+    if (img.style.display === 'none' || img.offsetParent === null) {
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        return;
+    }
+
+    const w = img.clientWidth;
+    const h = img.clientHeight;
+    if (w === 0 || h === 0) return;
+
+    if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+    }
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
+
+    if (!APP.showBbox) return;
+    if (!humanInfo || !humanInfo.boxes || humanInfo.boxes.length === 0) return;
+
+    const fw = humanInfo.frame_width || 640;
+    const fh = humanInfo.frame_height || 480;
+
+    const computedStyle = window.getComputedStyle(img);
+    const fit = computedStyle.objectFit;
+
+    let sx = w / fw;
+    let sy = h / fh;
+    let ox = 0;
+    let oy = 0;
+
+    if (fit === 'cover' || fit === 'contain') {
+        const frameAspect = fw / fh;
+        const elemAspect = w / h;
+        if (fit === 'cover') {
+            if (elemAspect > frameAspect) {
+                const scale = w / fw;
+                sx = scale;
+                sy = scale;
+                oy = (h - fh * scale) / 2;
+            } else {
+                const scale = h / fh;
+                sx = scale;
+                sy = scale;
+                ox = (w - fw * scale) / 2;
+            }
+        } else if (fit === 'contain') {
+            if (elemAspect > frameAspect) {
+                const scale = h / fh;
+                sx = scale;
+                sy = scale;
+                ox = (w - fw * scale) / 2;
+            } else {
+                const scale = w / fw;
+                sx = scale;
+                sy = scale;
+                oy = (h - fh * scale) / 2;
+            }
+        }
+    }
+
+    humanInfo.boxes.forEach(box => {
+        const bx = ox + box.x1 * sx;
+        const by = oy + box.y1 * sy;
+        const bw = (box.x2 - box.x1) * sx;
+        const bh = (box.y2 - box.y1) * sy;
+
+        let strokeColor = '#3b82f6';
+        let fillColor = 'rgba(59, 130, 246, 0.15)';
+        let tagColor = '#3b82f6';
+
+        if (box.is_target) {
+            if (box.zone === 'NEAR') {
+                strokeColor = '#ef4444';
+                fillColor = 'rgba(239, 68, 68, 0.22)';
+                tagColor = '#ef4444';
+            } else if (box.zone === 'MEDIUM') {
+                strokeColor = '#f59e0b';
+                fillColor = 'rgba(245, 158, 11, 0.20)';
+                tagColor = '#f59e0b';
+            } else {
+                strokeColor = '#10b981';
+                fillColor = 'rgba(16, 185, 129, 0.16)';
+                tagColor = '#10b981';
+            }
+        }
+
+        // Kotak Bounding Box
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = box.is_target ? 2.5 : 1.5;
+        ctx.strokeRect(bx, by, bw, bh);
+
+        // Tech HUD Corner Brackets
+        const cornerLen = Math.max(6, Math.min(14, bw / 3, bh / 3));
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        // Top-left
+        ctx.beginPath();
+        ctx.moveTo(bx, by + cornerLen);
+        ctx.lineTo(bx, by);
+        ctx.lineTo(bx + cornerLen, by);
+        ctx.stroke();
+        // Top-right
+        ctx.beginPath();
+        ctx.moveTo(bx + bw - cornerLen, by);
+        ctx.lineTo(bx + bw, by);
+        ctx.lineTo(bx + bw, by + cornerLen);
+        ctx.stroke();
+        // Bottom-left
+        ctx.beginPath();
+        ctx.moveTo(bx, by + bh - cornerLen);
+        ctx.lineTo(bx, by + bh);
+        ctx.lineTo(bx + cornerLen, by + bh);
+        ctx.stroke();
+        // Bottom-right
+        ctx.beginPath();
+        ctx.moveTo(bx + bw - cornerLen, by + bh);
+        ctx.lineTo(bx + bw, by + bh);
+        ctx.lineTo(bx + bw, by + bh - cornerLen);
+        ctx.stroke();
+
+        // Area Fill transparan
+        ctx.fillStyle = fillColor;
+        ctx.fillRect(bx, by, bw, bh);
+
+        // HUD Text Label
+        let label = `HUMAN ${(box.conf * 100).toFixed(0)}%`;
+        if (box.dist !== null && box.dist !== undefined) {
+            label += ` · ${box.dist.toFixed(2)}m`;
+        }
+        if (box.zone && box.zone !== 'NONE') {
+            label += ` [${box.zone}]`;
+        }
+
+        ctx.font = 'bold 11px Inter, system-ui, sans-serif';
+        const textWidth = ctx.measureText(label).width;
+        const tagH = 18;
+        const tagW = textWidth + 10;
+        const tagY = Math.max(0, by - tagH);
+
+        ctx.fillStyle = tagColor;
+        ctx.fillRect(bx, tagY, tagW, tagH);
+
+        ctx.fillStyle = '#ffffff';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, bx + 5, tagY + tagH / 2);
+    });
+}
+
+function renderActiveBboxHUD() {
+    if (APP.currentPage === 'camera') {
+        drawBboxHUD('camera-feed-canvas', 'camera-feed', APP.humanInfo);
+    } else if (APP.currentPage === 'joystick') {
+        drawBboxHUD('teleop-cam-canvas', 'teleop-cam-img', APP.humanInfo);
+    } else if (APP.currentPage === 'delivery') {
+        drawBboxHUD('cockpit-cam-canvas', 'cockpit-cam-img', APP.humanInfo);
+    }
+}
+
+window.toggleHumanAwareness = toggleHumanAwareness;
+window.updateHumanAwarenessUI = updateHumanAwarenessUI;
+window.toggleBboxOverlay = toggleBboxOverlay;
+window.updateBboxUI = updateBboxUI;
+window.drawBboxHUD = drawBboxHUD;
+window.renderActiveBboxHUD = renderActiveBboxHUD;
 
 async function emergencyStop() {
     if (typeof cancelAutoRelocalize === 'function') {
@@ -3542,6 +3890,20 @@ async function globalStatusPoll() {
             updateCameraUI(APP.cameraActive);
         }
 
+        if (data.hasOwnProperty('human_node_active')) {
+            APP.humanNodeActive = !!data.human_node_active;
+            updateHumanAwarenessUI(APP.humanNodeActive);
+        }
+
+        if (data.human_info) {
+            APP.humanInfo = data.human_info;
+        }
+
+        if (APP.currentPage === 'camera') {
+            updateCameraReadout(data);
+        }
+        renderActiveBboxHUD();
+
         if (typeof handleDeliveryStatusUpdate === 'function') {
             handleDeliveryStatusUpdate(APP.delivery);
         }
@@ -4022,10 +4384,10 @@ async function init() {
     globalStatusPoll();
     APP._lastPollTime = 0;
     setInterval(() => {
-        const isMapPage = ['delivery', 'monitoring', 'mapping', 'joystick'].includes(APP.currentPage);
+        const isMapPage = ['delivery', 'monitoring', 'mapping', 'joystick', 'camera'].includes(APP.currentPage);
         const isRunning = APP.delivery && APP.delivery.status === 'running';
         const now = Date.now();
-        // 250ms saat di halaman peta atau navigasi sedang berjalan, 1000ms saat di halaman lain
+        // 250ms saat di halaman peta, teleop, kamera, atau navigasi berjalan, 1000ms saat di halaman lain
         const interval = (isMapPage || isRunning) ? 250 : 1000;
         if (now - APP._lastPollTime >= interval) {
             APP._lastPollTime = now;

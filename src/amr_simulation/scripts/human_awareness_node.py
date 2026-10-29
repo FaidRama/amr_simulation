@@ -972,10 +972,27 @@ def main():
                 else 0.9 * fps_ema + 0.1 * inst_fps
             )
 
-            # 7b. PUBLISH HASIL SEBAGAI TEKS (untuk keterangan dashboard)
+            # 7b. PUBLISH HASIL SEBAGAI TEKS (untuk keterangan dashboard & canvas overlay)
+            boxes_data = []
+            for p in persons:
+                is_tgt = bool(target is not None and p is target)
+                boxes_data.append({
+                    "x1": round(float(p["x1"]), 1),
+                    "y1": round(float(p["y1"]), 1),
+                    "x2": round(float(p["x2"]), 1),
+                    "y2": round(float(p["y2"]), 1),
+                    "conf": round(float(p["conf"]), 2),
+                    "is_target": is_tgt,
+                    "dist": round(float(dist_smooth), 2) if (is_tgt and dist_smooth is not None) else None,
+                    "zone": zone.value if is_tgt else "NONE"
+                })
+
             info = {
                 "stamp": round(time.time(), 3),
                 "frame": frame_count,
+                "frame_width": width,
+                "frame_height": height,
+                "boxes": boxes_data,
                 "state": state.value,
                 "zone": zone.value,
                 "response": STATE_RESPONSE.get(state, ""),
