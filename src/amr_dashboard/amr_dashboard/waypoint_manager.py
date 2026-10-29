@@ -395,8 +395,13 @@ class WaypointManager(Node):
             self.get_logger().info('AMR telah kembali ke titik awal setelah pembatalan misi.')
             
         elif self.auto_return_home:
+            completed_cnt = self.mission.get('completed_tasks', 0) if self.mission else 0
+            total_cnt = len(tasks)
             self.get_logger().info('='*50)
-            self.get_logger().info(' SEMUA TASK SELESAI: AMR kembali ke titik awal (home)...')
+            if completed_cnt < total_cnt:
+                self.get_logger().warn(f' TASK SELESAI/TERKENDALA ({completed_cnt}/{total_cnt} sukses): Mengarahkan AMR kembali ke titik awal (home)...')
+            else:
+                self.get_logger().info(f' SEMUA TASK SELESAI ({completed_cnt}/{total_cnt}): AMR kembali ke titik awal (home)...')
             self.get_logger().info('='*50)
             if self.mission:
                 self.mission['status'] = 'running'

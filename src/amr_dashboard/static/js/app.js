@@ -621,6 +621,23 @@ function renderDelivery() {
                         </div>
                     </div>
                 </div>
+
+                <!-- 05 // PANTAUAN TERMINAL & STATUS NAVIGASI -->
+                <div class="page-section" id="dispatch-terminal-section">
+                    <div class="section-title">
+                        <span>05 // PANTAUAN TERMINAL &amp; STATUS NAVIGASI</span>
+                        <span class="mono" id="dispatch-nav-status" style="font-size:0.7rem; color:var(--text-muted);">${APP.navActive ? 'NAV2 ONLINE' : 'NAV2 STANDBY'}</span>
+                    </div>
+                    <div class="panel" style="padding:10px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; font-size:0.72rem; flex-wrap:wrap; gap:4px;">
+                            <span class="mono" id="dispatch-phase-indicator" style="color:var(--accent-bright); font-weight:600;">STATUS: MENUNGGU TASK</span>
+                            <div style="display:flex; gap:6px;">
+                                <button type="button" class="btn btn-outline btn-sm" style="padding:2px 8px; font-size:0.68rem;" onclick="clearDispatchLogs()" title="Bersihkan log di tampilan">Bersihkan</button>
+                            </div>
+                        </div>
+                        <pre id="dispatch-log-box" class="mono" style="margin:0; max-height:170px; overflow-y:auto; font-size:0.70rem; line-height:1.45; color:var(--text-secondary); background:rgba(9,13,20,0.85); padding:10px; border-radius:6px; border:1px solid var(--border-subtle); white-space:pre-wrap;">Menunggu log proses navigasi...</pre>
+                    </div>
+                </div>
             </div>
 
             <!-- RIGHT COLUMN: Task Builder & Queue -->
@@ -1372,14 +1389,71 @@ async function confirmAction(command) {
     }
 }
 
+function updateDispatchLogs(data) {
+    if (!data) return;
+    const logBox = document.getElementById('dispatch-log-box');
+    const phaseEl = document.getElementById('dispatch-phase-indicator');
+    const navStatusEl = document.getElementById('dispatch-nav-status');
+
+    if (navStatusEl) {
+        navStatusEl.textContent = data.nav_active ? 'NAV2 ONLINE (ACTIVE)' : 'NAV2 STANDBY';
+        navStatusEl.style.color = data.nav_active ? 'var(--success)' : 'var(--text-muted)';
+    }
+
+    if (phaseEl && data.delivery) {
+        const d = data.delivery;
+        const phase = d.current_phase || 'idle';
+        const taskIdx = (d.current_task_index || 0) + 1;
+        const total = d.total_tasks || 1;
+        const phaseLabels = {
+            idle: 'STATUS: IDLE (Siap Menerima Misi)',
+            navigating_pickup: `STATUS: [TASK ${taskIdx}/${total}] Menuju Titik Pickup...`,
+            waiting_pickup: `STATUS: [TASK ${taskIdx}/${total}] Sampai di Pickup (Menunggu Muat)`,
+            navigating_delivery: `STATUS: [TASK ${taskIdx}/${total}] Menuju Titik Delivery...`,
+            waiting_delivery: `STATUS: [TASK ${taskIdx}/${total}] Sampai di Delivery (Menunggu Ambil)`,
+            returning_home: 'STATUS: Kembali ke Titik Awal (Home)...',
+            completed: 'STATUS: Misi Selesai!',
+            cancelled: 'STATUS: Misi Dibatalkan'
+        };
+        phaseEl.textContent = phaseLabels[phase] || `STATUS: ${phase.toUpperCase()}`;
+        if (phase.includes('navigating') || phase === 'returning_home') {
+            phaseEl.style.color = 'var(--accent-bright)';
+        } else if (phase.includes('waiting')) {
+            phaseEl.style.color = 'var(--warning)';
+        } else if (phase === 'completed') {
+            phaseEl.style.color = 'var(--success)';
+        } else {
+            phaseEl.style.color = 'var(--text-muted)';
+        }
+    }
+
+    if (logBox && data.nav_logs && data.nav_logs.length > 0) {
+        const shouldScroll = (logBox.scrollTop + logBox.clientHeight) >= (logBox.scrollHeight - 35);
+        logBox.textContent = data.nav_logs.join('\n');
+        if (shouldScroll) {
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+    }
+}
+
+function clearDispatchLogs() {
+    const logBox = document.getElementById('dispatch-log-box');
+    if (logBox) logBox.textContent = 'Log tampilan dibersihkan oleh pengguna.';
+}
+window.clearDispatchLogs = clearDispatchLogs;
+window.updateDispatchLogs = updateDispatchLogs;
+
 function startDeliveryPolling() {
-    APP.statusPollTimer = setInterval(async () => {
+    const pollFn = async () => {
         const data = await apiGet('/api/status');
         if (data) {
             APP.delivery = data.delivery || APP.delivery;
             updateMissionUI();
+            updateDispatchLogs(data);
         }
-    }, 1000);
+    };
+    pollFn();
+    APP.statusPollTimer = setInterval(pollFn, 1000);
 }
 
 window.onBannerClick = onBannerClick;

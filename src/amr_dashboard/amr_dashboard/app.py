@@ -612,7 +612,29 @@ class DashboardNode(Node):
             with self.lock:
                 self.last_status_time = time.time()
                 if data.get('mission'):
+                    prev_phase = getattr(self, '_last_logged_phase', None)
+                    prev_task_idx = getattr(self, '_last_logged_task_idx', None)
+
                     self.delivery_status = data['mission']
+                    cur_phase = data['mission'].get('current_phase')
+                    cur_task_idx = data['mission'].get('current_task_index', 0)
+                    total_tasks = data['mission'].get('total_tasks', 1)
+
+                    if cur_phase != prev_phase or cur_task_idx != prev_task_idx:
+                        self._last_logged_phase = cur_phase
+                        self._last_logged_task_idx = cur_task_idx
+                        phase_names = {
+                            'navigating_pickup': f'Menuju titik Pickup (Task {cur_task_idx+1}/{total_tasks})',
+                            'waiting_pickup': f'Sampai di titik Pickup! Menunggu barang dimuat...',
+                            'navigating_delivery': f'Menuju titik Delivery (Task {cur_task_idx+1}/{total_tasks})',
+                            'waiting_delivery': f'Sampai di titik Delivery! Menunggu barang diambil...',
+                            'returning_home': 'Mengarahkan AMR kembali ke titik awal (Home)...',
+                            'completed': 'Misi Pengantaran SELESAI.',
+                            'cancelled': 'Misi Pengantaran DIBATALKAN.'
+                        }
+                        desc = phase_names.get(cur_phase, f'Fase: {cur_phase}')
+                        _append_navigation_log(f'📦 [WAYPOINT] {desc}')
+
                     # Simpan ke history jika misi selesai (hanya sekali per misi)
                     mission_id = data['mission'].get('mission_id', '')
                     if (data['mission']['status'] in ('completed', 'cancelled')
@@ -1774,6 +1796,7 @@ def api_status():
             'map_file': ACTIVE_MAP_FILE,
             'has_live_map': ros_node.live_map_png is not None,
             'nav_path': getattr(ros_node, 'nav_path', []),
+            'nav_logs': list(NAVIGATION_LOGS[-50:]),
             'arduino_active': is_arduino_active(),
             'nav_active': is_navigation_active(),
             'camera_active': is_camera_active(),
@@ -1894,6 +1917,7 @@ def api_initialpose():
     set_as_home = bool(data.get('set_as_home', False))
 
     ros_node.send_initial_pose(x, y, yaw)
+    _append_navigation_log(f'📍 [AMCL] Initial Pose dikirim: X={x:.2f}m, Y={y:.2f}m, Yaw={math.degrees(yaw):.1f}°{" (disimpan sebagai Home)" if set_as_home else ""}')
 
     if set_as_home:
         home_obj = {'x': round(x, 3), 'y': round(y, 3), 'yaw': round(yaw, 3)}
@@ -1997,6 +2021,11 @@ def api_delivery_start():
         return jsonify({'error': 'Daftar task kosong'}), 400
     
     ros_node.send_delivery_tasks(tasks)
+    _append_navigation_log(f'🚀 [DISPATCH] Memulai eksekusi misi ({len(tasks)} task dikirim ke waypoint_manager).')
+    for idx, t in enumerate(tasks):
+        pk = t.get('pickup', {})
+        dl = t.get('delivery', {})
+        _append_navigation_log(f'   - Task {idx+1}: [{pk.get("name","Pickup")}] ({pk.get("x",0):.2f}, {pk.get("y",0):.2f}) → [{dl.get("name","Delivery")}] ({dl.get("x",0):.2f}, {dl.get("y",0):.2f})')
     return jsonify({'message': f'Misi dikirim: {len(tasks)} task', 'success': True})
 
 
@@ -2013,6 +2042,7 @@ def api_delivery_control():
         return jsonify({'error': f'Perintah tidak valid: {command}'}), 400
     
     ros_node.send_control(command)
+    _append_navigation_log(f'🎮 [DISPATCH] Perintah operator: {command.upper()}')
     return jsonify({'message': f'Perintah [{command}] terkirim', 'success': True})
 
 
