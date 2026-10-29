@@ -16,44 +16,21 @@ planner_server:
   ros__parameters:
     expected_planner_frequency: 20.0
     use_sim_time: False
-    planner_plugins: ["GridBased"]
+    planner_plugins: ["AStar", "Dijkstra"]
 
-    # -------------------------------------------------------------------------
-    # 1. PLUGIN PLANNER UTAMA (NavfnPlanner - Algoritma A* & Dijkstra)
-    # -------------------------------------------------------------------------
-    GridBased:
+    # 1. Plugin Algoritma A* (Heuristic Euclidean Search)
+    AStar:
       plugin: "nav2_navfn_planner/NavfnPlanner"
-
-      # [PARAMETER 1: ALGORITMA]
-      # true  : Menggunakan Algoritma A* (Heuristic Euclidean). Pencarian terarah ke goal,
-      #         jauh lebih cepat dan hemat komputasi.
-      # false : Menggunakan Algoritma Dijkstra. Mengeksplorasi seluruh grid secara merata
-      #         (bisa dicoba untuk membandingkan kecepatan waktu komputasi A* vs Dijkstra).
       use_astar: true
-
-      # [PARAMETER 2: TOLERANSI GOAL (meter)]
-      # Toleransi jarak maksimum dari titik goal yang dipilih.
-      # Jika titik goal yang kamu klik di RViz berada tepat di dalam tembok/rintangan,
-      # planner akan mencari titik bebas terdekat dalam radius toleransi ini.
-      # Semakin besar nilainya, planner semakin fleksibel menemukan titik pengganti.
       tolerance: 0.5
-
-      # [PARAMETER 3: PENELUSURAN AREA TIDAK DIKETAHUI]
-      # true  : Mengizinkan A* membuat jalur melewati area abu-abu (unknown space).
-      # false : A* HANYA boleh lewat area putih (free space yang sudah pasti aman).
       allow_unknown: true
 
-    # -------------------------------------------------------------------------
-    # ALTERNATIF: SmacPlanner2D (A* Modern dengan Cost Penalty & Path Smoothing)
-    # Jika suatu saat ingin membandingkan Navfn dengan SmacPlanner2D,
-    # ganti baris plugin di atas menjadi:
-    #   plugin: "smac_planner/SmacPlanner2D"
-    #   tolerance: 0.5
-    #   allow_unknown: true
-    #   cost_penalty: 2.0             # Bobot penalti untuk area dekat rintangan
-    #   smooth_path: true             # Otomatis menghaluskan belokan rute A*
-    #   motion_model_for_search: "MOORE" # 8-connected grid (bisa diagonal 8 arah)
-    # -------------------------------------------------------------------------
+    # 2. Plugin Algoritma Dijkstra (Uniform Cost Search - Baseline)
+    Dijkstra:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      use_astar: false
+      tolerance: 0.5
+      allow_unknown: true
 
 planner_server_rclcpp_node:
   ros__parameters:
@@ -70,13 +47,11 @@ global_costmap:
       update_frequency: 5.0
       publish_frequency: 2.0
       global_frame: map
-      robot_base_frame: base_footprint
+      robot_base_frame: base_link
       use_sim_time: False
 
-      # [PARAMETER 4: UKURAN FISIK ROBOT (meter)]
-      # Jari-jari lingkaran pengaman robot Delivery_AMR.
-      # Titik yang berada dalam jarak ini dari rintangan akan dianggap TERLARANG (Lethal Obstacle).
-      robot_radius: 0.28
+      # Sesuai Variabel Terkendali Bab 4: Radius 0.29m, Resolusi 0.05m, Inflasi 0.55m
+      robot_radius: 0.29
       resolution: 0.05
       track_unknown_space: true
 

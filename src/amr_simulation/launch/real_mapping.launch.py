@@ -2,7 +2,7 @@ import os
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition, UnlessCondition
@@ -75,12 +75,14 @@ def generate_launch_description():
     tf_base_to_laser = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
+        name='tf_base_to_laser',
         arguments=['0', '0', '0', '3.14159', '0', '0', 'base_link', 'laser']
     )
 
     tf_base_to_footprint = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
+        name='tf_base_to_footprint',
         arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
     )
 
@@ -144,6 +146,12 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('rviz'))
     )
 
+    # 4 & 5. Otak SLAM Toolbox dan RViz2 dijalankan setelah sensor & odometry stabil (delay 4.0 detik)
+    delayed_slam_and_rviz = TimerAction(
+        period=4.0,
+        actions=[start_slam_toolbox, start_rviz2]
+    )
+
     return LaunchDescription([
         use_arduino_arg,
         camera_arg,
@@ -156,6 +164,5 @@ def generate_launch_description():
         tf_base_to_laser,
         tf_base_to_footprint,
         tf_base_to_camera,
-        start_slam_toolbox,
-        start_rviz2
+        delayed_slam_and_rviz
     ])

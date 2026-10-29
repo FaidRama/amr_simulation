@@ -221,7 +221,7 @@ class AstarBenchmarkNode(Node):
         print("=" * 65 + "\n", flush=True)
 
     def timer_callback(self):
-        """Broadcast TF dari map -> odom -> base_footprint secara kontinu."""
+        """Broadcast TF dari map -> odom -> base_link secara kontinu."""
         now = self.get_clock().now().to_msg()
 
         if self.publish_tf:
@@ -235,11 +235,11 @@ class AstarBenchmarkNode(Node):
             t_map_odom.transform.translation.z = 0.0
             t_map_odom.transform.rotation.w = 1.0
 
-            # 2. Transform: odom -> base_footprint
+            # 2. Transform: odom -> base_link
             t_odom_base = TransformStamped()
             t_odom_base.header.stamp = now
             t_odom_base.header.frame_id = 'odom'
-            t_odom_base.child_frame_id = 'base_footprint'
+            t_odom_base.child_frame_id = 'base_link'
             t_odom_base.transform.translation.x = self.start_x
             t_odom_base.transform.translation.y = self.start_y
             t_odom_base.transform.translation.z = 0.0

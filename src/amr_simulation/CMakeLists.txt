@@ -44,6 +44,7 @@ install(PROGRAMS
   scripts/benchmark_skripsi.py
   scripts/ukur_peta_skripsi.py
   scripts/uji_amcl_skripsi.py
+  scripts/benchmark_astar_vs_dijkstra.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
