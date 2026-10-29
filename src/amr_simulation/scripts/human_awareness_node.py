@@ -515,7 +515,7 @@ def main():
     parser.add_argument("--conf", type=float, default=0.5)
     parser.add_argument(
         "--corridor-width", type=float, default=0.30,
-        help="Lebar koridor tengah sebagai proporsi lebar frame (0.1-1.0); default 0.50"
+        help="Lebar koridor tengah sebagai proporsi lebar frame (0.1-1.0); default 0.30"
     )
 
     parser.add_argument(
@@ -920,10 +920,28 @@ def main():
                 target["dist"] = dist_smooth
 
             # 5. PROXIMITY CLASSIFICATION AND FSM
-            zone = classifier.update(
-                active_ratio,
-                force_near=force_near
+            # SAFE_STOP berlaku di mana pun: cek semua manusia untuk zona NEAR.
+            # REDUCED_SPEED hanya boleh dipicu target yang masuk koridor.
+            near_person_outside_or_inside = any(
+                person["r"] >= args.t_near_enter
+                for person in persons
             )
+
+            if near_person_outside_or_inside or force_near:
+                zone = classifier.update(
+                    active_ratio,
+                    force_near=True
+                )
+            elif target is None:
+                # Tidak ada manusia di koridor dan tidak ada manusia NEAR.
+                # Jangan biarkan MEDIUM lama bertahan hanya karena hysteresis.
+                zone = Zone.FAR
+            else:
+                # Target ada di koridor: zona FAR/MEDIUM/NEAR normal dari classifier.
+                zone = classifier.update(
+                    active_ratio,
+                    force_near=False
+                )
 
             state = fsm.update(zone)
 
