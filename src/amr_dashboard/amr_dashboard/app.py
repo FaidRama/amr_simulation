@@ -902,19 +902,74 @@ def _read_mapping_stdout(proc):
         pass
 
 
+# =====================================================================
+# ASYNC RUNTIME PROCESS STATE CACHE (ZERO-LATENCY FOR TELEOP)
+# =====================================================================
+RUNTIME_CACHE = {
+    'slam_active': False,
+    'arduino_active': False,
+    'nav_active': False,
+    'last_updated': 0
+}
+
+def _update_process_states_loop():
+    """Background loop setiap 2.0s untuk cek proses di OS tanpa memblokir HTTP teleop."""
+    while True:
+        try:
+            # 1. Cek SLAM Mapping
+            slam_act = False
+            with MAPPING_LOCK:
+                if MAPPING_PROC is not None and MAPPING_PROC.poll() is None:
+                    slam_act = True
+            if not slam_act:
+                try:
+                    res = subprocess.run(['pgrep', '-f', '(async_slam_toolbox_node|real_mapping\\.launch\\.py)'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                    slam_act = (res.returncode == 0 and bool(res.stdout.strip()))
+                except Exception:
+                    pass
+
+            # 2. Cek Arduino Bridge
+            ard_act = False
+            with ARDUINO_LOCK:
+                if ARDUINO_PROC is not None and ARDUINO_PROC.poll() is None:
+                    ard_act = True
+            if not ard_act:
+                try:
+                    res = subprocess.run(['pgrep', '-f', 'arduino_bridge'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                    ard_act = (res.returncode == 0 and bool(res.stdout.strip()))
+                except Exception:
+                    pass
+
+            # 3. Cek Navigation (Nav2)
+            nav_act = False
+            with NAVIGATION_LOCK:
+                if NAVIGATION_PROC is not None and NAVIGATION_PROC.poll() is None:
+                    nav_act = True
+            if not nav_act:
+                try:
+                    res = subprocess.run(['pgrep', '-f', '(real_navigation\\.launch\\.py|bt_navigator)'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                    nav_act = (res.returncode == 0 and bool(res.stdout.strip()))
+                except Exception:
+                    pass
+
+            RUNTIME_CACHE['slam_active'] = slam_act
+            RUNTIME_CACHE['arduino_active'] = ard_act
+            RUNTIME_CACHE['nav_active'] = nav_act
+            RUNTIME_CACHE['last_updated'] = time.time()
+        except Exception:
+            pass
+        time.sleep(2.0)
+
+_proc_cache_thread = threading.Thread(target=_update_process_states_loop, daemon=True)
+_proc_cache_thread.start()
+
+
 def is_slam_active():
-    """Cek apakah SLAM Mapping sedang berjalan (baik via dashboard maupun terminal)."""
+    """Cek apakah SLAM Mapping sedang berjalan (instant O(1))."""
     with MAPPING_LOCK:
         if MAPPING_PROC is not None and MAPPING_PROC.poll() is None:
             return True
-    if ros_node is not None:
-        try:
-            names = [n.lower() for n in ros_node.get_node_names()]
-            if any('slam_toolbox' in n for n in names):
-                return True
-        except Exception:
-            pass
-    return False
+    return bool(RUNTIME_CACHE.get('slam_active', False))
 
 
 def stop_slam_process():
@@ -932,7 +987,6 @@ def stop_slam_process():
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except Exception:
                 pass
-    # Pastikan node SLAM/LiDAR/Arduino dari sesi mapping berhenti tanpa mematikan dashboard
     subprocess.run(
         ['pkill', '-f', '(real_mapping\\.launch\\.py|async_slam_toolbox_node|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py)'],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
@@ -948,24 +1002,11 @@ ARDUINO_LOCK = threading.Lock()
 
 
 def is_arduino_active():
-    """Cek apakah Arduino Bridge sedang berjalan (via dashboard, launch file, atau terminal)."""
+    """Cek apakah Arduino Bridge sedang berjalan (instant O(1))."""
     with ARDUINO_LOCK:
         if ARDUINO_PROC is not None and ARDUINO_PROC.poll() is None:
             return True
-    if ros_node is not None:
-        try:
-            names = [n.lower() for n in ros_node.get_node_names()]
-            if any('arduino_bridge' in n for n in names):
-                return True
-        except Exception:
-            pass
-    try:
-        res = subprocess.run(['pgrep', '-f', 'arduino_bridge'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        if res.returncode == 0 and res.stdout.strip():
-            return True
-    except Exception:
-        pass
-    return False
+    return bool(RUNTIME_CACHE.get('arduino_active', False))
 
 
 def stop_arduino_process():
@@ -1018,24 +1059,11 @@ def _read_navigation_stdout(proc):
 
 
 def is_navigation_active():
-    """Cek apakah Nav2 / Real Navigation sedang berjalan (via dashboard, terminal, dll)."""
+    """Cek apakah Nav2 / Real Navigation sedang berjalan (instant O(1))."""
     with NAVIGATION_LOCK:
         if NAVIGATION_PROC is not None and NAVIGATION_PROC.poll() is None:
             return True
-    if ros_node is not None:
-        try:
-            names = [n.lower() for n in ros_node.get_node_names()]
-            if any(k in names for k in ['bt_navigator', 'controller_server', 'planner_server', 'amcl']):
-                return True
-        except Exception:
-            pass
-    try:
-        res = subprocess.run(['pgrep', '-f', '(real_navigation\\.launch\\.py|bt_navigator)'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        if res.returncode == 0 and res.stdout.strip():
-            return True
-    except Exception:
-        pass
-    return False
+    return bool(RUNTIME_CACHE.get('nav_active', False))
 
 
 def stop_navigation_process():

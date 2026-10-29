@@ -189,7 +189,7 @@ function initJoystick() {
         const angular = Math.round(-normalX * maxAngular * 100) / 100;
 
         const now = Date.now();
-        if (!force && linear === lastSentLinear && angular === lastSentAngular && (now - lastSentTime < 250)) {
+        if (!force && linear === lastSentLinear && angular === lastSentAngular && (now - lastSentTime < 140)) {
             return;
         }
 
