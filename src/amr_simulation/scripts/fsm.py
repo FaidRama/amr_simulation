@@ -35,8 +35,8 @@ _SEVERITY = {
 
 
 class ProximityClassifier:
-    def __init__(self, t_near_enter=0.75, t_near_exit=0.65,
-                 t_med_enter=0.45, t_med_exit=0.38,
+    def __init__(self, t_near_enter=0.75, t_near_exit=0.70,
+                 t_med_enter=0.55, t_med_exit=0.45,
                  miss_tolerance: int = 3):
         if not (t_near_enter > t_near_exit):
             raise ValueError("t_near_enter harus lebih besar dari t_near_exit")
