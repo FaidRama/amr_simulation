@@ -128,6 +128,7 @@ const APP = {
     mappingActive: false,
     arduinoActive: false,
     navActive: false,
+    cameraActive: false,
     poseSource: 'NONE',
     pose: { x: 0, y: 0, yaw: 0 },
     delivery: { status: 'idle', current_phase: 'idle' },
@@ -1641,6 +1642,24 @@ function renderCamera() {
                     <span>01 // OPTICAL CAMERA FEED</span>
                     <span>/api/camera/stream</span>
                 </div>
+                <!-- CAMERA CONTROL BAR -->
+                <div class="camera-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:12px; gap:12px;">
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <span id="cam-page-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.cameraActive ? 'var(--success)' : 'var(--text-muted)'}; box-shadow:${APP.cameraActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
+                        <div>
+                            <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="cam-page-status-text">
+                                USB CAMERA: ${APP.cameraActive ? '<span style="color:var(--success)">ONLINE</span>' : '<span style="color:var(--text-muted)">OFFLINE</span>'}
+                            </div>
+                            <div style="font-size:0.68rem; color:var(--text-muted);" id="cam-page-sub-text">
+                                ${APP.cameraActive ? 'Hardware kamera & publisher terhubung' : 'Hardware kamera standby'}
+                            </div>
+                        </div>
+                    </div>
+                    <button type="button" id="cam-page-toggle-btn" class="btn btn-sm ${APP.cameraActive ? 'btn-danger' : 'btn-success'}" onclick="toggleCamera()" style="min-width:120px; font-weight:600; border-radius:6px;">
+                        ${APP.cameraActive ? '🛑 Stop Kamera' : '📷 Start Kamera'}
+                    </button>
+                </div>
+
                 <div class="camera-frame">
                     <img id="camera-feed" src="/api/camera/stream" alt="Kamera AMR"
                          onerror="this.style.display='none'; document.getElementById('cam-offline').style.display='flex';">
@@ -2343,10 +2362,29 @@ function renderJoystick() {
             <div class="page-section">
                 <div class="section-title">
                     <span>01 // FORWARD OPTICAL STREAM</span>
-                    <span>LIVE TELEOP VIEW</span>
+                    <span id="teleop-cam-status-label">${APP.cameraActive ? 'LIVE TELEOP VIEW' : 'CAMERA OFFLINE'}</span>
                 </div>
+
+                <!-- CAMERA HARDWARE CONTROLLER BAR -->
+                <div class="camera-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:14px; gap:12px;">
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <span id="camera-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.cameraActive ? 'var(--success)' : 'var(--text-muted)'}; box-shadow:${APP.cameraActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
+                        <div>
+                            <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="camera-status-text">
+                                USB CAMERA: ${APP.cameraActive ? '<span style="color:var(--success)">ONLINE</span>' : '<span style="color:var(--text-muted)">OFFLINE</span>'}
+                            </div>
+                            <div style="font-size:0.68rem; color:var(--text-muted);" id="camera-sub-text">
+                                ${APP.cameraActive ? 'Stream /camera/image_raw/compressed aktif' : 'Nyalakan kamera untuk melihat video real-time'}
+                            </div>
+                        </div>
+                    </div>
+                    <button type="button" id="camera-toggle-btn" class="btn btn-sm ${APP.cameraActive ? 'btn-danger' : 'btn-success'}" onclick="toggleCamera()" style="min-width:120px; font-weight:600; border-radius:6px;">
+                        ${APP.cameraActive ? '🛑 Stop Kamera' : '📷 Start Kamera'}
+                    </button>
+                </div>
+
                 <div class="camera-frame">
-                    <img src="/api/camera/stream" alt="Kamera AMR"
+                    <img id="teleop-cam-img" src="/api/camera/stream" alt="Kamera AMR"
                          onerror="this.style.display='none'; this.nextElementSibling.style.display='none'; this.parentElement.querySelector('.teleop-cam-offline').style.display='flex';">
                     <div class="camera-overlay">
                         <div class="camera-badge"><span class="rec-dot"></span>TELEOP_CAM // LIVE</div>
@@ -2473,6 +2511,131 @@ function updateArduinoBridgeUI(active) {
         btn.innerHTML = '⚡ Start Bridge';
     }
 }
+
+async function toggleCamera() {
+    const btns = [
+        document.getElementById('camera-toggle-btn'),
+        document.getElementById('cam-page-toggle-btn')
+    ].filter(Boolean);
+
+    btns.forEach(b => {
+        b.disabled = true;
+        b.style.opacity = '0.6';
+    });
+
+    try {
+        if (APP.cameraActive) {
+            showToast('Menghentikan kamera...', 'info');
+            const res = await apiPost('/api/camera/stop', {});
+            if (res && res.success) {
+                APP.cameraActive = false;
+                updateCameraUI(false);
+                showToast('Kamera berhasil dihentikan.', 'warning');
+            } else {
+                showToast(res ? (res.error || res.message) : 'Gagal menghentikan kamera', 'error');
+            }
+        } else {
+            showToast('Menyalakan kamera USB...', 'info');
+            const res = await apiPost('/api/camera/start', {});
+            if (res && res.success) {
+                APP.cameraActive = true;
+                updateCameraUI(true);
+                showToast('Kamera berhasil dinyalakan!', 'success');
+                // Beri jeda 1 detik agar proses kamera bind hardware V4L2 lalu refresh src stream
+                setTimeout(() => {
+                    const ts = Date.now();
+                    ['teleop-cam-img', 'camera-feed', 'cockpit-cam-img', 'split-cam-img'].forEach(id => {
+                        const img = document.getElementById(id);
+                        if (img) {
+                            img.src = '/api/camera/stream?t=' + ts;
+                            img.style.display = 'block';
+                        }
+                    });
+                }, 1000);
+            } else {
+                showToast(res ? (res.error || res.message) : 'Gagal menyalakan kamera', 'error');
+            }
+        }
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    } finally {
+        btns.forEach(b => {
+            b.disabled = false;
+            b.style.opacity = '1';
+        });
+    }
+}
+
+function updateCameraUI(active) {
+    // 1. Update Joystick / Teleop page controls
+    const ind = document.getElementById('camera-status-indicator');
+    const text = document.getElementById('camera-status-text');
+    const sub = document.getElementById('camera-sub-text');
+    const btn = document.getElementById('camera-toggle-btn');
+    const lbl = document.getElementById('teleop-cam-status-label');
+
+    if (ind && text && btn) {
+        if (active) {
+            ind.style.background = 'var(--success)';
+            ind.style.boxShadow = '0 0 8px var(--success)';
+            text.innerHTML = 'USB CAMERA: <span style="color:var(--success)">ONLINE</span>';
+            if (sub) sub.textContent = 'Stream /camera/image_raw/compressed aktif';
+            btn.className = 'btn btn-sm btn-danger';
+            btn.innerHTML = '🛑 Stop Kamera';
+            if (lbl) lbl.textContent = 'LIVE TELEOP VIEW';
+        } else {
+            ind.style.background = 'var(--text-muted)';
+            ind.style.boxShadow = 'none';
+            text.innerHTML = 'USB CAMERA: <span style="color:var(--text-muted)">OFFLINE</span>';
+            if (sub) sub.textContent = 'Nyalakan kamera untuk melihat video real-time';
+            btn.className = 'btn btn-sm btn-success';
+            btn.innerHTML = '📷 Start Kamera';
+            if (lbl) lbl.textContent = 'CAMERA OFFLINE';
+        }
+    }
+
+    // 2. Update Camera page controls (if on Camera page)
+    const pageInd = document.getElementById('cam-page-status-indicator');
+    const pageText = document.getElementById('cam-page-status-text');
+    const pageSub = document.getElementById('cam-page-sub-text');
+    const pageBtn = document.getElementById('cam-page-toggle-btn');
+    if (pageInd && pageText && pageBtn) {
+        if (active) {
+            pageInd.style.background = 'var(--success)';
+            pageInd.style.boxShadow = '0 0 8px var(--success)';
+            pageText.innerHTML = 'USB CAMERA: <span style="color:var(--success)">ONLINE</span>';
+            if (pageSub) pageSub.textContent = 'Hardware kamera & publisher terhubung';
+            pageBtn.className = 'btn btn-sm btn-danger';
+            pageBtn.innerHTML = '🛑 Stop Kamera';
+        } else {
+            pageInd.style.background = 'var(--text-muted)';
+            pageInd.style.boxShadow = 'none';
+            pageText.innerHTML = 'USB CAMERA: <span style="color:var(--text-muted)">OFFLINE</span>';
+            if (pageSub) pageSub.textContent = 'Hardware kamera standby';
+            pageBtn.className = 'btn btn-sm btn-success';
+            pageBtn.innerHTML = '📷 Start Kamera';
+        }
+    }
+
+    // 3. Reset image visibility if turning active
+    if (active) {
+        ['teleop-cam-img', 'camera-feed', 'cockpit-cam-img', 'split-cam-img'].forEach(id => {
+            const img = document.getElementById(id);
+            if (img) {
+                img.style.display = 'block';
+                if (img.parentElement) {
+                    const off = img.parentElement.querySelector('.teleop-cam-offline, #cam-offline');
+                    if (off) off.style.display = 'none';
+                    const overlay = img.parentElement.querySelector('.camera-overlay');
+                    if (overlay) overlay.style.display = '';
+                }
+            }
+        });
+    }
+}
+
+window.toggleCamera = toggleCamera;
+window.updateCameraUI = updateCameraUI;
 
 async function emergencyStop() {
     await apiPost('/api/cmd_vel', { linear: 0, angular: 0 });
@@ -3117,13 +3280,18 @@ async function updateSystemInfo() {
         poseSrcEl.textContent = data.pose_source || 'NONE';
     }
     if (camEl) {
-        try {
-            const res = await fetch('/api/camera/snapshot');
-            camEl.textContent = res.ok ? 'ONLINE' : 'OFFLINE';
-            camEl.style.color = res.ok ? 'var(--success)' : 'var(--text-muted)';
-        } catch {
-            camEl.textContent = 'OFFLINE';
-            camEl.style.color = 'var(--text-muted)';
+        if (data && data.hasOwnProperty('camera_active')) {
+            camEl.textContent = data.camera_active ? 'ONLINE' : 'OFFLINE';
+            camEl.style.color = data.camera_active ? 'var(--success)' : 'var(--text-muted)';
+        } else {
+            try {
+                const res = await fetch('/api/camera/snapshot');
+                camEl.textContent = res.ok ? 'ONLINE' : 'OFFLINE';
+                camEl.style.color = res.ok ? 'var(--success)' : 'var(--text-muted)';
+            } catch {
+                camEl.textContent = 'OFFLINE';
+                camEl.style.color = 'var(--text-muted)';
+            }
         }
     }
 }
@@ -3159,6 +3327,11 @@ async function globalStatusPoll() {
         if (data.hasOwnProperty('nav_active')) {
             APP.navActive = !!data.nav_active;
             updateNavigationUI(APP.navActive);
+        }
+
+        if (data.hasOwnProperty('camera_active')) {
+            APP.cameraActive = !!data.camera_active;
+            updateCameraUI(APP.cameraActive);
         }
 
         if (typeof handleDeliveryStatusUpdate === 'function') {

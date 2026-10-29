@@ -902,6 +902,9 @@ def _read_mapping_stdout(proc):
         pass
 
 
+CAMERA_PROC = None
+CAMERA_LOCK = threading.Lock()
+
 # =====================================================================
 # ASYNC RUNTIME PROCESS STATE CACHE (ZERO-LATENCY FOR TELEOP)
 # =====================================================================
@@ -909,6 +912,7 @@ RUNTIME_CACHE = {
     'slam_active': False,
     'arduino_active': False,
     'nav_active': False,
+    'camera_active': False,
     'last_updated': 0
 }
 
@@ -952,9 +956,22 @@ def _update_process_states_loop():
                 except Exception:
                     pass
 
+            # 4. Cek Kamera (camera_publisher)
+            cam_act = False
+            with CAMERA_LOCK:
+                if CAMERA_PROC is not None and CAMERA_PROC.poll() is None:
+                    cam_act = True
+            if not cam_act:
+                try:
+                    res = subprocess.run(['pgrep', '-f', 'camera_publisher'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                    cam_act = (res.returncode == 0 and bool(res.stdout.strip()))
+                except Exception:
+                    pass
+
             RUNTIME_CACHE['slam_active'] = slam_act
             RUNTIME_CACHE['arduino_active'] = ard_act
             RUNTIME_CACHE['nav_active'] = nav_act
+            RUNTIME_CACHE['camera_active'] = cam_act
             RUNTIME_CACHE['last_updated'] = time.time()
         except Exception:
             pass
@@ -1086,6 +1103,41 @@ def stop_navigation_process():
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     _append_navigation_log('🛑 Proses Navigasi (Nav2) dihentikan.')
+
+
+# =====================================================================
+# CAMERA PROCESS MANAGER
+# =====================================================================
+def is_camera_active():
+    """Cek apakah Camera Publisher sedang berjalan (instant O(1))."""
+    with CAMERA_LOCK:
+        if CAMERA_PROC is not None and CAMERA_PROC.poll() is None:
+            return True
+    return bool(RUNTIME_CACHE.get('camera_active', False))
+
+
+def stop_camera_process():
+    """Hentikan proses camera_publisher.py."""
+    global CAMERA_PROC
+    with CAMERA_LOCK:
+        proc = CAMERA_PROC
+        CAMERA_PROC = None
+    if proc is not None and proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            proc.wait(timeout=2.0)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
+    subprocess.run(
+        ['pkill', '-f', 'camera_publisher'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    if ros_node is not None:
+        with ros_node.lock:
+            ros_node.latest_frame = None
 
 
 # --- ROUTES ---
@@ -1511,6 +1563,7 @@ def api_status():
             'nav_path': getattr(ros_node, 'nav_path', []),
             'arduino_active': is_arduino_active(),
             'nav_active': is_navigation_active(),
+            'camera_active': is_camera_active(),
             'connected': True,
             'timestamp': time.time()
         })
@@ -2161,6 +2214,79 @@ def get_placeholder_frame():
         _placeholder_jpeg_cache = jpeg.tobytes()
         return _placeholder_jpeg_cache
     return b''
+
+
+@app.route('/api/camera/status')
+def api_camera_status():
+    """Status real-time proses Camera Publisher."""
+    return jsonify({
+        'active': is_camera_active()
+    })
+
+
+@app.route('/api/camera/start', methods=['POST'])
+def api_camera_start():
+    """Jalankan camera_publisher.py di background."""
+    global CAMERA_PROC
+    if is_camera_active():
+        return jsonify({
+            'success': True,
+            'active': True,
+            'message': 'Kamera sudah aktif!'
+        })
+
+    ws_roots = get_workspace_roots()
+    domain_id = os.environ.get('ROS_DOMAIN_ID', '1')
+    setup_parts = [
+        f'export ROS_DOMAIN_ID={domain_id}',
+        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
+    ]
+    for wr in reversed(ws_roots):
+        setup_bash = os.path.join(wr, 'install', 'setup.bash')
+        if os.path.exists(setup_bash):
+            setup_parts.append(f'source "{setup_bash}"')
+
+    cam_script = None
+    for wr in ws_roots:
+        cand = os.path.join(wr, 'src', 'amr_simulation', 'scripts', 'camera_publisher.py')
+        if os.path.exists(cand):
+            cam_script = cand
+            break
+
+    if cam_script:
+        setup_parts.append(f'exec python3 "{cam_script}"')
+    else:
+        setup_parts.append('exec ros2 run amr_simulation camera_publisher.py')
+
+    full_cmd = ' && '.join(setup_parts)
+
+    try:
+        with CAMERA_LOCK:
+            CAMERA_PROC = subprocess.Popen(
+                ['/bin/bash', '-c', full_cmd],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid
+            )
+        time.sleep(0.5)
+        return jsonify({
+            'success': True,
+            'active': True,
+            'message': 'Kamera USB berhasil dinyalakan!'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/camera/stop', methods=['POST'])
+def api_camera_stop():
+    """Hentikan proses camera_publisher."""
+    stop_camera_process()
+    return jsonify({
+        'success': True,
+        'active': False,
+        'message': 'Kamera USB berhasil dimatikan.'
+    })
 
 
 @app.route('/api/camera/stream')
