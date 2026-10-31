@@ -60,7 +60,8 @@ float odom_x = 0.0, odom_y = 0.0, odom_theta = 0.0;
 
 float setpoint_L = 0.0, setpoint_R = 0.0;           // Target RPM Komando (Instan)
 float ramp_setpoint_L = 0.0, ramp_setpoint_R = 0.0; // Target RPM Bertahap (Soft-Start Slew Rate)
-const float MAX_ACCEL_RPM_PER_SEC = 160.0;          // Batas akselerasi halus (160 RPM/s, ~0.37s ke 60 RPM, bebas sentakan)
+const float MAX_ACCEL_RPM_PER_SEC = 120.0;          // Disetel 120 RPM/s (Halus & Meredam sentakan torsi)
+const float INTEGRAL_ACTIVE_ZONE   = 12.0;           // Anti-Windup Clamping: Integral aktif jika |error| < 12 RPM
 
 float rpm_L = 0.0, rpm_R = 0.0;                     // Aktual RPM Terfilter
 float error_L = 0.0, prev_error_L = 0.0, integral_L = 0.0, pwm_L = 0.0;
@@ -367,7 +368,12 @@ void loop() {
       }
 
       error_L = ramp_setpoint_L - rpm_L;
-      integral_L = constrain(integral_L + (KI_L * error_L * DT), -255.0, 255.0);
+      // Conditional Anti-Windup: Integral hanya mengumpulkan saat mendekati target
+      if (fabs(error_L) < INTEGRAL_ACTIVE_ZONE) {
+        integral_L = constrain(integral_L + (KI_L * error_L * DT), -255.0, 255.0);
+      } else {
+        integral_L = 0.0; // Mencegah windup akumulasi di awal start
+      }
       pwm_L = constrain((KP_L * error_L) + integral_L +
                             (KD_L * (error_L - prev_error_L) / DT),
                         -255.0, 255.0);
@@ -391,7 +397,12 @@ void loop() {
       }
 
       error_R = ramp_setpoint_R - rpm_R;
-      integral_R = constrain(integral_R + (KI_R * error_R * DT), -255.0, 255.0);
+      // Conditional Anti-Windup: Integral hanya mengumpulkan saat mendekati target
+      if (fabs(error_R) < INTEGRAL_ACTIVE_ZONE) {
+        integral_R = constrain(integral_R + (KI_R * error_R * DT), -255.0, 255.0);
+      } else {
+        integral_R = 0.0; // Mencegah windup akumulasi di awal start
+      }
       pwm_R = constrain((KP_R * error_R) + integral_R +
                             (KD_R * (error_R - prev_error_R) / DT),
                         -255.0, 255.0);
