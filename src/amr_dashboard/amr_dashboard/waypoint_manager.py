@@ -608,6 +608,10 @@ class WaypointManager(Node):
 
 
 def main(args=None):
+    if 'ROS_DOMAIN_ID' not in os.environ:
+        os.environ['ROS_DOMAIN_ID'] = '0'
+    if 'ROS_LOCALHOST_ONLY' not in os.environ:
+        os.environ['ROS_LOCALHOST_ONLY'] = '0'
     rclpy.init(args=args)
     node = WaypointManager()
     try:
