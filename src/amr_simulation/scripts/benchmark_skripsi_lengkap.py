@@ -61,8 +61,8 @@ class UnifiedBenchmarkNode(Node):
         self.kd_r = 0.0000
 
         # Parameter Alternatif untuk Uji Perbandingan Trial & Error (Jika diperlukan)
-        self.manual_kp_l, self.manual_ki_l, self.manual_kd_l = 1.2000, 15.0000, 0.0000
-        self.manual_kp_r, self.manual_ki_r, self.manual_kd_r = 1.0000, 15.0000, 0.0000
+        self.manual_kp_l, self.manual_ki_l, self.manual_kd_l = 3.0000, 25.0000, 0.0000
+        self.manual_kp_r, self.manual_ki_r, self.manual_kd_r = 3.0000, 25.0000, 0.0000
 
         # =====================================================================
         # 2. PARAMETER FISIK ROBOT AMR-01 (SESUAI PROPOSAL SKRIPSI)
