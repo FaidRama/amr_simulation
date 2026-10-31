@@ -149,3 +149,31 @@ Aborted (core dumped)
 3. **Display `TF` dinonaktifkan secara default**.
 4. **Hasil**: RViz berjalan stabil, tidak bocor memori, dan tidak akan pernah terkena `Cannot create GL vertex buffer` lagi.
 
+---
+
+## 📌 9. Solusi `send_goal failed` pada Goal Kedua & `Control loop missed its desired rate`
+
+### Error yang Terjadi:
+```
+[bt_navigator]: Action server failed while executing action callback: "send_goal failed"
+[bt_navigator]: [navigate_to_pose] [ActionServer] Aborting handle.
+[controller_server]: Control loop missed its desired rate of 10.0000Hz
+[controller_server]: Failed to make progress
+```
+
+### Akar Masalah:
+1. **Beban DWB Local Planner Terlalu Berat di CPU Jetson:**
+   - Parameter `vx_samples: 20` dan `vtheta_samples: 25` dengan `controller_frequency: 10.0 Hz` memaksa Jetson mengevaluasi **$20 \times 25 = 500$ lintasan per 100 ms**.
+   - Ketika robot mulai bergerak atau menghadapi tikungan, loop DWB memakan 100% CPU Jetson sehingga loop kontrol ngedrop (`missed its desired rate`).
+2. **Action Server Lockup di FastRTPS ROS 2 Foxy:**
+   - Karena thread eksekutor `controller_server` sibuk menghitung 500 lintasan, server aksi `/follow_path` terlambat membalas *handshake* saat goal baru dikirim oleh `bt_navigator`.
+   - Di ROS 2 Foxy, keterlambatan *handshake* ini langsung dianggap `send_goal failed` dan mengunci (*lockup*) status action server lama.
+
+### Solusi Permanen di [`nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml):
+1. **Turunkan `controller_frequency` ke `8.0` Hz** (sangat stabil untuk differential drive).
+2. **Optimasi Sampel Trajektori DWB:**
+   - `vx_samples` diturunkan dari `20` ke **`14`**.
+   - `vtheta_samples` diturunkan dari `25` ke **`18`**.
+   - `sim_time` disesuaikan dari `1.4` ke **`1.2`**.
+   - Beban evaluasi lintasan berkurang dari 500 menjadi **252 lintasan (turun 50%!)**, membuat CPU Jetson longgar dan `controller_server` selalu membalas `bt_navigator` tepat waktu.
+
