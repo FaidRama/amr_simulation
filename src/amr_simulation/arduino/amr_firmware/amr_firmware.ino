@@ -372,7 +372,7 @@ void loop() {
       prev_error_R = 0.0;
     } else {
       error_R = setpoint_R - rpm_R;
-      integral_R = constrain(integral_R + (KI_R * error_R * DT), -125.0, .0);
+      integral_R = constrain(integral_R + (KI_R * error_R * DT), -125.0,125.0);
       pwm_R = constrain((KP_R * error_R) + integral_R +
                             (KD_R * (error_R - prev_error_R) / DT),
                         -255.0, 255.0);
