@@ -4,13 +4,14 @@
  * =========================================================================
  * Format Input Serial (dari Jetson):
  *   1) "V,<v_linear>,<v_angular>\n"  (Contoh: "V,0.30,0.00\n" dari Nav2/Teleop)
- *   2) "1" s/d "5"                   (Menu Uji Mandiri Skripsi: Lurus, Belok, Persegi)
- *   3) "0"                           (Stop Darurat)
- *   4) "RST\n"                       (Reset Encoder & Odometri)
+ *   2) "1" s/d "5"                   (Menu Uji Mandiri Skripsi: Lurus, Belok,
+ * Persegi) 3) "0"                           (Stop Darurat) 4) "RST\n" (Reset
+ * Encoder & Odometri)
  *
  * Format Output Serial (ke Jetson):
- *   - "ENC:<pulsa_total_L>,<pulsa_total_R>\n" (Untuk ROS 2 /odom - 25 Hz)
- *   - "LOG:<time>,<rpm_L>,<rpm_R>,<pwm_L>,<pwm_R>,<x>,<y>,<theta>\n" (Untuk Skripsi)
+ *   - "ENC:<pulsa_total_L>,<pulsa_total_R>\n" (Untuk ROS 2 /odom - 20 Hz)
+ *   - "LOG:<time>,<rpm_L>,<rpm_R>,<pwm_L>,<pwm_R>,<x>,<y>,<theta>\n" (Untuk
+ * Skripsi)
  * ========================================================================= */
 
 #include <Arduino.h>
@@ -18,13 +19,13 @@
 // ====================== 1. PIN HARDWARE ==================================
 const byte PIN_RPWM_L = 5;
 const byte PIN_LPWM_L = 6;
-const byte PIN_REN_L  = 7;
-const byte PIN_LEN_L  = 8;
+const byte PIN_REN_L = 7;
+const byte PIN_LEN_L = 8;
 
 const byte PIN_RPWM_R = 9;
 const byte PIN_LPWM_R = 10;
-const byte PIN_REN_R  = 11;
-const byte PIN_LEN_R  = 12;
+const byte PIN_REN_R = 11;
+const byte PIN_LEN_R = 12;
 
 const byte PIN_ENCA_L = 2; // Interrupt INT0
 const byte PIN_ENCB_L = 4;
@@ -35,42 +36,37 @@ const byte PIN_ENCB_R = A1;
 // Sesuaikan dengan hasil validasi fisik roda kamu sebelumnya
 const bool INVERT_MOTOR_L = false;
 const bool INVERT_MOTOR_R = true;
-const bool INVERT_ENC_L   = true;
-const bool INVERT_ENC_R   = true;
+const bool INVERT_ENC_L = true;
+const bool INVERT_ENC_R = true;
 
 // ====================== 3. PARAMETER FISIK ROBOT =========================
-const float WHEEL_DIAMETER = 0.127; // meter (5 inci = 0.127 meter sesuai Proposal Skripsi)
-const float WHEEL_BASE_B   = 0.458; // meter (45.8 cm sesuai Proposal Skripsi)
-const float CPR_WHEEL      = 350.7; // Ticks per revolusi PG36 (7 PPR * 50.1 gearbox)
+const float WHEEL_DIAMETER =
+    0.127; // meter (5 inci = 0.127 meter sesuai Proposal Skripsi)
+const float WHEEL_BASE_B = 0.458; // meter (45.8 cm sesuai Proposal Skripsi)
+const float CPR_WHEEL = 350.7; // Ticks per revolusi PG36 (7 PPR * 50.1 gearbox)
 
 // ====================== 4. PARAMETER KENDALI PID-PSO =====================
-// Parameter Optimal Hasil Penalaan PSO Multi-Setpoint Divala Zahra Oktavia:
 const float KP_L = 0.9531, KI_L = 21.0829, KD_L = 0.0000;
 const float KP_R = 0.7861, KI_R = 23.2146, KD_R = 0.0000;
 
-// Waktu Sampling: 20 ms (50 Hz) - Sinkron 100% dengan Simulasi PSO MATLAB
 const unsigned long SAMPLING_MS = 20;
 const float DT = SAMPLING_MS / 1000.0; // 0.02 s (50 Hz)
 
-// ====================== 5. VARIABEL ENCODER, KENDALI & RAMP ==============
+// ====================== 5. VARIABEL ENCODER & ODOMETRI ===================
 volatile long totalPulsa_L = 0, totalPulsa_R = 0;
 volatile long deltaPulsa_L = 0, deltaPulsa_R = 0;
 
 float odom_x = 0.0, odom_y = 0.0, odom_theta = 0.0;
 
-float setpoint_L = 0.0, setpoint_R = 0.0;           // Target RPM Komando (Instan)
-float ramp_setpoint_L = 0.0, ramp_setpoint_R = 0.0; // Target RPM Bertahap (Soft-Start Slew Rate)
-const float MAX_ACCEL_RPM_PER_SEC = 120.0;          // Disetel 120 RPM/s (Halus & Meredam sentakan torsi)
-const float INTEGRAL_ACTIVE_ZONE   = 12.0;           // Anti-Windup Clamping: Integral aktif jika |error| < 12 RPM
-
-float rpm_L = 0.0, rpm_R = 0.0;                     // Aktual RPM Terfilter
+float setpoint_L = 0.0, setpoint_R = 0.0; // Target RPM
+float rpm_L = 0.0, rpm_R = 0.0;           // Aktual RPM
 float error_L = 0.0, prev_error_L = 0.0, integral_L = 0.0, pwm_L = 0.0;
 float error_R = 0.0, prev_error_R = 0.0, integral_R = 0.0, pwm_R = 0.0;
 
 unsigned long waktuSebelumnya = 0;
 
 // Watchdog Failsafe (Anti-Runaway jika Jetson mati / kabel serial lepas)
-const unsigned long SERIAL_WATCHDOG_TIMEOUT_MS = 1000; // 1.0 detik toleran terhadap jitter
+const unsigned long SERIAL_WATCHDOG_TIMEOUT_MS = 600; // 0.6 detik
 unsigned long lastSerialCmdTime = 0;
 
 // State Uji Mandiri Skripsi
@@ -97,7 +93,8 @@ void hitungInverseKinematics(float v, float omega) {
 // ====================== 7. ISR ENCODER ===================================
 void isrL() {
   bool b = digitalRead(PIN_ENCB_L);
-  if (INVERT_ENC_L) b = !b;
+  if (INVERT_ENC_L)
+    b = !b;
   if (b == HIGH) {
     totalPulsa_L++;
     deltaPulsa_L++;
@@ -109,7 +106,8 @@ void isrL() {
 
 void isrR() {
   bool b = digitalRead(PIN_ENCB_R);
-  if (INVERT_ENC_R) b = !b;
+  if (INVERT_ENC_R)
+    b = !b;
   if (b == HIGH) {
     totalPulsa_R--;
     deltaPulsa_R--;
@@ -121,7 +119,8 @@ void isrR() {
 
 // ====================== 8. DRIVER MOTOR (BTS7960) ========================
 void setMotorDriver(byte rpwmPin, byte lpwmPin, float valPWM, bool invert) {
-  if (invert) valPWM = -valPWM;
+  if (invert)
+    valPWM = -valPWM;
   int pwm = constrain(abs((int)valPWM), 0, 255);
   bool arahMaju = (valPWM > 0);
 
@@ -172,37 +171,46 @@ void processCommand(char *cmd) {
     odom_x = 0;
     odom_y = 0;
     odom_theta = 0;
-    ramp_setpoint_L = 0.0;
-    ramp_setpoint_R = 0.0;
     hitungInverseKinematics(0, 0);
     return;
   }
 
-  // 3. Menu Uji Mandiri Skripsi (Hanya jika input tepat 1 karakter: '0' s/d '5')
+  // 3. Menu Uji Mandiri Skripsi (Hanya jika input tepat 1 karakter: '0' s/d
+  // '5')
   if (strlen(cmd) == 1) {
     char m = cmd[0];
     if (m == '1') {
-      odom_x = 0; odom_y = 0; odom_theta = 0;
+      odom_x = 0;
+      odom_y = 0;
+      odom_theta = 0;
       targetJarak = 2.0;
       hitungInverseKinematics(0.33, 0.0);
       modePengujian = 1;
     } else if (m == '2') {
-      odom_x = 0; odom_y = 0; odom_theta = 0;
+      odom_x = 0;
+      odom_y = 0;
+      odom_theta = 0;
       targetSudut = 90.0 * (PI / 180.0);
       hitungInverseKinematics(0.0, 0.8);
       modePengujian = 2;
     } else if (m == '3') {
-      odom_x = 0; odom_y = 0; odom_theta = 0;
+      odom_x = 0;
+      odom_y = 0;
+      odom_theta = 0;
       targetSudut = 180.0 * (PI / 180.0);
       hitungInverseKinematics(0.0, 0.8);
       modePengujian = 3;
     } else if (m == '4') {
-      odom_x = 0; odom_y = 0; odom_theta = 0;
+      odom_x = 0;
+      odom_y = 0;
+      odom_theta = 0;
       targetSudut = 360.0 * (PI / 180.0);
       hitungInverseKinematics(0.0, 0.8);
       modePengujian = 4;
     } else if (m == '5') {
-      odom_x = 0; odom_y = 0; odom_theta = 0;
+      odom_x = 0;
+      odom_y = 0;
+      odom_theta = 0;
       stepPersegi = 1;
       targetJarak = 2.0;
       hitungInverseKinematics(0.33, 0.0);
@@ -245,7 +253,7 @@ void setup() {
   lastSerialCmdTime = millis();
 }
 
-// ====================== 11. LOOP UTAMA (50 Hz / 20 ms) ===================
+// ====================== 11. LOOP UTAMA (20 Hz) ==========================
 void loop() {
   // A. BACA SERIAL NON-BLOCKING
   while (Serial.available() > 0) {
@@ -261,7 +269,7 @@ void loop() {
     }
   }
 
-  // B. SAMPLING PID & ODOMETRI (20 ms / 50 Hz - Sinkron PSO)
+  // B. SAMPLING PID & ODOMETRI (50 ms / 20 Hz)
   unsigned long waktuSekarang = millis();
   if (waktuSekarang - waktuSebelumnya >= SAMPLING_MS) {
     waktuSebelumnya = waktuSekarang;
@@ -276,18 +284,22 @@ void loop() {
     long tot_R = totalPulsa_R;
     interrupts();
 
-    // Hitung RPM Aktual dengan Low-Pass Filter EMA (Sesuai Simulasi PSO alpha=0.55)
+    // 1. Umpan balik cepat (tetap 0.80) khusus untuk PID agar bebas phase-lag & tidak agresif
+    static float rpm_ctrl_L = 0.0, rpm_ctrl_R = 0.0;
     float rpm_raw_L = ((float)dC_L / CPR_WHEEL) * (60.0 / DT);
-    rpm_L = (0.55 * rpm_raw_L) + (0.45 * rpm_L);
-
     float rpm_raw_R = ((float)dC_R / CPR_WHEEL) * (60.0 / DT);
-    rpm_R = (0.55 * rpm_raw_R) + (0.45 * rpm_R);
+    rpm_ctrl_L = (0.80 * rpm_raw_L) + (0.20 * rpm_ctrl_L);
+    rpm_ctrl_R = (0.80 * rpm_raw_R) + (0.20 * rpm_ctrl_R);
+
+    // 2. Filter peredam overshoot pembacaan RPM (semakin kecil angka pertama, semakin kecil overshoot)
+    rpm_L = (0.25 * rpm_raw_L) + (0.75 * rpm_L);
+    rpm_R = (0.25 * rpm_raw_R) + (0.75 * rpm_R);
 
     // Hitung Odometri Lokal
     float ds_L = ((float)dC_L / CPR_WHEEL) * (PI * WHEEL_DIAMETER);
     float ds_R = ((float)dC_R / CPR_WHEEL) * (PI * WHEEL_DIAMETER);
     float dx_robot = (ds_R + ds_L) / 2.0;
-    float dtheta   = (ds_R - ds_L) / WHEEL_BASE_B;
+    float dtheta = (ds_R - ds_L) / WHEEL_BASE_B;
 
     float theta_mid = odom_theta + (dtheta / 2.0);
     odom_theta += dtheta;
@@ -330,13 +342,12 @@ void loop() {
       }
     }
 
-    // 0. FAILSAFE WATCHDOG: Jika mode Navigasi ROS 2 (99) dan tidak ada heartbeat > 1.0 detik
+    // 0. FAILSAFE WATCHDOG: Jika mode Navigasi ROS 2 (99) dan tidak ada
+    // heartbeat > 0.6 detik (Jetson mati/kabel putus)
     if (modePengujian == 99 &&
         (waktuSekarang - lastSerialCmdTime > SERIAL_WATCHDOG_TIMEOUT_MS)) {
       setpoint_L = 0.0;
       setpoint_R = 0.0;
-      ramp_setpoint_L = 0.0;
-      ramp_setpoint_R = 0.0;
       integral_L = 0.0;
       integral_R = 0.0;
       prev_error_L = 0.0;
@@ -346,63 +357,44 @@ void loop() {
       driveMotors(0, 0);
     }
 
-    // =========================================================================
-    // PERHITUNGAN LOOP PID DENGAN SOFT-START SLEW-RATE LIMITER (HALUS TANPA NGEGAS)
-    // =========================================================================
-    float max_rpm_step = MAX_ACCEL_RPM_PER_SEC * DT; // Kenaikan maksimum per siklus (~3.2 RPM per 20ms)
+    // Perhitungan Loop PID (Menggunakan umpan balik cepat rpm_ctrl & soft-ramp 180 RPM/s)
+    static float sp_ramp_L = 0.0, sp_ramp_R = 0.0;
+    const float step_ramp = 130.0 * DT; // 2.6 RPM per 20ms (Halus & tidak agresif)
 
-    // --- Motor Kiri ---
+    // Motor Kiri
     if (fabs(setpoint_L) < 0.05) {
-      ramp_setpoint_L = 0.0;
+      sp_ramp_L = 0.0;
+      rpm_ctrl_L = 0.0;
+      rpm_L = 0.0;
       pwm_L = 0.0;
       integral_L = 0.0;
       prev_error_L = 0.0;
     } else {
-      // Slew-Rate Limiter: Naikkan target secara bertahap agar tidak menyentak di awal
-      if (ramp_setpoint_L < setpoint_L) {
-        ramp_setpoint_L += max_rpm_step;
-        if (ramp_setpoint_L > setpoint_L) ramp_setpoint_L = setpoint_L;
-      } else if (ramp_setpoint_L > setpoint_L) {
-        ramp_setpoint_L -= max_rpm_step;
-        if (ramp_setpoint_L < setpoint_L) ramp_setpoint_L = setpoint_L;
-      }
+      if (sp_ramp_L < setpoint_L) sp_ramp_L = min(setpoint_L, sp_ramp_L + step_ramp);
+      else if (sp_ramp_L > setpoint_L) sp_ramp_L = max(setpoint_L, sp_ramp_L - step_ramp);
 
-      error_L = ramp_setpoint_L - rpm_L;
-      // Conditional Anti-Windup: Integral hanya mengumpulkan saat mendekati target
-      if (fabs(error_L) < INTEGRAL_ACTIVE_ZONE) {
-        integral_L = constrain(integral_L + (KI_L * error_L * DT), -255.0, 255.0);
-      } else {
-        integral_L = 0.0; // Mencegah windup akumulasi di awal start
-      }
+      error_L = sp_ramp_L - rpm_ctrl_L;
+      integral_L = constrain(integral_L + (KI_L * error_L * DT), -200.0, 200.0);
       pwm_L = constrain((KP_L * error_L) + integral_L +
                             (KD_L * (error_L - prev_error_L) / DT),
                         -255.0, 255.0);
       prev_error_L = error_L;
     }
 
-    // --- Motor Kanan ---
+    // Motor Kanan
     if (fabs(setpoint_R) < 0.05) {
-      ramp_setpoint_R = 0.0;
+      sp_ramp_R = 0.0;
+      rpm_ctrl_R = 0.0;
+      rpm_R = 0.0;
       pwm_R = 0.0;
       integral_R = 0.0;
       prev_error_R = 0.0;
     } else {
-      // Slew-Rate Limiter: Naikkan target secara bertahap agar tidak menyentak di awal
-      if (ramp_setpoint_R < setpoint_R) {
-        ramp_setpoint_R += max_rpm_step;
-        if (ramp_setpoint_R > setpoint_R) ramp_setpoint_R = setpoint_R;
-      } else if (ramp_setpoint_R > setpoint_R) {
-        ramp_setpoint_R -= max_rpm_step;
-        if (ramp_setpoint_R < setpoint_R) ramp_setpoint_R = setpoint_R;
-      }
+      if (sp_ramp_R < setpoint_R) sp_ramp_R = min(setpoint_R, sp_ramp_R + step_ramp);
+      else if (sp_ramp_R > setpoint_R) sp_ramp_R = max(setpoint_R, sp_ramp_R - step_ramp);
 
-      error_R = ramp_setpoint_R - rpm_R;
-      // Conditional Anti-Windup: Integral hanya mengumpulkan saat mendekati target
-      if (fabs(error_R) < INTEGRAL_ACTIVE_ZONE) {
-        integral_R = constrain(integral_R + (KI_R * error_R * DT), -255.0, 255.0);
-      } else {
-        integral_R = 0.0; // Mencegah windup akumulasi di awal start
-      }
+      error_R = sp_ramp_R - rpm_ctrl_R;
+      integral_R = constrain(integral_R + (KI_R * error_R * DT), -200.0, 200.0);
       pwm_R = constrain((KP_R * error_R) + integral_R +
                             (KD_R * (error_R - prev_error_R) / DT),
                         -255.0, 255.0);
@@ -411,34 +403,28 @@ void loop() {
 
     driveMotors(pwm_L, pwm_R);
 
-    // Output Serial untuk ROS 2 /odom & Logging (Cukup 25 Hz / tiap 2 loop agar Uno lancar)
-    static byte div_serial = 0;
-    if (++div_serial >= 2) {
-      div_serial = 0;
+    // Output Serial untuk ROS 2 /odom
+    Serial.print("ENC:");
+    Serial.print(tot_L);
+    Serial.print(",");
+    Serial.println(tot_R);
 
-      // 1. Output Serial untuk ROS 2 /odom
-      Serial.print("ENC:");
-      Serial.print(tot_L);
-      Serial.print(",");
-      Serial.println(tot_R);
-
-      // 2. Output Serial Tambahan untuk Logging Skripsi
-      Serial.print("LOG:");
-      Serial.print((float)waktuSekarang / 1000.0, 2);
-      Serial.print(",");
-      Serial.print(rpm_L, 1);
-      Serial.print(",");
-      Serial.print(rpm_R, 1);
-      Serial.print(",");
-      Serial.print(pwm_L, 0);
-      Serial.print(",");
-      Serial.print(pwm_R, 0);
-      Serial.print(",");
-      Serial.print(odom_x, 3);
-      Serial.print(",");
-      Serial.print(odom_y, 3);
-      Serial.print(",");
-      Serial.println(odom_theta * 180.0 / PI, 1);
-    }
+    // Output Serial Tambahan untuk Logging Skripsi
+    Serial.print("LOG:");
+    Serial.print((float)waktuSekarang / 1000.0, 2);
+    Serial.print(",");
+    Serial.print(rpm_L, 1);
+    Serial.print(",");
+    Serial.print(rpm_R, 1);
+    Serial.print(",");
+    Serial.print(pwm_L, 0);
+    Serial.print(",");
+    Serial.print(pwm_R, 0);
+    Serial.print(",");
+    Serial.print(odom_x, 3);
+    Serial.print(",");
+    Serial.print(odom_y, 3);
+    Serial.print(",");
+    Serial.println(odom_theta * 180.0 / PI, 1);
   }
 }

@@ -1015,6 +1015,7 @@ RUNTIME_CACHE = {
     'slam_active': False,
     'arduino_active': False,
     'nav_active': False,
+    'nav_ready': False,
     'camera_active': False,
     'human_node_active': False,
     'last_updated': 0
@@ -1022,6 +1023,7 @@ RUNTIME_CACHE = {
 
 def _update_process_states_loop():
     """Background loop setiap 2.0s untuk cek proses di OS tanpa memblokir HTTP teleop."""
+    global NAVIGATION_READY
     while True:
         try:
             # 1. Cek SLAM Mapping
@@ -1060,6 +1062,25 @@ def _update_process_states_loop():
                 except Exception:
                     pass
 
+            if not nav_act:
+                NAVIGATION_READY = False
+                nav_rdy = False
+            else:
+                nav_rdy = NAVIGATION_READY
+                if not nav_rdy:
+                    # Jika diluncurkan dari terminal luar dan bt_navigator + TF map sudah aktif
+                    try:
+                        res_bt = subprocess.run(['pgrep', '-f', 'bt_navigator'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                        bt_ok = (res_bt.returncode == 0 and bool(res_bt.stdout.strip()))
+                        tf_ok = (ros_node is not None and getattr(ros_node, 'has_map_pose', False))
+                        with NAVIGATION_LOCK:
+                            ext_launch = (NAVIGATION_PROC is None)
+                        if bt_ok and tf_ok and ext_launch:
+                            NAVIGATION_READY = True
+                            nav_rdy = True
+                    except Exception:
+                        pass
+
             # 4. Cek Kamera (camera_publisher)
             cam_act = False
             with CAMERA_LOCK:
@@ -1087,6 +1108,7 @@ def _update_process_states_loop():
             RUNTIME_CACHE['slam_active'] = slam_act
             RUNTIME_CACHE['arduino_active'] = ard_act
             RUNTIME_CACHE['nav_active'] = nav_act
+            RUNTIME_CACHE['nav_ready'] = nav_rdy
             RUNTIME_CACHE['camera_active'] = cam_act
             RUNTIME_CACHE['human_node_active'] = human_act
             RUNTIME_CACHE['last_updated'] = time.time()
@@ -1122,7 +1144,7 @@ def stop_slam_process():
             except Exception:
                 pass
     subprocess.run(
-        ['pkill', '-f', '(real_mapping\\.launch\\.py|async_slam_toolbox_node|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py)'],
+        ['pkill', '-9', '-f', '(real_mapping\\.launch\\.py|async_slam_toolbox_node|rplidar_bridge\\.py|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py|static_transform_publisher)'],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     _append_mapping_log('🛑 Proses SLAM Mapping dihentikan.')
@@ -1170,10 +1192,14 @@ def stop_arduino_process():
 NAVIGATION_PROC = None
 NAVIGATION_LOCK = threading.Lock()
 NAVIGATION_LOGS = []
+NAVIGATION_READY = False
 
 
 def _append_navigation_log(line):
-    global NAVIGATION_LOGS
+    global NAVIGATION_LOGS, NAVIGATION_READY
+    if ('[SIAP NAVIGASI]' in line) or ('Managed nodes are active' in line):
+        NAVIGATION_READY = True
+        RUNTIME_CACHE['nav_ready'] = True
     ts = datetime.now().strftime('%H:%M:%S')
     NAVIGATION_LOGS.append(f'[{ts}] {line}')
     if len(NAVIGATION_LOGS) > 80:
@@ -1200,9 +1226,18 @@ def is_navigation_active():
     return bool(RUNTIME_CACHE.get('nav_active', False))
 
 
+def is_navigation_ready():
+    """Cek apakah seluruh stack Nav2 (Peta + LiDAR + AMCL + Action Server) sudah siap mengantar."""
+    if not is_navigation_active():
+        return False
+    return bool(NAVIGATION_READY or RUNTIME_CACHE.get('nav_ready', False))
+
+
 def stop_navigation_process():
-    """Hentikan proses real_navigation.launch.py dan bersihkan node Nav2."""
-    global NAVIGATION_PROC
+    """Hentikan proses real_navigation.launch.py dan bersihkan semua node Nav2 & sensor terkait."""
+    global NAVIGATION_PROC, NAVIGATION_READY
+    NAVIGATION_READY = False
+    RUNTIME_CACHE['nav_ready'] = False
     with NAVIGATION_LOCK:
         proc = NAVIGATION_PROC
         NAVIGATION_PROC = None
@@ -1216,7 +1251,7 @@ def stop_navigation_process():
             except Exception:
                 pass
     subprocess.run(
-        ['pkill', '-f', '(real_navigation\\.launch\\.py|amcl|bt_navigator|controller_server|planner_server|recoveries_server|lifecycle_manager|adaptive_velocity_node)'],
+        ['pkill', '-9', '-f', '(real_navigation\\.launch\\.py|localization_launch\\.py|navigation_launch\\.py|map_server|amcl|bt_navigator|controller_server|planner_server|recoveries_server|waypoint_follower|lifecycle_manager|adaptive_velocity_node|rplidar_bridge\\.py|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py|static_transform_publisher)'],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     _append_navigation_log('🛑 Proses Navigasi (Nav2) dihentikan.')
@@ -1451,11 +1486,9 @@ def api_mapping_start():
             'message': 'SLAM Mapping sudah aktif! Mode peta dialihkan ke Live /map.'
         })
 
-    # Matikan node navigasi (AMCL/Nav2) jika masih jalan agar tidak bentrok port serial LiDAR & Arduino
-    subprocess.run(
-        ['pkill', '-9', '-f', '(real_navigation\\.launch\\.py|real_mapping\\.launch\\.py|amcl|bt_navigator|controller_server|planner_server|recoveries_server|lifecycle_manager|async_slam_toolbox_node|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py)'],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
+    # Matikan node navigasi (AMCL/Nav2) & sisa proses jika masih jalan agar tidak bentrok port serial LiDAR & Arduino
+    stop_navigation_process()
+    stop_arduino_process()
     time.sleep(0.8)
 
     setup_parts = get_ros_launch_prefix()
@@ -1521,7 +1554,20 @@ def api_arduino_start():
         })
 
     setup_parts = get_ros_launch_prefix()
-    setup_parts.append('exec ros2 run amr_simulation arduino_bridge.py')
+    ws_roots = get_workspace_roots()
+
+    arduino_script = None
+    for wr in ws_roots:
+        cand = os.path.join(wr, 'src', 'amr_simulation', 'scripts', 'arduino_bridge.py')
+        if os.path.exists(cand):
+            arduino_script = cand
+            break
+
+    if arduino_script:
+        setup_parts.append(f'exec python3 "{arduino_script}"')
+    else:
+        setup_parts.append('exec ros2 run amr_simulation arduino_bridge.py')
+
     full_cmd = ' && '.join(setup_parts)
 
     try:
@@ -1560,6 +1606,7 @@ def api_navigation_status():
     """Status real-time proses Nav2 Navigation."""
     return jsonify({
         'active': is_navigation_active(),
+        'ready': is_navigation_ready(),
         'map_file': ACTIVE_MAP_FILE,
         'logs': NAVIGATION_LOGS[-35:]
     })
@@ -1568,16 +1615,18 @@ def api_navigation_status():
 @app.route('/api/navigation/start', methods=['POST'])
 def api_navigation_start():
     """Jalankan ros2 launch amr_simulation real_navigation.launch.py di background."""
-    global NAVIGATION_PROC
+    global NAVIGATION_PROC, NAVIGATION_READY
     if is_navigation_active():
         return jsonify({
             'success': True,
             'active': True,
+            'ready': is_navigation_ready(),
             'message': 'Navigasi Nav2 sudah aktif!'
         })
 
-    # Hentikan mapping & bridge standalone jika aktif agar port serial LiDAR & Arduino dilepas
+    # Hentikan mapping, navigasi sisa, & bridge standalone jika aktif agar port serial LiDAR & Arduino dilepas
     stop_slam_process()
+    stop_navigation_process()
     stop_arduino_process()
     time.sleep(0.8)
 
@@ -1607,6 +1656,8 @@ def api_navigation_start():
 
     try:
         with NAVIGATION_LOCK:
+            NAVIGATION_READY = False
+            RUNTIME_CACHE['nav_ready'] = False
             NAVIGATION_LOGS.clear()
             _append_navigation_log(f'🚀 Meluncurkan Navigasi dengan peta: {os.path.basename(map_to_use or "default")} ...')
             NAVIGATION_PROC = subprocess.Popen(
@@ -1801,6 +1852,7 @@ def api_status():
             'nav_logs': list(NAVIGATION_LOGS[-50:]),
             'arduino_active': is_arduino_active(),
             'nav_active': is_navigation_active(),
+            'nav_ready': is_navigation_ready(),
             'camera_active': is_camera_active(),
             'human_node_active': is_human_node_active(),
             'connected': True,
