@@ -54,19 +54,18 @@ def generate_launch_description():
         description='Jalankan RViz2 untuk visualisasi di laptop'
     )
 
-    # 1. Driver RPLiDAR A1 Fisik (/dev/rplidar -> /dev/ttyUSB0)
+    # 1. Driver RPLiDAR A1 Fisik via rplidar_bridge (Auto-detect port /dev/rplidar /dev/ttyUSB0 & auto-recovery)
     lidar_port = '/dev/rplidar' if os.path.exists('/dev/rplidar') else '/dev/ttyUSB0'
     start_rplidar = Node(
-        package='rplidar_ros',
-        executable='rplidar_composition',
-        name='rplidar_composition',
+        package='amr_simulation',
+        executable='rplidar_bridge.py',
+        name='rplidar_bridge',
         output='screen',
         parameters=[{
             'serial_port': lidar_port,
             'serial_baudrate': 115200,
             'frame_id': 'laser',
-            'inverted': False,
-            'angle_compensate': True,
+            'auto_launch_driver': True,
         }],
         respawn=True,
         respawn_delay=2.0,
