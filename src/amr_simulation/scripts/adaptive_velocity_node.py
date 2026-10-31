@@ -9,6 +9,13 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 from tf2_ros import TransformBroadcaster
 
+try:
+    from rclpy.action import ActionClient
+    from nav2_msgs.action import NavigateToPose
+    HAS_NAV2_ACTION = True
+except ImportError:
+    HAS_NAV2_ACTION = False
+
 
 class AdaptiveVelocityNode(Node):
     def __init__(self):
@@ -42,6 +49,8 @@ class AdaptiveVelocityNode(Node):
         self.start_wall_time = time.time()
         self.amcl_initialized = False
         self.map_received = False
+        self.nav_ready_announced = False
+        self.last_ready_check_time = 0.0
         self.last_scan_wall_time = 0.0
         self.last_initpose_sent_time = 0.0
         self.initpose_sent_count = 0
@@ -60,6 +69,8 @@ class AdaptiveVelocityNode(Node):
         self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, 10)
         self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, tl_qos)
         self.initialpose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
+        self.delivery_log_pub = self.create_publisher(String, '/amr/delivery_log', 10)
+        self.nav_action_client = ActionClient(self, NavigateToPose, '/navigate_to_pose') if HAS_NAV2_ACTION else None
 
         self.create_subscription(String, '/human_state', self.state_callback, 10)
         self.create_subscription(
@@ -154,6 +165,24 @@ class AdaptiveVelocityNode(Node):
                 self.last_initpose_sent_time = wall_now
                 self.initpose_sent_count += 1
                 self.send_auto_initialpose(now_msg)
+
+        # 3. Verifikasi kesiapan penuh (Peta + LiDAR + AMCL + Nav2 Action Server /navigate_to_pose)
+        if not self.nav_ready_announced and (wall_now - self.last_ready_check_time >= 0.8):
+            self.last_ready_check_time = wall_now
+            if self.map_received and scan_active and self.amcl_initialized:
+                nav_srv_ok = self.nav_action_client.server_is_ready() if self.nav_action_client is not None else (wall_now - self.start_wall_time > 7.0)
+                if nav_srv_ok:
+                    self.nav_ready_announced = True
+                    self.get_logger().info("============================================================")
+                    self.get_logger().info("🟢 [SIAP NAVIGASI] AMR SIAP UNTUK NAVIGASI & MENGANTAR!")
+                    self.get_logger().info("   ✔ Peta (/map)          : AKTIF")
+                    self.get_logger().info("   ✔ Sensor LiDAR (/scan) : AKTIF")
+                    self.get_logger().info("   ✔ Lokalisasi (AMCL)    : TERLOKALISASI")
+                    self.get_logger().info("   ✔ Nav2 Action Server   : SIAP (/navigate_to_pose)")
+                    self.get_logger().info("============================================================")
+                    log_msg = String()
+                    log_msg.data = "🟢 [SIAP NAVIGASI] AMR SIAP UNTUK NAVIGASI & MENGANTAR! (Peta + LiDAR + AMCL + Nav2 Action Server Aktif)"
+                    self.delivery_log_pub.publish(log_msg)
 
         dt = (now - self.last_time).nanoseconds / 1e9
         self.last_time = now

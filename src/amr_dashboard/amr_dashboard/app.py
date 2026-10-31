@@ -1015,6 +1015,7 @@ RUNTIME_CACHE = {
     'slam_active': False,
     'arduino_active': False,
     'nav_active': False,
+    'nav_ready': False,
     'camera_active': False,
     'human_node_active': False,
     'last_updated': 0
@@ -1022,6 +1023,7 @@ RUNTIME_CACHE = {
 
 def _update_process_states_loop():
     """Background loop setiap 2.0s untuk cek proses di OS tanpa memblokir HTTP teleop."""
+    global NAVIGATION_READY
     while True:
         try:
             # 1. Cek SLAM Mapping
@@ -1060,6 +1062,25 @@ def _update_process_states_loop():
                 except Exception:
                     pass
 
+            if not nav_act:
+                NAVIGATION_READY = False
+                nav_rdy = False
+            else:
+                nav_rdy = NAVIGATION_READY
+                if not nav_rdy:
+                    # Jika diluncurkan dari terminal luar dan bt_navigator + TF map sudah aktif
+                    try:
+                        res_bt = subprocess.run(['pgrep', '-f', 'bt_navigator'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                        bt_ok = (res_bt.returncode == 0 and bool(res_bt.stdout.strip()))
+                        tf_ok = (ros_node is not None and getattr(ros_node, 'has_map_pose', False))
+                        with NAVIGATION_LOCK:
+                            ext_launch = (NAVIGATION_PROC is None)
+                        if bt_ok and tf_ok and ext_launch:
+                            NAVIGATION_READY = True
+                            nav_rdy = True
+                    except Exception:
+                        pass
+
             # 4. Cek Kamera (camera_publisher)
             cam_act = False
             with CAMERA_LOCK:
@@ -1087,6 +1108,7 @@ def _update_process_states_loop():
             RUNTIME_CACHE['slam_active'] = slam_act
             RUNTIME_CACHE['arduino_active'] = ard_act
             RUNTIME_CACHE['nav_active'] = nav_act
+            RUNTIME_CACHE['nav_ready'] = nav_rdy
             RUNTIME_CACHE['camera_active'] = cam_act
             RUNTIME_CACHE['human_node_active'] = human_act
             RUNTIME_CACHE['last_updated'] = time.time()
@@ -1170,10 +1192,14 @@ def stop_arduino_process():
 NAVIGATION_PROC = None
 NAVIGATION_LOCK = threading.Lock()
 NAVIGATION_LOGS = []
+NAVIGATION_READY = False
 
 
 def _append_navigation_log(line):
-    global NAVIGATION_LOGS
+    global NAVIGATION_LOGS, NAVIGATION_READY
+    if ('[SIAP NAVIGASI]' in line) or ('Managed nodes are active' in line):
+        NAVIGATION_READY = True
+        RUNTIME_CACHE['nav_ready'] = True
     ts = datetime.now().strftime('%H:%M:%S')
     NAVIGATION_LOGS.append(f'[{ts}] {line}')
     if len(NAVIGATION_LOGS) > 80:
@@ -1200,9 +1226,18 @@ def is_navigation_active():
     return bool(RUNTIME_CACHE.get('nav_active', False))
 
 
+def is_navigation_ready():
+    """Cek apakah seluruh stack Nav2 (Peta + LiDAR + AMCL + Action Server) sudah siap mengantar."""
+    if not is_navigation_active():
+        return False
+    return bool(NAVIGATION_READY or RUNTIME_CACHE.get('nav_ready', False))
+
+
 def stop_navigation_process():
     """Hentikan proses real_navigation.launch.py dan bersihkan semua node Nav2 & sensor terkait."""
-    global NAVIGATION_PROC
+    global NAVIGATION_PROC, NAVIGATION_READY
+    NAVIGATION_READY = False
+    RUNTIME_CACHE['nav_ready'] = False
     with NAVIGATION_LOCK:
         proc = NAVIGATION_PROC
         NAVIGATION_PROC = None
@@ -1558,6 +1593,7 @@ def api_navigation_status():
     """Status real-time proses Nav2 Navigation."""
     return jsonify({
         'active': is_navigation_active(),
+        'ready': is_navigation_ready(),
         'map_file': ACTIVE_MAP_FILE,
         'logs': NAVIGATION_LOGS[-35:]
     })
@@ -1566,11 +1602,12 @@ def api_navigation_status():
 @app.route('/api/navigation/start', methods=['POST'])
 def api_navigation_start():
     """Jalankan ros2 launch amr_simulation real_navigation.launch.py di background."""
-    global NAVIGATION_PROC
+    global NAVIGATION_PROC, NAVIGATION_READY
     if is_navigation_active():
         return jsonify({
             'success': True,
             'active': True,
+            'ready': is_navigation_ready(),
             'message': 'Navigasi Nav2 sudah aktif!'
         })
 
@@ -1606,6 +1643,8 @@ def api_navigation_start():
 
     try:
         with NAVIGATION_LOCK:
+            NAVIGATION_READY = False
+            RUNTIME_CACHE['nav_ready'] = False
             NAVIGATION_LOGS.clear()
             _append_navigation_log(f'🚀 Meluncurkan Navigasi dengan peta: {os.path.basename(map_to_use or "default")} ...')
             NAVIGATION_PROC = subprocess.Popen(
@@ -1800,6 +1839,7 @@ def api_status():
             'nav_logs': list(NAVIGATION_LOGS[-50:]),
             'arduino_active': is_arduino_active(),
             'nav_active': is_navigation_active(),
+            'nav_ready': is_navigation_ready(),
             'camera_active': is_camera_active(),
             'human_node_active': is_human_node_active(),
             'connected': True,
