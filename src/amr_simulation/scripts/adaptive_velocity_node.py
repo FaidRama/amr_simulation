@@ -3,7 +3,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
-from geometry_msgs.msg import Twist, TransformStamped, PoseWithCovarianceStamped
+from geometry_msgs.msg import Twist, TransformStamped, PoseWithCovarianceStamped, PolygonStamped
 from nav_msgs.msg import OccupancyGrid
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
@@ -42,6 +42,8 @@ class AdaptiveVelocityNode(Node):
         self.start_wall_time = time.time()
         self.amcl_initialized = False
         self.map_received = False
+        self.local_costmap_active = False
+        self.global_costmap_active = False
         self.nav_ready_announced = False
         self.last_ready_check_time = 0.0
         self.last_scan_wall_time = 0.0
@@ -61,6 +63,8 @@ class AdaptiveVelocityNode(Node):
         self.create_subscription(LaserScan, '/scan_filtered', self.on_scan, 10)
         self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, 10)
         self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, tl_qos)
+        self.create_subscription(PolygonStamped, '/local_costmap/published_footprint', self.on_local_footprint, 5)
+        self.create_subscription(PolygonStamped, '/global_costmap/published_footprint', self.on_global_footprint, 5)
         self.initialpose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
         self.delivery_log_pub = self.create_publisher(String, '/amr/delivery_log', 10)
 
@@ -86,6 +90,12 @@ class AdaptiveVelocityNode(Node):
         if not self.amcl_initialized:
             self.amcl_initialized = True
             self.get_logger().info("✅ AMCL telah aktif (/amcl_pose diterima) -> TF map->odom dikelola penuh oleh AMCL.")
+
+    def on_local_footprint(self, msg: PolygonStamped):
+        self.local_costmap_active = True
+
+    def on_global_footprint(self, msg: PolygonStamped):
+        self.global_costmap_active = True
 
     def publish_bootstrap_tf(self, now_msg):
         t = TransformStamped()
@@ -158,10 +168,16 @@ class AdaptiveVelocityNode(Node):
                 self.initpose_sent_count += 1
                 self.send_auto_initialpose(now_msg)
 
-        # 3. Verifikasi kesiapan penuh (Peta + LiDAR + AMCL + Nav2 Stack Aktif)
+        # 3. Verifikasi kesiapan penuh (Peta + LiDAR + AMCL + Local/Global Costmap + Nav2 Stack Aktif)
         if not self.nav_ready_announced and (wall_now - self.last_ready_check_time >= 1.0):
             self.last_ready_check_time = wall_now
-            if self.map_received and scan_active and self.amcl_initialized and (wall_now - self.start_wall_time > 7.5):
+            if (
+                self.map_received
+                and scan_active
+                and self.amcl_initialized
+                and self.local_costmap_active
+                and self.global_costmap_active
+            ):
                 node_names = self.get_node_names()
                 if 'bt_navigator' in node_names and 'planner_server' in node_names and 'controller_server' in node_names:
                     self.nav_ready_announced = True
@@ -170,10 +186,11 @@ class AdaptiveVelocityNode(Node):
                     self.get_logger().info("   ✔ Peta (/map)          : AKTIF")
                     self.get_logger().info("   ✔ Sensor LiDAR (/scan) : AKTIF")
                     self.get_logger().info("   ✔ Lokalisasi (AMCL)    : TERLOKALISASI")
+                    self.get_logger().info("   ✔ Local/Global Costmap : AKTIF")
                     self.get_logger().info("   ✔ Nav2 Stack           : SIAP (bt_navigator, planner, controller)")
                     self.get_logger().info("============================================================")
                     log_msg = String()
-                    log_msg.data = "🟢 [SIAP NAVIGASI] AMR SIAP UNTUK NAVIGASI & MENGANTAR! (Peta + LiDAR + AMCL + Nav2 Aktif)"
+                    log_msg.data = "🟢 [SIAP NAVIGASI] AMR SIAP UNTUK NAVIGASI & MENGANTAR! (Peta + LiDAR + AMCL + Costmap + Nav2 Aktif)"
                     self.delivery_log_pub.publish(log_msg)
 
         dt = (now - self.last_time).nanoseconds / 1e9

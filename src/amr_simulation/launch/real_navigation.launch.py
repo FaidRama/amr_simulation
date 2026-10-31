@@ -4,11 +4,11 @@ import signal
 import subprocess
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable, TimerAction
 from launch.conditions import IfCondition, UnlessCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from nav2_common.launch import RewrittenYaml
 
 
 def _get_ancestor_pids():
@@ -18,10 +18,6 @@ def _get_ancestor_pids():
     while pid > 1 and pid not in ancestors:
         ancestors.add(pid)
         try:
-            with open(f"/proc/{pid}/stat", "r") as f:
-                parts = f.read().split()
-                # Field ke-4 (index 3 setelah comm) adalah ppid
-                close_paren = parts.indexnext if hasattr(parts, 'indexnext') else None
             with open(f"/proc/{pid}/status", "r") as f:
                 for line in f:
                     if line.startswith("PPid:"):
@@ -83,12 +79,15 @@ def generate_launch_description():
     _cleanup_stale_processes()
 
     pkg_amr = get_package_share_directory('amr_simulation')
-    pkg_nav2 = get_package_share_directory('nav2_bringup')
+    pkg_bt_navigator = get_package_share_directory('nav2_bt_navigator')
 
     default_map_path = os.path.join(pkg_amr, 'maps', 'peta_l1_ddc.yaml')
     src_params_path = os.path.join(os.getcwd(), 'src', 'amr_simulation', 'config', 'nav2_params.yaml')
     default_params_path = src_params_path if os.path.exists(src_params_path) else os.path.join(pkg_amr, 'config', 'nav2_params.yaml')
     default_rviz_config = os.path.join(pkg_amr, 'rviz', 'slam_config.rviz')
+    default_bt_xml_path = os.path.join(
+        pkg_bt_navigator, 'behavior_trees', 'navigate_w_replanning_and_recovery.xml'
+    )
 
     # Launch Arguments
     map_arg = DeclareLaunchArgument(
@@ -204,41 +203,127 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 6A. Nav2 Localization (Map Server + AMCL) - dijalankan pada t=2.0s setelah sensor & TF siap
-    start_localization = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_nav2, 'launch', 'localization_launch.py')
-        ),
-        launch_arguments={
-            'map': LaunchConfiguration('map'),
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-            'params_file': LaunchConfiguration('params_file'),
-            'autostart': LaunchConfiguration('autostart')
-        }.items()
+    # 6. Unified Nav2 Stack (Map Server + AMCL + Controller + Planner + Recoveries + BT Navigator + Waypoint Follower)
+    # Dikelola oleh SATU lifecycle_manager_navigation secara berurutan:
+    #   Tahap 1 (CONFIGURE): map_server -> amcl -> controller_server -> planner_server -> recoveries -> bt_navigator -> waypoint_follower
+    #   Tahap 2 (ACTIVATE) : map_server -> amcl -> controller_server -> planner_server -> recoveries -> bt_navigator -> waypoint_follower
+    # Dengan urutan ini, map_server baru mem-publish /map pada Tahap 2 (SETELAH planner_server selesai menginisialisasi
+    # static_layer, obstacle_layer, dan inflation_layer pada Tahap 1), sehingga mencegah 100% bug race condition
+    # "StaticLayer: Resizing costmap" vs "Using plugin inflation_layer" (exit code -11) di ROS 2 Foxy.
+    remappings = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
+
+    param_substitutions = {
+        'use_sim_time': LaunchConfiguration('use_sim_time'),
+        'yaml_filename': LaunchConfiguration('map'),
+        'default_bt_xml_filename': default_bt_xml_path,
+        'autostart': LaunchConfiguration('autostart'),
+        'map_subscribe_transient_local': 'true',
+    }
+
+    configured_params = RewrittenYaml(
+        source_file=LaunchConfiguration('params_file'),
+        root_key='',
+        param_rewrites=param_substitutions,
+        convert_types=True
     )
 
-    delayed_localization = TimerAction(
-        period=2.0,
-        actions=[start_localization]
+    nav2_lifecycle_nodes = [
+        'map_server',
+        'amcl',
+        'controller_server',
+        'planner_server',
+        'recoveries_server',
+        'bt_navigator',
+        'waypoint_follower',
+    ]
+
+    node_map_server = Node(
+        package='nav2_map_server',
+        executable='map_server',
+        name='map_server',
+        output='screen',
+        parameters=[configured_params],
+        remappings=remappings
     )
 
-    # 6B. Nav2 Navigation (Controller + Planner + Costmaps + BT Navigator) - dijalankan pada t=4.5s
-    # setelah Map Server & AMCL aktif sehingga tidak pernah gagal "frame map does not exist"
-    start_navigation = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_nav2, 'launch', 'navigation_launch.py')
-        ),
-        launch_arguments={
+    node_amcl = Node(
+        package='nav2_amcl',
+        executable='amcl',
+        name='amcl',
+        output='screen',
+        parameters=[configured_params],
+        remappings=remappings
+    )
+
+    node_controller_server = Node(
+        package='nav2_controller',
+        executable='controller_server',
+        name='controller_server',
+        output='screen',
+        parameters=[configured_params],
+        remappings=remappings
+    )
+
+    node_planner_server = Node(
+        package='nav2_planner',
+        executable='planner_server',
+        name='planner_server',
+        output='screen',
+        parameters=[configured_params],
+        remappings=remappings
+    )
+
+    node_recoveries_server = Node(
+        package='nav2_recoveries',
+        executable='recoveries_server',
+        name='recoveries_server',
+        output='screen',
+        parameters=[configured_params],
+        remappings=remappings
+    )
+
+    node_bt_navigator = Node(
+        package='nav2_bt_navigator',
+        executable='bt_navigator',
+        name='bt_navigator',
+        output='screen',
+        parameters=[configured_params],
+        remappings=remappings
+    )
+
+    node_waypoint_follower = Node(
+        package='nav2_waypoint_follower',
+        executable='waypoint_follower',
+        name='waypoint_follower',
+        output='screen',
+        parameters=[configured_params],
+        remappings=remappings
+    )
+
+    node_lifecycle_manager = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_navigation',
+        output='screen',
+        parameters=[{
             'use_sim_time': LaunchConfiguration('use_sim_time'),
-            'params_file': LaunchConfiguration('params_file'),
             'autostart': LaunchConfiguration('autostart'),
-            'map_subscribe_transient_local': 'true'
-        }.items()
+            'node_names': nav2_lifecycle_nodes
+        }]
     )
 
-    delayed_navigation = TimerAction(
-        period=4.5,
-        actions=[start_navigation]
+    delayed_nav2_stack = TimerAction(
+        period=2.5,
+        actions=[
+            node_map_server,
+            node_amcl,
+            node_controller_server,
+            node_planner_server,
+            node_recoveries_server,
+            node_bt_navigator,
+            node_waypoint_follower,
+            node_lifecycle_manager,
+        ]
     )
 
     # 7. RViz2 Visualizer (Opsional di laptop)
@@ -252,7 +337,10 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('rviz'))
     )
 
+    stdout_linebuf_envvar = SetEnvironmentVariable('RCUTILS_LOGGING_BUFFERED_STREAM', '1')
+
     return LaunchDescription([
+        stdout_linebuf_envvar,
         map_arg,
         params_file_arg,
         use_sim_time_arg,
@@ -266,7 +354,6 @@ def generate_launch_description():
         tf_base_to_footprint,
         tf_odom_to_base,
         start_adaptive_velocity,
-        delayed_localization,
-        delayed_navigation,
+        delayed_nav2_stack,
         start_rviz2
     ])
