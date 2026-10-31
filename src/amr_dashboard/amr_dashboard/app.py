@@ -713,7 +713,7 @@ class DashboardNode(Node):
         if time.time() - getattr(self, 'last_annotated_time', 0) < 1.5:
             return
         now = time.time()
-        if now - self.last_cam_time < 0.03:
+        if now - self.last_cam_time < 0.05:  # Throttle ~20 FPS (sangat ringan di Wi-Fi & Jetson CPU)
             return
         self.last_cam_time = now
         with self.lock:
@@ -732,18 +732,18 @@ class DashboardNode(Node):
         if self.bridge is None:
             return
         now = time.time()
-        if now - self.last_cam_time < 0.03:  # Throttle ~30 FPS
+        if now - self.last_cam_time < 0.05:  # Throttle ~20 FPS (mencegah penumpukan buffer)
             return
         self.last_cam_time = now
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-            # Resize untuk performa tinggi (max 480px lebar)
+            # Resize untuk performa optimal (max 420px lebar)
             h, w = frame.shape[:2]
-            if w > 480:
-                scale = 480.0 / w
-                frame = cv2.resize(frame, (480, int(h * scale)))
-            # Encode ke JPEG (quality 60 untuk bandwidth ringan & 30 FPS mulus)
-            _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+            if w > 420:
+                scale = 420.0 / w
+                frame = cv2.resize(frame, (420, int(h * scale)), interpolation=cv2.INTER_NEAREST)
+            # Encode ke JPEG (quality 50 untuk transfer instan tanpa lag)
+            _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
             with self.lock:
                 self.latest_frame = jpeg.tobytes()
         except Exception as e:
@@ -2703,7 +2703,7 @@ def api_human_stop():
 
 @app.route('/api/camera/stream')
 def api_camera_stream():
-    """MJPEG stream dari kamera AMR."""
+    """MJPEG stream dari kamera AMR (dioptimalkan untuk latency ultra-rendah dan anti-lag)."""
     if not HAS_CAMERA or ros_node is None:
         return jsonify({'error': 'Kamera tidak tersedia'}), 503
     
@@ -2723,7 +2723,8 @@ def api_camera_stream():
                     last_sent = placeholder
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + placeholder + b'\r\n')
-            time.sleep(0.015)
+            # 0.05 detik = ~20 FPS. Sangat mulus di mata, hemat CPU Jetson, dan tidak menumpuk antrian Wi-Fi
+            time.sleep(0.05)
     
     return Response(generate(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
