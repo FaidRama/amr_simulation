@@ -32,6 +32,7 @@ def generate_launch_description():
             'serial_baudrate': 115200,
             'frame_id': 'laser',
             'auto_launch_driver': True,
+            'quiet': True,  # Nonaktifkan spam log telemetri berkala (terminal bersih)
         }],
     )
 
