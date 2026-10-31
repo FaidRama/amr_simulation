@@ -128,6 +128,7 @@ const APP = {
     mappingActive: false,
     arduinoActive: false,
     navActive: false,
+    navReady: false,
     cameraActive: false,
     humanNodeActive: false,
     showBbox: (localStorage.getItem('amr_show_bbox') !== 'false'),
@@ -548,13 +549,13 @@ function renderDelivery() {
                     <!-- NAV2 NAVIGATION RUNTIME CONTROLLER -->
                     <div class="nav-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:12px; gap:12px;">
                         <div style="display:flex; align-items:center; gap:10px;">
-                            <span id="nav-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.navActive ? 'var(--success)' : 'var(--danger)'}; box-shadow:${APP.navActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
+                            <span id="nav-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.navActive ? (APP.navReady ? 'var(--success)' : 'var(--warning)') : 'var(--danger)'}; box-shadow:${APP.navActive ? (APP.navReady ? '0 0 8px var(--success)' : '0 0 8px var(--warning)') : 'none'}; display:inline-block;"></span>
                             <div>
                                 <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="nav-status-text">
-                                    NAV2 NAVIGATION: ${APP.navActive ? '<span style="color:var(--success)">ONLINE (AMCL + Costmap)</span>' : '<span style="color:var(--danger)">OFFLINE</span>'}
+                                    NAV2 NAVIGATION: ${APP.navActive ? (APP.navReady ? '<span style="color:var(--success)">🟢 AMR SIAP NAVIGASI &amp; MENGANTAR!</span>' : '<span style="color:var(--warning)">⏳ MENYIAPKAN SENSOR, AMCL &amp; NAV2...</span>') : '<span style="color:var(--danger)">OFFLINE</span>'}
                                 </div>
                                 <div style="font-size:0.68rem; color:var(--text-muted);" id="nav-sub-text">
-                                    ${APP.navActive ? 'Navigasi siap menerima perintah pengantaran' : 'Nyalakan Nav2 sebelum memulai misi pengantaran'}
+                                    ${APP.navActive ? (APP.navReady ? '✅ Peta, LiDAR, AMCL & Nav2 Action Server aktif — siap menerima perintah pengantaran' : 'Mohon tunggu hingga muncul notifikasi AMR Siap Mengantar') : 'Nyalakan Nav2 sebelum memulai misi pengantaran'}
                                 </div>
                             </div>
                         </div>
@@ -626,7 +627,7 @@ function renderDelivery() {
                 <div class="page-section" id="dispatch-terminal-section">
                     <div class="section-title">
                         <span>05 // PANTAUAN TERMINAL &amp; STATUS NAVIGASI</span>
-                        <span class="mono" id="dispatch-nav-status" style="font-size:0.7rem; color:var(--text-muted);">${APP.navActive ? 'NAV2 ONLINE' : 'NAV2 STANDBY'}</span>
+                        <span class="mono" id="dispatch-nav-status" style="font-size:0.7rem; color:${APP.navActive ? (APP.navReady ? 'var(--success)' : 'var(--warning)') : 'var(--text-muted)'};">${APP.navActive ? (APP.navReady ? '🟢 AMR SIAP MENGANTAR (READY)' : '⏳ MENYIAPKAN NAV2...') : 'NAV2 STANDBY'}</span>
                     </div>
                     <div class="panel" style="padding:10px;">
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; font-size:0.72rem; flex-wrap:wrap; gap:4px;">
@@ -834,18 +835,20 @@ async function toggleNavigation() {
             const res = await apiPost('/api/navigation/stop', {});
             if (res && res.success) {
                 APP.navActive = false;
-                updateNavigationUI(false);
+                APP.navReady = false;
+                updateNavigationUI(false, false);
                 showToast('Navigasi Nav2 berhasil dihentikan.', 'warning');
             } else {
                 showToast(res ? (res.error || res.message) : 'Gagal menghentikan navigasi', 'error');
             }
         } else {
-            showToast('Meluncurkan Navigasi Nav2... Tunggu ~5-8 detik.', 'info');
+            showToast('Meluncurkan Navigasi Nav2... Menyiapkan Peta, LiDAR, AMCL & Nav2 (~6-10 detik).', 'info');
             const res = await apiPost('/api/navigation/start', {});
             if (res && res.success) {
                 APP.navActive = true;
-                updateNavigationUI(true);
-                showToast(res.message || 'Navigasi Nav2 berhasil dijalankan!', 'success');
+                APP.navReady = false;
+                updateNavigationUI(true, false);
+                showToast('Navigasi diluncurkan! Menunggu verifikasi sensor & Nav2 siap...', 'info');
             } else {
                 showToast(res ? (res.error || res.message) : 'Gagal meluncurkan navigasi', 'error');
             }
@@ -860,24 +863,40 @@ async function toggleNavigation() {
     }
 }
 
-function updateNavigationUI(active) {
+function updateNavigationUI(active, ready = APP.navReady) {
     const ind = document.getElementById('nav-status-indicator');
     const text = document.getElementById('nav-status-text');
     const sub = document.getElementById('nav-sub-text');
     const btn = document.getElementById('nav-toggle-btn');
     const startDelBtn = document.getElementById('btn-start-delivery');
+    const navStatusEl = document.getElementById('dispatch-nav-status');
     if (!ind || !text || !btn) return;
 
     if (active) {
-        ind.style.background = 'var(--success)';
-        ind.style.boxShadow = '0 0 8px var(--success)';
-        text.innerHTML = 'NAV2 NAVIGATION: <span style="color:var(--success)">ONLINE (AMCL + Costmap)</span>';
-        if (sub) sub.textContent = 'Navigasi siap menerima perintah pengantaran';
+        if (ready) {
+            ind.style.background = 'var(--success)';
+            ind.style.boxShadow = '0 0 8px var(--success)';
+            text.innerHTML = 'NAV2 NAVIGATION: <span style="color:var(--success)">🟢 AMR SIAP NAVIGASI &amp; MENGANTAR!</span>';
+            if (sub) sub.textContent = '✅ Peta, LiDAR, AMCL & Nav2 Action Server aktif — siap menerima perintah pengantaran';
+            if (navStatusEl) {
+                navStatusEl.textContent = '🟢 AMR SIAP MENGANTAR (READY)';
+                navStatusEl.style.color = 'var(--success)';
+            }
+        } else {
+            ind.style.background = 'var(--warning)';
+            ind.style.boxShadow = '0 0 8px var(--warning)';
+            text.innerHTML = 'NAV2 NAVIGATION: <span style="color:var(--warning)">⏳ MENYIAPKAN SENSOR, AMCL &amp; NAV2...</span>';
+            if (sub) sub.textContent = 'Mohon tunggu hingga muncul notifikasi AMR Siap Mengantar';
+            if (navStatusEl) {
+                navStatusEl.textContent = '⏳ MENYIAPKAN NAV2...';
+                navStatusEl.style.color = 'var(--warning)';
+            }
+        }
         btn.className = 'btn btn-sm btn-danger';
         btn.innerHTML = '🛑 Stop Navigasi';
         if (startDelBtn) {
-            startDelBtn.title = 'Mulai Eksekusi Misi';
-            startDelBtn.style.opacity = '1';
+            startDelBtn.title = ready ? 'Mulai Eksekusi Misi' : 'Menunggu Nav2 siap sepenuhnya...';
+            startDelBtn.style.opacity = ready ? '1' : '0.75';
         }
     } else {
         ind.style.background = 'var(--danger)';
@@ -886,6 +905,10 @@ function updateNavigationUI(active) {
         if (sub) sub.textContent = 'Nyalakan Nav2 sebelum memulai misi pengantaran';
         btn.className = 'btn btn-sm btn-success';
         btn.innerHTML = '🚀 Jalankan Navigasi';
+        if (navStatusEl) {
+            navStatusEl.textContent = 'NAV2 STANDBY';
+            navStatusEl.style.color = 'var(--text-muted)';
+        }
         if (startDelBtn) {
             startDelBtn.title = 'Nyalakan navigasi terlebih dahulu';
         }
@@ -1396,8 +1419,16 @@ function updateDispatchLogs(data) {
     const navStatusEl = document.getElementById('dispatch-nav-status');
 
     if (navStatusEl) {
-        navStatusEl.textContent = data.nav_active ? 'NAV2 ONLINE (ACTIVE)' : 'NAV2 STANDBY';
-        navStatusEl.style.color = data.nav_active ? 'var(--success)' : 'var(--text-muted)';
+        if (!data.nav_active) {
+            navStatusEl.textContent = 'NAV2 STANDBY';
+            navStatusEl.style.color = 'var(--text-muted)';
+        } else if (data.nav_ready) {
+            navStatusEl.textContent = '🟢 AMR SIAP MENGANTAR (READY)';
+            navStatusEl.style.color = 'var(--success)';
+        } else {
+            navStatusEl.textContent = '⏳ MENYIAPKAN NAV2...';
+            navStatusEl.style.color = 'var(--warning)';
+        }
     }
 
     if (phaseEl && data.delivery) {
@@ -4064,8 +4095,13 @@ async function globalStatusPoll() {
         }
 
         if (data.hasOwnProperty('nav_active')) {
+            const wasReady = APP.navReady;
             APP.navActive = !!data.nav_active;
-            updateNavigationUI(APP.navActive);
+            APP.navReady = APP.navActive && !!data.nav_ready;
+            updateNavigationUI(APP.navActive, APP.navReady);
+            if (!wasReady && APP.navReady) {
+                showToast('🟢 AMR Siap untuk Navigasi & Mengantar! Semua sensor, AMCL, dan Nav2 telah aktif.', 'success');
+            }
         }
 
         if (data.hasOwnProperty('camera_active')) {
