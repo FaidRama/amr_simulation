@@ -264,7 +264,7 @@ class ArduinoBridgeNode(Node):
         qx, qy, qz, qw = euler_to_quaternion(self.yaw)
         stamp = now.to_msg()
 
-        future_stamp = (now + rclpy.duration.Duration(seconds=0.10)).to_msg()
+        future_stamp = (now + rclpy.duration.Duration(seconds=0.05)).to_msg()
 
         # Broadcast TF: odom -> base_link
         if self.publish_tf:

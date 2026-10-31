@@ -135,7 +135,18 @@ def generate_launch_description():
         condition=UnlessCondition(LaunchConfiguration('use_arduino'))
     )
 
-    # 5. Adaptive Velocity & Nav2 Bootstrap Node (dijalankan sejak t=0s agar TF map->odom langsung tersedia)
+    # 5. Pembersihan otomatis proses Nav2 yatim (zombie) dari sesi sebelumnya pada t=0.0s
+    # Mencegah duplikasi action server (/compute_path_to_pose, /follow_path) yang memicu
+    # "send_goal failed" dan crash exit code -11 pada bt_navigator saat diberi 2D Goal Pose.
+    cleanup_stale_nav2 = ExecuteProcess(
+        cmd=[
+            '/bin/bash', '-c',
+            'pkill -9 -f "(bt_navigator|planner_server|controller_server|recoveries_server|waypoint_follower|map_server|amcl|lifecycle_manager)" 2>/dev/null; true'
+        ],
+        output='log'
+    )
+
+    # 5B. Adaptive Velocity & Nav2 Bootstrap Node (dijalankan sejak t=0s agar TF map->odom langsung tersedia)
     start_adaptive_velocity = Node(
         package='amr_simulation',
         executable='adaptive_velocity_node.py',
@@ -200,6 +211,7 @@ def generate_launch_description():
         autostart_arg,
         use_arduino_arg,
         rviz_arg,
+        cleanup_stale_nav2,
         start_rplidar,
         start_laser_filter,
         start_arduino_bridge,
