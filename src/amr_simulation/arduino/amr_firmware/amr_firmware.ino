@@ -284,12 +284,12 @@ void loop() {
     long tot_R = totalPulsa_R;
     interrupts();
 
-    // Hitung RPM Aktual dengan Low-Pass Filter EMA Halus (alpha=0.35 meredam lonjakan & hentakan awal)
+    // Hitung RPM Aktual dengan Low-Pass Filter EMA Halus (alpha=0.25 meredam lonjakan & hentakan awal)
     float rpm_raw_L = ((float)dC_L / CPR_WHEEL) * (60.0 / DT);
-    rpm_L = (0.35 * rpm_raw_L) + (0.65 * rpm_L);
+    rpm_L = (0.25 * rpm_raw_L) + (0.75 * rpm_L);
 
     float rpm_raw_R = ((float)dC_R / CPR_WHEEL) * (60.0 / DT);
-    rpm_R = (0.35 * rpm_raw_R) + (0.65 * rpm_R);
+    rpm_R = (0.25 * rpm_raw_R) + (0.75 * rpm_R);
 
     // Hitung Odometri Lokal
     float ds_L = ((float)dC_L / CPR_WHEEL) * (PI * WHEEL_DIAMETER);
