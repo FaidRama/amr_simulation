@@ -34,6 +34,8 @@ def generate_launch_description():
             'auto_launch_driver': True,
             'quiet': True,  # Nonaktifkan spam log telemetri berkala (terminal bersih)
         }],
+        respawn=True,
+        respawn_delay=2.0,
     )
 
     # 1B. Node Kamera USB (Streaming Ringan JPEG untuk Pantau Jarak Jauh)
@@ -62,6 +64,8 @@ def generate_launch_description():
             'base_frame': 'base_link',
             'publish_tf': True
         }],
+        respawn=True,
+        respawn_delay=2.0,
         condition=IfCondition(LaunchConfiguration('use_arduino'))
     )
 
@@ -70,25 +74,33 @@ def generate_launch_description():
         package='tf2_ros',
         executable='static_transform_publisher',
         arguments=['0', '0', '0', '0', '0', '0', 'odom', 'base_link'],
+        respawn=True,
+        respawn_delay=1.0,
         condition=UnlessCondition(LaunchConfiguration('use_arduino'))
     )
 
     tf_base_to_laser = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['0', '0', '0', '3.14159', '0', '0', 'base_link', 'laser']
+        arguments=['0', '0', '0', '3.14159', '0', '0', 'base_link', 'laser'],
+        respawn=True,
+        respawn_delay=1.0
     )
 
     tf_base_to_footprint = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
+        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint'],
+        respawn=True,
+        respawn_delay=1.0
     )
 
     tf_base_to_camera = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         arguments=['0.2', '0', '0.15', '0', '0', '0', 'base_link', 'camera_link'],
+        respawn=True,
+        respawn_delay=1.0,
         condition=IfCondition(LaunchConfiguration('camera'))
     )
 
@@ -101,7 +113,9 @@ def generate_launch_description():
         parameters=[{
             'min_range': 0.34,
             'max_range': 12.0
-        }]
+        }],
+        respawn=True,
+        respawn_delay=2.0
     )
 
     # 4. Otak SLAM Toolbox
