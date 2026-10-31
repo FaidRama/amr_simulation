@@ -284,11 +284,15 @@ void loop() {
     long tot_R = totalPulsa_R;
     interrupts();
 
-    // Hitung RPM Aktual dengan Low-Pass Filter EMA Halus (alpha=0.25 meredam lonjakan & hentakan awal)
+    // 1. Umpan balik cepat (tetap 0.80) khusus untuk PID agar bebas phase-lag & tidak agresif
+    static float rpm_ctrl_L = 0.0, rpm_ctrl_R = 0.0;
     float rpm_raw_L = ((float)dC_L / CPR_WHEEL) * (60.0 / DT);
-    rpm_L = (0.25 * rpm_raw_L) + (0.75 * rpm_L);
-
     float rpm_raw_R = ((float)dC_R / CPR_WHEEL) * (60.0 / DT);
+    rpm_ctrl_L = (0.80 * rpm_raw_L) + (0.20 * rpm_ctrl_L);
+    rpm_ctrl_R = (0.80 * rpm_raw_R) + (0.20 * rpm_ctrl_R);
+
+    // 2. Filter peredam overshoot pembacaan RPM (semakin kecil angka pertama, semakin kecil overshoot)
+    rpm_L = (0.25 * rpm_raw_L) + (0.75 * rpm_L);
     rpm_R = (0.25 * rpm_raw_R) + (0.75 * rpm_R);
 
     // Hitung Odometri Lokal
@@ -353,14 +357,23 @@ void loop() {
       driveMotors(0, 0);
     }
 
-    // Perhitungan Loop PID
+    // Perhitungan Loop PID (Menggunakan umpan balik cepat rpm_ctrl & soft-ramp 180 RPM/s)
+    static float sp_ramp_L = 0.0, sp_ramp_R = 0.0;
+    const float step_ramp = 130.0 * DT; // 2.6 RPM per 20ms (Halus & tidak agresif)
+
     // Motor Kiri
     if (fabs(setpoint_L) < 0.05) {
+      sp_ramp_L = 0.0;
+      rpm_ctrl_L = 0.0;
+      rpm_L = 0.0;
       pwm_L = 0.0;
       integral_L = 0.0;
       prev_error_L = 0.0;
     } else {
-      error_L = setpoint_L - rpm_L;
+      if (sp_ramp_L < setpoint_L) sp_ramp_L = min(setpoint_L, sp_ramp_L + step_ramp);
+      else if (sp_ramp_L > setpoint_L) sp_ramp_L = max(setpoint_L, sp_ramp_L - step_ramp);
+
+      error_L = sp_ramp_L - rpm_ctrl_L;
       integral_L = constrain(integral_L + (KI_L * error_L * DT), -200.0, 200.0);
       pwm_L = constrain((KP_L * error_L) + integral_L +
                             (KD_L * (error_L - prev_error_L) / DT),
@@ -370,12 +383,18 @@ void loop() {
 
     // Motor Kanan
     if (fabs(setpoint_R) < 0.05) {
+      sp_ramp_R = 0.0;
+      rpm_ctrl_R = 0.0;
+      rpm_R = 0.0;
       pwm_R = 0.0;
       integral_R = 0.0;
       prev_error_R = 0.0;
     } else {
-      error_R = setpoint_R - rpm_R;
-      integral_R = constrain(integral_R + (KI_R * error_R * DT), -200.0,200.0);
+      if (sp_ramp_R < setpoint_R) sp_ramp_R = min(setpoint_R, sp_ramp_R + step_ramp);
+      else if (sp_ramp_R > setpoint_R) sp_ramp_R = max(setpoint_R, sp_ramp_R - step_ramp);
+
+      error_R = sp_ramp_R - rpm_ctrl_R;
+      integral_R = constrain(integral_R + (KI_R * error_R * DT), -200.0, 200.0);
       pwm_R = constrain((KP_R * error_R) + integral_R +
                             (KD_R * (error_R - prev_error_R) / DT),
                         -255.0, 255.0);
