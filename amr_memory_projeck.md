@@ -183,42 +183,38 @@ Aborted (core dumped)
 
 ### Gejala:
 ```text
-[bt_navigator]: Action server failed while executing action callback: "send_goal failed"
-[bt_navigator]: [navigate_to_pose] [ActionServer] Aborting handle.
+[bt_navigator-12] [INFO] [1793459927.853122621] [bt_navigator]: Begin navigating from current location to (0.84, -0.27)
+[controller_server-9] [INFO] [1793459928.025443938] [controller_server]: Received a goal, begin computing control effort.
+[bt_navigator-12] [ERROR] [1793459929.062106949] [bt_navigator]: Action server failed while executing action callback: "send_goal failed"
+[bt_navigator-12] [WARN] [1793459929.062409364] [bt_navigator]: [navigate_to_pose] [ActionServer] Aborting handle.
 ```
-Terjadi sesaat setelah mengklik `2D Goal Pose` di RViz atau dashboard, terutama setelah baru saja mengatur `2D Pose Estimate`.
+Robot sempat bergerak selama **1 detik pertama**, lalu tepat pada detik ke-1 langsung muncul `"send_goal failed"` dan `Aborting handle`.
 
-### Akar Penyebab:
-1. **`default_server_timeout` Terlalu Ketat (Default Foxy = 20 ms):**
-   - Di Nav2 Foxy (`bt_action_node.hpp`), kode berikut dieksekusi saat mengirim *goal* ke sub-action server (`planner_server` atau `controller_server`):
+### Akar Penyebab (Dari Kode Sumber C++ `foxy-devel` Nav2):
+1. **`server_timeout` di-Hardcode 10 ms di `bt_navigator.cpp` (ROS 2 Foxy):**
+   - Di branch `foxy-devel` (`nav2_bt_navigator/src/bt_navigator.cpp` baris 144), tertulis:
      ```cpp
-     if (rclcpp::spin_until_future_complete(node_, future_goal_handle, server_timeout_) != SUCCESS) {
-       goal_handle_.reset();
-       throw std::runtime_error("send_goal failed");
-     }
+     blackboard_->set<std::chrono::milliseconds>("server_timeout", std::chrono::milliseconds(10));
      ```
-   - Batas tunggu konfirmasi (*handshake*) default hanya **20 milidetik**.
-   - Pada Jetson saat CPU sibuk (misal tepat setelah `2D Pose Estimate` diklik), delay penjadwalan 25 ms saja sudah menyebabkan client BT menganggap server gagal membalas dan langsung melempar `std::runtime_error("send_goal failed")`.
-2. **Kebijakan Area Tak Terpetakan (`allow_unknown: false`):**
-   - Untuk AMR indoor pengantar barang, **`allow_unknown: false` WAJIB dipertahankan**. Ini menjamin robot dilarang keras merencanakan lintasan menembus area abu-abu (*unknown/unmapped*), seperti tangga terbuka, ruangan terlarang, atau luar gedung.
-   - Jika titik `2D Nav Goal` diklik di luar area putih atau partikel AMCL menyentuh sel abu-abu, `planner_server` akan secara aman menolak rute (*safe goal rejection*) tanpa membuat sistem *crash*.
+   - Berbeda dengan ROS 2 Humble/Iron, `bt_navigator` di ROS 2 Foxy **TIDAK membaca parameter `default_server_timeout` maupun `server_timeout` dari `nav2_params.yaml`**! Nilainya dikunci keras (*hardcoded*) sebesar **10 milidetik** di Blackboard C++.
+2. **Kenapa Gagal Tepat 1 Detik Setelah Jalan (`28.025` -> `29.062`)?**
+   - Saat *goal* pertama dikirim (`28.025`), `controller_server` sedang *idle* sehingga membalas dalam < 10 ms dan robot mulai berjalan.
+   - Tepat **1.0 detik kemudian**, `<RateController hz="1.0">` di XML bawaan Nav2 memicu *replanning* (`ComputePathToPose` menghitung ulang jalur) dan memberi tahu `FollowPath` (`path_updated = true`) untuk mengirim jalur baru ke `controller_server`.
+   - Saat itu, `controller_server` sedang **sibuk di tengah loop `computeControl()`** (mengevaluasi ratusan lintasan DWB yang memakan waktu ~40–60 ms di CPU Jetson).
+   - Karena `FollowPath` hanya menunggu **10 ms** (`server_timeout_`), fungsi `spin_until_future_complete(node_, future_goal_handle, 10ms)` langsung *timeout* dan melempar `throw std::runtime_error("send_goal failed")`!
+3. **Cara Satu-Satunya Mengubah `server_timeout_` di ROS 2 Foxy (`bt_action_node.hpp` baris 52):**
+   - Di konstruktor `BtActionNode` dan `BtServiceNode` Foxy:
+     ```cpp
+     server_timeout_ = config().blackboard->template get<std::chrono::milliseconds>("server_timeout");
+     getInput<std::chrono::milliseconds>("server_timeout", server_timeout_);
+     ```
+   - Artinya, nilai 10 ms hanya bisa ditimpa melalui atribut XML `server_timeout="2000"` langsung pada setiap tag di file Behavior Tree XML!
 
-### Solusi Permanen di [`nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml):
-1. **Tingkatkan Timeout di `bt_navigator`:**
-   ```yaml
-   bt_navigator:
-     ros__parameters:
-       ...
-       default_server_timeout: 1000   # Menaikkan batas tunggu handshake dari 20ms ke 1000ms (Mencegah "send_goal failed")
-   ```
-2. **Pertahankan `allow_unknown: false` di `planner_server` untuk Keamanan Indoor:**
-   ```yaml
-   planner_server:
-     ros__parameters:
-       GridBased:
-         allow_unknown: false        # Keamanan indoor: dilarang lewat area yang belum dipetakan
-   ```
-3. **SOP Operasional:**
-   - Setelah mengklik `2D Pose Estimate`, tunggu 1–2 detik hingga cloud partikel AMCL menyatu (terlihat di log: `Setting pose...`).
-   - Pastikan klik `2D Nav Goal` berada di atas area bebas (warna putih bersih di peta).
+### Solusi Permanen:
+1. **File Custom Behavior Tree XML ([`navigate_w_replanning_and_recovery.xml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/navigate_w_replanning_and_recovery.xml)):**
+   - Dibuat di `src/amr_simulation/config/navigate_w_replanning_and_recovery.xml` dan dimuat otomatis oleh [`real_navigation.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/real_navigation.launch.py).
+   - Seluruh node action & service (`ComputePathToPose`, `FollowPath`, `ClearEntireCostmap`, `Spin`, `Wait`) diberi atribut **`server_timeout="2000"`** (2000 ms = 2 detik).
+   - `<RateController hz="0.5">` diatur ke **0.5 Hz** (replan tiap 2 detik, bukan tiap 1 detik) agar tidak membebani CPU dan tidak mem-preempt `controller_server` secara berlebihan.
+2. **Keamanan Indoor di [`nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml):**
+   - **`allow_unknown: false`** tetap dipertahankan di `planner_server` agar robot dilarang keras melewati area abu-abu (*unmapped*).
 

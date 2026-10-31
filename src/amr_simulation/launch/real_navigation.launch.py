@@ -85,9 +85,16 @@ def generate_launch_description():
     src_params_path = os.path.join(os.getcwd(), 'src', 'amr_simulation', 'config', 'nav2_params.yaml')
     default_params_path = src_params_path if os.path.exists(src_params_path) else os.path.join(pkg_amr, 'config', 'nav2_params.yaml')
     default_rviz_config = os.path.join(pkg_amr, 'rviz', 'slam_config.rviz')
-    default_bt_xml_path = os.path.join(
-        pkg_bt_navigator, 'behavior_trees', 'navigate_w_replanning_and_recovery.xml'
-    )
+    src_bt_xml_path = os.path.join(os.getcwd(), 'src', 'amr_simulation', 'config', 'navigate_w_replanning_and_recovery.xml')
+    pkg_bt_xml_path = os.path.join(pkg_amr, 'config', 'navigate_w_replanning_and_recovery.xml')
+    if os.path.exists(src_bt_xml_path):
+        default_bt_xml_path = src_bt_xml_path
+    elif os.path.exists(pkg_bt_xml_path):
+        default_bt_xml_path = pkg_bt_xml_path
+    else:
+        default_bt_xml_path = os.path.join(
+            pkg_bt_navigator, 'behavior_trees', 'navigate_w_replanning_and_recovery.xml'
+        )
 
     # Launch Arguments
     map_arg = DeclareLaunchArgument(
