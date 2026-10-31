@@ -34,11 +34,13 @@ class RPLidarBridgeNode(Node):
         self.declare_parameter('serial_baudrate', 115200)
         self.declare_parameter('frame_id', 'laser')
         self.declare_parameter('auto_launch_driver', True)
+        self.declare_parameter('quiet', False)
 
         self.port = str(self.get_parameter('serial_port').value)
         self.baud = int(self.get_parameter('serial_baudrate').value)
         self.frame_id = str(self.get_parameter('frame_id').value)
         self.auto_launch = bool(self.get_parameter('auto_launch_driver').value)
+        self.quiet = bool(self.get_parameter('quiet').value)
 
         self.get_logger().info(f"🔍 Memeriksa perangkat RPLiDAR di {self.port} ({self.baud} baud)...")
 
@@ -122,8 +124,8 @@ class RPLidarBridgeNode(Node):
 
         self.last_scan_time = now
 
-        # Telemetri diagnostik setiap 2.5 detik
-        if now - self.last_diag_time >= 2.5:
+        # Telemetri diagnostik setiap 2.5 detik (hanya ditampilkan jika mode quiet=False)
+        if not self.quiet and (now - self.last_diag_time >= 2.5):
             dt = now - self.last_diag_time
             hz = self.scan_count / dt
             self.scan_count = 0

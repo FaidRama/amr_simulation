@@ -131,6 +131,23 @@ def get_workspace_roots():
     return roots
 
 
+def get_ros_launch_prefix():
+    """Menghasilkan baris setup environment ROS (Domain ID 0, Localhost 0, source workspace)."""
+    ws_roots = get_workspace_roots()
+    domain_id = os.environ.get('ROS_DOMAIN_ID', '0')
+    localhost_only = os.environ.get('ROS_LOCALHOST_ONLY', '0')
+    parts = [
+        f'export ROS_DOMAIN_ID={domain_id}',
+        f'export ROS_LOCALHOST_ONLY={localhost_only}',
+        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
+    ]
+    for wr in reversed(ws_roots):
+        setup_bash = os.path.join(wr, 'install', 'setup.bash')
+        if os.path.exists(setup_bash):
+            parts.append(f'source "{setup_bash}"')
+    return parts
+
+
 def get_maps_directories():
     """Dapatkan daftar direktori maps/ dari source workspace dan installed share."""
     dirs = []
@@ -1441,16 +1458,7 @@ def api_mapping_start():
     )
     time.sleep(0.8)
 
-    ws_roots = get_workspace_roots()
-    domain_id = os.environ.get('ROS_DOMAIN_ID', '1')
-    setup_parts = [
-        f'export ROS_DOMAIN_ID={domain_id}',
-        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
-    ]
-    for wr in reversed(ws_roots):
-        setup_bash = os.path.join(wr, 'install', 'setup.bash')
-        if os.path.exists(setup_bash):
-            setup_parts.append(f'source "{setup_bash}"')
+    setup_parts = get_ros_launch_prefix()
     setup_parts.append('exec ros2 launch amr_simulation real_mapping.launch.py')
     full_cmd = ' && '.join(setup_parts)
 
@@ -1512,16 +1520,7 @@ def api_arduino_start():
             'message': 'Arduino Bridge sudah aktif!'
         })
 
-    ws_roots = get_workspace_roots()
-    domain_id = os.environ.get('ROS_DOMAIN_ID', '1')
-    setup_parts = [
-        f'export ROS_DOMAIN_ID={domain_id}',
-        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
-    ]
-    for wr in reversed(ws_roots):
-        setup_bash = os.path.join(wr, 'install', 'setup.bash')
-        if os.path.exists(setup_bash):
-            setup_parts.append(f'source "{setup_bash}"')
+    setup_parts = get_ros_launch_prefix()
     setup_parts.append('exec ros2 run amr_simulation arduino_bridge.py')
     full_cmd = ' && '.join(setup_parts)
 
@@ -1582,16 +1581,8 @@ def api_navigation_start():
     stop_arduino_process()
     time.sleep(0.8)
 
+    setup_parts = get_ros_launch_prefix()
     ws_roots = get_workspace_roots()
-    domain_id = os.environ.get('ROS_DOMAIN_ID', '1')
-    setup_parts = [
-        f'export ROS_DOMAIN_ID={domain_id}',
-        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
-    ]
-    for wr in reversed(ws_roots):
-        setup_bash = os.path.join(wr, 'install', 'setup.bash')
-        if os.path.exists(setup_bash):
-            setup_parts.append(f'source "{setup_bash}"')
 
     # Cari file peta aktif
     map_to_use = None
@@ -2563,16 +2554,8 @@ def api_camera_start():
             'message': 'Kamera sudah aktif!'
         })
 
+    setup_parts = get_ros_launch_prefix()
     ws_roots = get_workspace_roots()
-    domain_id = os.environ.get('ROS_DOMAIN_ID', '1')
-    setup_parts = [
-        f'export ROS_DOMAIN_ID={domain_id}',
-        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
-    ]
-    for wr in reversed(ws_roots):
-        setup_bash = os.path.join(wr, 'install', 'setup.bash')
-        if os.path.exists(setup_bash):
-            setup_parts.append(f'source "{setup_bash}"')
 
     cam_script = None
     for wr in ws_roots:
@@ -2646,16 +2629,8 @@ def api_human_start():
         api_camera_start()
         time.sleep(1.0)
 
+    setup_parts = get_ros_launch_prefix()
     ws_roots = get_workspace_roots()
-    domain_id = os.environ.get('ROS_DOMAIN_ID', '1')
-    setup_parts = [
-        f'export ROS_DOMAIN_ID={domain_id}',
-        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
-    ]
-    for wr in reversed(ws_roots):
-        setup_bash = os.path.join(wr, 'install', 'setup.bash')
-        if os.path.exists(setup_bash):
-            setup_parts.append(f'source "{setup_bash}"')
 
     human_script = None
     for wr in ws_roots:
@@ -2753,6 +2728,11 @@ def main(args=None):
     print('='*60)
     print('  AMR DELIVERY DASHBOARD SERVER')
     print('  Memulai Flask + ROS2...')
+    if 'ROS_DOMAIN_ID' not in os.environ:
+        os.environ['ROS_DOMAIN_ID'] = '0'
+    if 'ROS_LOCALHOST_ONLY' not in os.environ:
+        os.environ['ROS_LOCALHOST_ONLY'] = '0'
+    print(f'  [ROS ENV] Domain: {os.environ.get("ROS_DOMAIN_ID")} | Localhost: {os.environ.get("ROS_LOCALHOST_ONLY")}')
     print('='*60)
     
     # Inisialisasi ROS2 terlebih dahulu agar bisa membaca parameter initial_mode
