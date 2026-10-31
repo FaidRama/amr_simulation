@@ -177,3 +177,39 @@ Aborted (core dumped)
    - `sim_time` disesuaikan dari `1.4` ke **`1.2`**.
    - Beban evaluasi lintasan berkurang dari 500 menjadi **252 lintasan (turun 50%!)**, membuat CPU Jetson longgar dan `controller_server` selalu membalas `bt_navigator` tepat waktu.
 
+---
+
+## 10. Mengatasi `send_goal failed` & Goal Aborted di `bt_navigator` (ROS 2 Foxy)
+
+### Gejala:
+```text
+[bt_navigator]: Action server failed while executing action callback: "send_goal failed"
+[bt_navigator]: [navigate_to_pose] [ActionServer] Aborting handle.
+```
+Terjadi sesaat setelah mengklik `2D Goal Pose` di RViz atau dashboard, terutama setelah baru saja mengatur `2D Pose Estimate`.
+
+### Akar Penyebab:
+1. **`default_server_timeout` Terlalu Ketat (Default Foxy = 20 ms):**
+   - Di Nav2 Foxy, saat `bt_navigator` memanggil sub-action server (`planner_server`, `controller_server`), batas tunggu konfirmasi (*goal acknowledgment*) secara default hanya **20 milidetik**.
+   - Pada Jetson yang sedang menjalankan AMCL + RPLiDAR + DDS di atas Wi-Fi, delay penjadwalan CPU 25 ms saja sudah menyebabkan client BT menganggap server macet dan melempar exception C++ `send_goal failed`.
+2. **`allow_unknown: false` pada `NavfnPlanner`:**
+   - Jika robot atau titik goal berada di dekat batas sel abu-abu (*unknown space*) saat AMCL baru saja diatur, perencana `NavfnPlanner` langsung menolak rencana jalur dan mengembalikan penolakan tujuan (*reject goal*), memicu pembatalan navigasi seketika.
+
+### Solusi Permanen di [`nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml):
+1. **Tingkatkan Timeout di `bt_navigator`:**
+   ```yaml
+   bt_navigator:
+     ros__parameters:
+       ...
+       default_server_timeout: 1000   # Menaikkan batas tunggu handshake dari 20ms ke 1000ms
+   ```
+2. **Aktifkan `allow_unknown: true` di `planner_server`:**
+   ```yaml
+   planner_server:
+     ros__parameters:
+       GridBased:
+         allow_unknown: true         # Izinkan pathfinding melintasi area yang belum terpetakan sempurna
+   ```
+3. **SOP Operasional:**
+   - Setelah mengklik `2D Pose Estimate`, tunggu 1–2 detik hingga cloud partikel AMCL menyatu (terlihat di log: `Setting pose...`), baru kemudian kirimkan `2D Nav Goal`.
+
