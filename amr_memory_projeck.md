@@ -128,26 +128,38 @@ Output yang muncul:
 
 ---
 
-## 📌 8. Optimasi RViz2 (Penyebab Crash `Cannot create GL vertex buffer` & Solusinya)
+## 📌 8. Optimasi RViz2 (Penyebab Crash `Cannot create GL vertex buffer`, `Message Filter dropping message`, & Laptop Non-NVIDIA Stuck Loading)
 
 ### Error yang Terjadi:
-```
+```text
+[rviz]: Message Filter dropping message: frame 'laser' at time ... for reason 'Unknown'
+[rviz]: Message Filter dropping message: frame 'odom' at time ... for reason 'Unknown'
 [rviz2]: InternalErrorException: Cannot create GL vertex buffer in GLHardwareVertexBuffer::GLHardwareVertexBuffer
 terminate called after throwing an instance of 'Ogre::InternalErrorException'
 Aborted (core dumped)
 ```
 
-### Akar Masalah:
-1. **Bukan karena CPU lemah**, melainkan **memory leak buffer OpenGL di plugin Map RViz2 Foxy**.
-2. Di [`nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml#L200), parameter `always_send_full_costmap: True`.
-3. Namun di file `slam_config.rviz`, display *Local Costmap* tetap mengaktifkan `Update Topic: /local_costmap/costmap_updates`.
-4. Menerima full costmap sekaligus costmap update di OpenGL membuat OGRE terus-menerus mengalokasikan vertex buffer VBO baru tanpa melepaskan yang lama sampai GPU VRAM / OpenGL context kehabisan memori (*out of buffer*).
+### Akar Masalah Sebenarnya (Dari Kode Sumber C++ `rviz_default_plugins` ROS 2 Foxy — `ros2/rviz#693` & `ros2/rviz#787`):
+1. **Bukan karena kehabisan VRAM GPU**, melainkan **pemanggilan OpenGL (`glGenBuffersARB`) dari Background Thread `tf2` yang tidak memiliki OpenGL Context!**
+   - Di OpenGL, fungsi `glGenBuffersARB(1, &mBufferId)` akan selalu mengembalikan `0` (`!mBufferId` $\rightarrow$ `Cannot create GL vertex buffer`) jika dipanggil di luar *main GUI thread* Qt.
+   - Di ROS 2 Foxy, plugin `PolygonDisplay` (`polygon_display.cpp` baris 143) memanggil `manual_object_->begin()` & `manual_object_->end()` (yang membuat VBO OpenGL) **secara langsung di dalam callback `processMessage()`**.
+   - Ketika `Fixed Frame` di RViz adalah `map`, sedangkan display **`Robot Footprint` (`Polygon`)** berlangganan ke `/local_costmap/published_footprint` yang ber-frame **`odom`**, `tf2_ros::MessageFilter` harus menunggu transformasi `map -> odom` tiba lewat Wi-Fi.
+   - Saat TF `map -> odom` tiba di *background thread* milik `tf2_ros::Buffer`, `MessageFilter` memanggil `PolygonDisplay::processMessage()` **dari background thread `tf2` tersebut** (bukan main thread Qt) $\rightarrow$ `glGenBuffersARB` gagal membuat buffer $\rightarrow$ RViz2 langsung *crash* (`Aborted (core dumped)`).
+   - Sebaliknya, jika topik memiliki `frame_id: map` (sama dengan `Fixed Frame: map`, seperti `/global_costmap/published_footprint` atau `/plan`), fungsi `tf2::BufferCore::canTransform("map", "map")` langsung *short-circuit* (`return true`) di main thread Qt tanpa pernah berpindah ke background thread `tf2`.
+2. **Kenapa Muncul `Message Filter dropping message: frame 'laser' / 'odom'` & Laptop Teman (Tanpa NVIDIA) Stuck Loading?**
+   - Jam sistem (*system clock*) antara Jetson dan Laptop memiliki selisih beberapa detik lewat Wi-Fi, sehingga `MessageFilter` yang memiliki antrean pendek dengan QoS `Reliable` membuang pesan `/scan_filtered` (`frame 'laser'`) dan `/local_costmap/published_footprint` (`frame 'odom'`).
+   - Selain itu, penggunaan `Reliability Policy: Reliable` pada `/scan_filtered` dan `Durability Policy: Transient Local` pada `/local_costmap/costmap` dengan `Depth: 5` membuat Fast-RTPS menahan paket retransmisi via Wi-Fi dan membuat RViz2 di laptop dengan GPU terintegrasi (Intel UHD/Iris) *hang* ("loading terus") saat inisialisasi framebuffer beresolusi besar (`1848x1016`).
 
 ### Solusi Permanen di [`slam_config.rviz`](file:///home/faid/Documents/amr_ws/src/amr_simulation/rviz/slam_config.rviz):
-1. **Ubah `Update Topic` pada Local Costmap menjadi `/none`** (karena Nav2 sudah mengirim full costmap secara utuh, tidak perlu update incremental).
-2. **Frame Rate diturunkan ke `8` FPS** (memotong 60% pemakaian VBO/VRAM).
-3. **Display `TF` dinonaktifkan secara default**.
-4. **Hasil**: RViz berjalan stabil, tidak bocor memori, dan tidak akan pernah terkena `Cannot create GL vertex buffer` lagi.
+1. **Matikan `Robot Footprint` (`Enabled: false`) & Pindahkan Topiknya ke `/global_costmap/published_footprint` (`frame_id: map`)**:
+   - Menghilangkan total pemicu `PolygonDisplay` di background thread `tf2` (`frame 'odom'`) sehingga crash `Cannot create GL vertex buffer` berhenti 100%.
+2. **Ubah QoS `/scan_filtered` & `/local_costmap/costmap` ke `Best Effort` + `Volatile` + `Depth: 1`**:
+   - Mencegah tumpukan antrean `MessageFilter` saat terjadi *packet drop* Wi-Fi dan menghilangkan *freeze* saat startup RViz2.
+3. **Perkecil `Window Geometry` (`1280x720`) & `Frame Rate: 8` FPS**:
+   - Sangat ringan untuk laptop tanpa GPU diskrit (Intel iGPU).
+4. **Tips Tambahan untuk Laptop Non-NVIDIA (Intel iGPU) jika Ogre 1.12 Hang saat Startup**:
+   - Jalankan dengan: `MESA_GL_VERSION_OVERRIDE=3.3 rviz2 -d src/amr_simulation/rviz/slam_config.rviz`
+   - Atau gunakan **AMR Web Dashboard** (`http://<IP_JETSON>:8080`) di browser yang sudah menampilkan peta, posisi robot real-time, serta tombol **Set Initial Pose** & **Send Goal** tanpa perlu membuka RViz2 sama sekali!
 
 ---
 
