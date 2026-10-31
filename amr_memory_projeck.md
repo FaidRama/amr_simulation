@@ -190,10 +190,18 @@ Terjadi sesaat setelah mengklik `2D Goal Pose` di RViz atau dashboard, terutama 
 
 ### Akar Penyebab:
 1. **`default_server_timeout` Terlalu Ketat (Default Foxy = 20 ms):**
-   - Di Nav2 Foxy, saat `bt_navigator` memanggil sub-action server (`planner_server`, `controller_server`), batas tunggu konfirmasi (*goal acknowledgment*) secara default hanya **20 milidetik**.
-   - Pada Jetson yang sedang menjalankan AMCL + RPLiDAR + DDS di atas Wi-Fi, delay penjadwalan CPU 25 ms saja sudah menyebabkan client BT menganggap server macet dan melempar exception C++ `send_goal failed`.
-2. **`allow_unknown: false` pada `NavfnPlanner`:**
-   - Jika robot atau titik goal berada di dekat batas sel abu-abu (*unknown space*) saat AMCL baru saja diatur, perencana `NavfnPlanner` langsung menolak rencana jalur dan mengembalikan penolakan tujuan (*reject goal*), memicu pembatalan navigasi seketika.
+   - Di Nav2 Foxy (`bt_action_node.hpp`), kode berikut dieksekusi saat mengirim *goal* ke sub-action server (`planner_server` atau `controller_server`):
+     ```cpp
+     if (rclcpp::spin_until_future_complete(node_, future_goal_handle, server_timeout_) != SUCCESS) {
+       goal_handle_.reset();
+       throw std::runtime_error("send_goal failed");
+     }
+     ```
+   - Batas tunggu konfirmasi (*handshake*) default hanya **20 milidetik**.
+   - Pada Jetson saat CPU sibuk (misal tepat setelah `2D Pose Estimate` diklik), delay penjadwalan 25 ms saja sudah menyebabkan client BT menganggap server gagal membalas dan langsung melempar `std::runtime_error("send_goal failed")`.
+2. **Kebijakan Area Tak Terpetakan (`allow_unknown: false`):**
+   - Untuk AMR indoor pengantar barang, **`allow_unknown: false` WAJIB dipertahankan**. Ini menjamin robot dilarang keras merencanakan lintasan menembus area abu-abu (*unknown/unmapped*), seperti tangga terbuka, ruangan terlarang, atau luar gedung.
+   - Jika titik `2D Nav Goal` diklik di luar area putih atau partikel AMCL menyentuh sel abu-abu, `planner_server` akan secara aman menolak rute (*safe goal rejection*) tanpa membuat sistem *crash*.
 
 ### Solusi Permanen di [`nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml):
 1. **Tingkatkan Timeout di `bt_navigator`:**
@@ -201,15 +209,16 @@ Terjadi sesaat setelah mengklik `2D Goal Pose` di RViz atau dashboard, terutama 
    bt_navigator:
      ros__parameters:
        ...
-       default_server_timeout: 1000   # Menaikkan batas tunggu handshake dari 20ms ke 1000ms
+       default_server_timeout: 1000   # Menaikkan batas tunggu handshake dari 20ms ke 1000ms (Mencegah "send_goal failed")
    ```
-2. **Aktifkan `allow_unknown: true` di `planner_server`:**
+2. **Pertahankan `allow_unknown: false` di `planner_server` untuk Keamanan Indoor:**
    ```yaml
    planner_server:
      ros__parameters:
        GridBased:
-         allow_unknown: true         # Izinkan pathfinding melintasi area yang belum terpetakan sempurna
+         allow_unknown: false        # Keamanan indoor: dilarang lewat area yang belum dipetakan
    ```
 3. **SOP Operasional:**
-   - Setelah mengklik `2D Pose Estimate`, tunggu 1–2 detik hingga cloud partikel AMCL menyatu (terlihat di log: `Setting pose...`), baru kemudian kirimkan `2D Nav Goal`.
+   - Setelah mengklik `2D Pose Estimate`, tunggu 1–2 detik hingga cloud partikel AMCL menyatu (terlihat di log: `Setting pose...`).
+   - Pastikan klik `2D Nav Goal` berada di atas area bebas (warna putih bersih di peta).
 
