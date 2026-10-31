@@ -53,15 +53,20 @@ class RPLidarBridgeNode(Node):
         self.scan_count = 0
         self.last_diag_time = time.time()
         self.driver_proc = None
+        self.driver_start_time = 0.0
+        self.restart_count = 0
 
-        # Jalankan driver rplidar_composition jika diminta
+        # Bersihkan proses rplidar_composition yatim (zombie) sebelum mulai agar port serial bebas
         if self.auto_launch:
+            subprocess.run(['pkill', '-9', '-f', 'rplidar_composition'],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.3)
             self.launch_rplidar_driver()
 
         # Subscriber ke topik /scan untuk monitoring kesehatan
         self.scan_sub = self.create_subscription(LaserScan, '/scan', self.on_scan, 10)
 
-        # Timer watchdog 1 Hz untuk memantau liveness data
+        # Timer watchdog 1 Hz untuk memantau liveness data & auto-restart
         self.timer = self.create_timer(1.0, self.check_liveness)
 
     def check_hardware_port(self):
@@ -88,6 +93,11 @@ class RPLidarBridgeNode(Node):
 
     def launch_rplidar_driver(self):
         """Jalankan rplidar_composition sebagai subprocess terkelola."""
+        self.shutdown_driver_only()
+        if not self.check_hardware_port():
+            self.driver_start_time = time.time()
+            return
+
         cmd = [
             'ros2', 'run', 'rplidar_ros', 'rplidar_composition',
             '--ros-args',
@@ -99,7 +109,8 @@ class RPLidarBridgeNode(Node):
         ]
 
         try:
-            self.get_logger().info(f"🚀 Menjalankan driver rplidar_composition...")
+            self.get_logger().info("🚀 Menjalankan driver rplidar_composition...")
+            self.driver_start_time = time.time()
             # Buat process group terpisah agar Ctrl+C bisa membunuh driver dengan rapi
             self.driver_proc = subprocess.Popen(
                 cmd,
@@ -118,6 +129,7 @@ class RPLidarBridgeNode(Node):
 
         if not self.has_first_scan:
             self.has_first_scan = True
+            self.restart_count = 0
             self.get_logger().info(
                 f"📡 Paket LaserScan pertama diterima! ({num_points} titik, range: {msg.range_min:.2f}m - {msg.range_max:.2f}m) -> Topik /scan AKTIF!"
             )
@@ -163,42 +175,76 @@ class RPLidarBridgeNode(Node):
 
     def check_liveness(self):
         now = time.time()
-        # Jika driver proses mati tak terduga
-        if self.driver_proc and self.driver_proc.poll() is not None:
-            err = self.driver_proc.stderr.read().decode('utf-8', errors='ignore') if self.driver_proc.stderr else ''
-            self.get_logger().error(f"❌ Driver rplidar_composition berhenti (exit code {self.driver_proc.returncode})! Error: {err.strip()[:200]}")
-            self.driver_proc = None
+        if not self.auto_launch:
+            return
 
-        # Jika sudah pernah dapat scan tapi terhenti > 2.5 detik
-        if self.has_first_scan and self.last_scan_time and (now - self.last_scan_time > 2.5):
+        # 1. Jika driver proses mati tak terduga (misal RESULT_OPERATION_TIMEOUT saat motor baru mulai berputar)
+        if self.driver_proc is None or self.driver_proc.poll() is not None:
+            if self.driver_proc is not None:
+                err = self.driver_proc.stderr.read().decode('utf-8', errors='ignore') if self.driver_proc.stderr else ''
+                self.get_logger().warn(
+                    f"⚠️ Driver rplidar_composition berhenti (code {self.driver_proc.returncode}): {err.strip()[:120]} -> Auto-restart..."
+                )
+                self.driver_proc = None
+            if now - self.driver_start_time >= 1.5:
+                self.restart_count += 1
+                self.has_first_scan = False
+                self.launch_rplidar_driver()
+            return
+
+        # 2. Jika sejak diluncurkan > 6.0 detik belum ada paket /scan pertama sama sekali
+        if not self.has_first_scan and (now - self.driver_start_time > 6.0):
+            self.get_logger().warn("⚠️ Belum ada /scan setelah 6 detik -> Me-restart driver RPLiDAR...")
+            self.restart_count += 1
+            self.launch_rplidar_driver()
+            return
+
+        # 3. Jika sudah pernah dapat scan tapi terhenti > 4.0 detik
+        if self.has_first_scan and self.last_scan_time and (now - self.last_scan_time > 4.0):
             self.get_logger().warn(
-                f"⚠️ Tidak ada data /scan selama {(now - self.last_scan_time):.1f} detik! Cek putaran motor LiDAR."
+                f"⚠️ Tidak ada data /scan selama {(now - self.last_scan_time):.1f} detik! Me-restart driver RPLiDAR..."
             )
+            self.has_first_scan = False
+            self.restart_count += 1
+            self.launch_rplidar_driver()
 
-    def shutdown(self):
+    def shutdown_driver_only(self):
         if self.driver_proc and self.driver_proc.poll() is None:
-            self.get_logger().info("🛑 Menghentikan driver RPLiDAR...")
             try:
                 os.killpg(os.getpgid(self.driver_proc.pid), signal.SIGTERM)
-                self.driver_proc.wait(timeout=2.0)
+                self.driver_proc.wait(timeout=1.5)
             except Exception:
                 try:
                     os.killpg(os.getpgid(self.driver_proc.pid), signal.SIGKILL)
                 except Exception:
                     pass
+        self.driver_proc = None
+
+    def shutdown(self):
+        if self.driver_proc and self.driver_proc.poll() is None:
+            self.get_logger().info("🛑 Menghentikan driver RPLiDAR...")
+        self.shutdown_driver_only()
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = RPLidarBridgeNode()
+
+    def _sigterm_handler(signum, frame):
+        node.shutdown()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SystemExit):
         pass
     finally:
         node.shutdown()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

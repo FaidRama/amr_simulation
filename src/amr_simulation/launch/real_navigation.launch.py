@@ -122,18 +122,27 @@ def generate_launch_description():
         arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
     )
 
-    #tf_odom_to_base = Node(
-     #   package='tf2_ros',
-      #  executable='static_transform_publisher',
-       # arguments=['0', '0', '0', '0', '0', '0', 'odom', 'base_link'],
-        # condition=UnlessCondition(LaunchConfiguration('use_arduino'))
-    # )
+    tf_odom_to_base = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['0', '0', '0', '0', '0', '0', 'odom', 'base_link'],
+        condition=UnlessCondition(LaunchConfiguration('use_arduino'))
+    )
 
-    # 5. Nav2 Bringup (AMCL + Costmaps + Planner + Controller)
-    # Output controller di-remap dari /cmd_vel ke /cmd_vel_nav
-    start_nav2 = IncludeLaunchDescription(
+    # 5. Adaptive Velocity & Nav2 Bootstrap Node (dijalankan sejak t=0s agar TF map->odom langsung tersedia)
+    start_adaptive_velocity = Node(
+        package='amr_simulation',
+        executable='adaptive_velocity_node.py',
+        name='adaptive_velocity_node',
+        output='screen',
+        respawn=True,
+        respawn_delay=2.0
+    )
+
+    # 6A. Nav2 Localization (Map Server + AMCL) - dijalankan pada t=2.0s setelah sensor & TF siap
+    start_localization = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(pkg_nav2, 'launch', 'bringup_launch.py')
+            os.path.join(pkg_nav2, 'launch', 'localization_launch.py')
         ),
         launch_arguments={
             'map': LaunchConfiguration('map'),
@@ -142,22 +151,29 @@ def generate_launch_description():
             'autostart': LaunchConfiguration('autostart')
         }.items()
     )
- 
-    # 6. Adaptive Velocity Node (Local Planner Speed Governor)
-    # Membaca /cmd_vel_nav dan /human_state, mempublikasikan output aman ke /cmd_vel
-    src_adaptive_script = os.path.join(os.getcwd(), 'src', 'amr_simulation', 'scripts', 'adaptive_velocity_node.py')
-    default_adaptive_script = src_adaptive_script if os.path.exists(src_adaptive_script) else os.path.join(pkg_amr, 'scripts', 'adaptive_velocity_node.py')
-    
-    start_adaptive_velocity = ExecuteProcess(
-        cmd=['python3', default_adaptive_script],
-        output='screen'
+
+    delayed_localization = TimerAction(
+        period=2.0,
+        actions=[start_localization]
     )
 
+    # 6B. Nav2 Navigation (Controller + Planner + Costmaps + BT Navigator) - dijalankan pada t=4.5s
+    # setelah Map Server & AMCL aktif sehingga tidak pernah gagal "frame map does not exist"
+    start_navigation = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_nav2, 'launch', 'navigation_launch.py')
+        ),
+        launch_arguments={
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'params_file': LaunchConfiguration('params_file'),
+            'autostart': LaunchConfiguration('autostart'),
+            'map_subscribe_transient_local': 'true'
+        }.items()
+    )
 
-    # Nav2 dan Adaptive Velocity dijalankan setelah sensor stabil (delay 3 detik)
-    delayed_nav2_and_adaptor = TimerAction(
-        period=3.0,
-        actions=[start_nav2, start_adaptive_velocity]
+    delayed_navigation = TimerAction(
+        period=4.5,
+        actions=[start_navigation]
     )
 
     # 7. RViz2 Visualizer (Opsional di laptop)
@@ -183,7 +199,9 @@ def generate_launch_description():
         start_arduino_bridge,
         tf_base_to_laser,
         tf_base_to_footprint,
-        # tf_odom_to_base,
-        delayed_nav2_and_adaptor,
+        tf_odom_to_base,
+        start_adaptive_velocity,
+        delayed_localization,
+        delayed_navigation,
         start_rviz2
     ])

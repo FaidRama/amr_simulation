@@ -52,7 +52,7 @@ Visualization Manager:
       Enabled: true
       Frame Timeout: 15
       Frames:
-        All Enabled: false
+        All Enabled: true
         back_caster_1:
           Value: true
         base_footprint:
@@ -65,6 +65,8 @@ Visualization Manager:
           Value: true
         front_caster_1:
           Value: true
+        laser:
+          Value: true
         laser_frame:
           Value: false
         left_wheel_1:
@@ -72,9 +74,9 @@ Visualization Manager:
         lidar_link_1:
           Value: false
         map:
-          Value: false
+          Value: true
         odom:
-          Value: false
+          Value: true
         right_wheel_1:
           Value: true
       Marker Scale: 1

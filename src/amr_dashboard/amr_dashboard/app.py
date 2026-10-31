@@ -1122,7 +1122,7 @@ def stop_slam_process():
             except Exception:
                 pass
     subprocess.run(
-        ['pkill', '-f', '(real_mapping\\.launch\\.py|async_slam_toolbox_node|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py)'],
+        ['pkill', '-9', '-f', '(real_mapping\\.launch\\.py|async_slam_toolbox_node|rplidar_bridge\\.py|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py|static_transform_publisher)'],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     _append_mapping_log('🛑 Proses SLAM Mapping dihentikan.')
@@ -1201,7 +1201,7 @@ def is_navigation_active():
 
 
 def stop_navigation_process():
-    """Hentikan proses real_navigation.launch.py dan bersihkan node Nav2."""
+    """Hentikan proses real_navigation.launch.py dan bersihkan semua node Nav2 & sensor terkait."""
     global NAVIGATION_PROC
     with NAVIGATION_LOCK:
         proc = NAVIGATION_PROC
@@ -1216,7 +1216,7 @@ def stop_navigation_process():
             except Exception:
                 pass
     subprocess.run(
-        ['pkill', '-f', '(real_navigation\\.launch\\.py|amcl|bt_navigator|controller_server|planner_server|recoveries_server|lifecycle_manager|adaptive_velocity_node)'],
+        ['pkill', '-9', '-f', '(real_navigation\\.launch\\.py|localization_launch\\.py|navigation_launch\\.py|map_server|amcl|bt_navigator|controller_server|planner_server|recoveries_server|waypoint_follower|lifecycle_manager|adaptive_velocity_node|rplidar_bridge\\.py|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py|static_transform_publisher)'],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     _append_navigation_log('🛑 Proses Navigasi (Nav2) dihentikan.')
@@ -1451,11 +1451,9 @@ def api_mapping_start():
             'message': 'SLAM Mapping sudah aktif! Mode peta dialihkan ke Live /map.'
         })
 
-    # Matikan node navigasi (AMCL/Nav2) jika masih jalan agar tidak bentrok port serial LiDAR & Arduino
-    subprocess.run(
-        ['pkill', '-9', '-f', '(real_navigation\\.launch\\.py|real_mapping\\.launch\\.py|amcl|bt_navigator|controller_server|planner_server|recoveries_server|lifecycle_manager|async_slam_toolbox_node|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py)'],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
+    # Matikan node navigasi (AMCL/Nav2) & sisa proses jika masih jalan agar tidak bentrok port serial LiDAR & Arduino
+    stop_navigation_process()
+    stop_arduino_process()
     time.sleep(0.8)
 
     setup_parts = get_ros_launch_prefix()
@@ -1576,8 +1574,9 @@ def api_navigation_start():
             'message': 'Navigasi Nav2 sudah aktif!'
         })
 
-    # Hentikan mapping & bridge standalone jika aktif agar port serial LiDAR & Arduino dilepas
+    # Hentikan mapping, navigasi sisa, & bridge standalone jika aktif agar port serial LiDAR & Arduino dilepas
     stop_slam_process()
+    stop_navigation_process()
     stop_arduino_process()
     time.sleep(0.8)
 
