@@ -514,8 +514,8 @@ def main():
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--conf", type=float, default=0.5)
     parser.add_argument(
-        "--corridor-width", type=float, default=0.50,
-        help="Lebar koridor tengah sebagai proporsi lebar frame (0.1-1.0); default 0.50"
+        "--corridor-width", type=float, default=0.30,
+        help="Lebar koridor tengah sebagai proporsi lebar frame (0.1-1.0); default 0.30"
     )
 
     parser.add_argument(
@@ -525,9 +525,9 @@ def main():
     )
 
     parser.add_argument("--t-near-enter", type=float, default=0.75)
-    parser.add_argument("--t-near-exit", type=float, default=0.65)
-    parser.add_argument("--t-med-enter", type=float, default=0.45)
-    parser.add_argument("--t-med-exit", type=float, default=0.38)
+    parser.add_argument("--t-near-exit", type=float, default=0.70)
+    parser.add_argument("--t-med-enter", type=float, default=0.55)
+    parser.add_argument("--t-med-exit", type=float, default=0.45)
     parser.add_argument("--debounce", type=int, default=8)
 
     parser.add_argument("--calib-h", default=DEFAULT_CALIB_H)
@@ -841,35 +841,60 @@ def main():
                 )
 
             # 3. CENTRAL CORRIDOR + TARGET SELECTION
-            # Koridor tengah dipakai sebagai proxy area lintasan di depan robot.
-            # Bounding box dianggap menghalangi bila ada irisan horizontal
-            # dengan koridor, bukan hanya karena titik tengah bbox berada di sana.
+            # Koridor tengah menjadi proxy area lintasan AMR.
+            # Manusia dianggap berada di koridor jika minimal 60%
+            # lebar bounding box-nya berada di dalam koridor.
+
             corridor_half = (width * args.corridor_width) / 2.0
             corridor_x1 = int((width / 2.0) - corridor_half)
             corridor_x2 = int((width / 2.0) + corridor_half)
 
             corridor_persons = []
+
             for person in persons:
-                person["in_corridor"] = (
-                    person["x2"] > corridor_x1
-                    and person["x1"] < corridor_x2
+                # Hitung lebar bounding box yang beririsan
+                # dengan koridor tengah.
+                overlap_left = max(
+                    person["x1"], corridor_x1
                 )
+                overlap_right = min(
+                    person["x2"], corridor_x2
+                )
+
+                overlap_width = max(
+                    0.0, overlap_right - overlap_left
+                )
+
+                # Proporsi bbox yang berada di dalam koridor.
+                person["corridor_overlap"] = (
+                    overlap_width / max(person["w"], 1.0)
+                )
+
+                # Minimal 60% bbox harus berada di koridor.
+                person["in_corridor"] = (
+                    person["corridor_overlap"] >= 0.60
+                )
+
                 if person["in_corridor"]:
                     corridor_persons.append(person)
 
-            # Hanya orang yang beririsan dengan koridor tengah yang memengaruhi
-            # proximity zone dan FSM. Jika beberapa orang masuk koridor, pilih
-            # yang paling dekat berdasarkan fitur bbox yang sedang digunakan.
+            # Pilih target terdekat hanya dari manusia yang
+            # memenuhi syarat koridor.
             target = None
+
             if corridor_persons:
                 if args.feature == "height":
                     target = max(
-                        corridor_persons, key=lambda p: p["h"]
+                        corridor_persons,
+                        key=lambda p: p["h"]
                     )
+
                 elif args.feature == "width":
                     target = max(
-                        corridor_persons, key=lambda p: p["w"]
+                        corridor_persons,
+                        key=lambda p: p["w"]
                     )
+
                 else:
                     target = max(
                         corridor_persons,
@@ -920,10 +945,28 @@ def main():
                 target["dist"] = dist_smooth
 
             # 5. PROXIMITY CLASSIFICATION AND FSM
-            zone = classifier.update(
-                active_ratio,
-                force_near=force_near
+            # SAFE_STOP berlaku di mana pun: cek semua manusia untuk zona NEAR.
+            # REDUCED_SPEED hanya boleh dipicu target yang masuk koridor.
+            near_person_outside_or_inside = any(
+                person["r"] >= args.t_near_enter
+                for person in persons
             )
+
+            if near_person_outside_or_inside or force_near:
+                zone = classifier.update(
+                    active_ratio,
+                    force_near=True
+                )
+            elif target is None:
+                # Tidak ada manusia di koridor dan tidak ada manusia NEAR.
+                # Jangan biarkan MEDIUM lama bertahan hanya karena hysteresis.
+                zone = Zone.FAR
+            else:
+                # Target ada di koridor: zona FAR/MEDIUM/NEAR normal dari classifier.
+                zone = classifier.update(
+                    active_ratio,
+                    force_near=False
+                )
 
             state = fsm.update(zone)
 
@@ -954,10 +997,27 @@ def main():
                 else 0.9 * fps_ema + 0.1 * inst_fps
             )
 
-            # 7b. PUBLISH HASIL SEBAGAI TEKS (untuk keterangan dashboard)
+            # 7b. PUBLISH HASIL SEBAGAI TEKS (untuk keterangan dashboard & canvas overlay)
+            boxes_data = []
+            for p in persons:
+                is_tgt = bool(target is not None and p is target)
+                boxes_data.append({
+                    "x1": round(float(p["x1"]), 1),
+                    "y1": round(float(p["y1"]), 1),
+                    "x2": round(float(p["x2"]), 1),
+                    "y2": round(float(p["y2"]), 1),
+                    "conf": round(float(p["conf"]), 2),
+                    "is_target": is_tgt,
+                    "dist": round(float(dist_smooth), 2) if (is_tgt and dist_smooth is not None) else None,
+                    "zone": zone.value if is_tgt else "NONE"
+                })
+
             info = {
                 "stamp": round(time.time(), 3),
                 "frame": frame_count,
+                "frame_width": width,
+                "frame_height": height,
+                "boxes": boxes_data,
                 "state": state.value,
                 "zone": zone.value,
                 "response": STATE_RESPONSE.get(state, ""),

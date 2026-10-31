@@ -126,6 +126,12 @@ const APP = {
     availableMaps: [],
     hasLiveMap: false,
     mappingActive: false,
+    arduinoActive: false,
+    navActive: false,
+    cameraActive: false,
+    humanNodeActive: false,
+    showBbox: (localStorage.getItem('amr_show_bbox') !== 'false'),
+    humanInfo: null,
     poseSource: 'NONE',
     pose: { x: 0, y: 0, yaw: 0 },
     delivery: { status: 'idle', current_phase: 'idle' },
@@ -306,7 +312,8 @@ function renderHome() {
         navigating_delivery: 'Menuju Titik Tujuan',
         waiting_delivery: 'Menunggu Ambil Barang',
         at_delivery: 'Tiba di Tujuan',
-        returning_home: 'Kembali ke Home Base'
+        returning_home: 'Kembali ke Home Base',
+        waiting_human: '🚶 Menunggu Manusia Lewat'
     };
 
     const yawDeg = ((APP.pose.yaw || 0) * 180 / Math.PI).toFixed(1);
@@ -520,9 +527,12 @@ function renderDelivery() {
     const modeBadgeText = APP.mode === 'sim' ? '🎮 MODE SIMULASI (GAZEBO)' : '🤖 MODE REAL ROBOT';
     const mapOptionsHtml = [
         `<option value="live" ${APP.mapFile === 'live' ? 'selected' : ''}>📡 Live ROS /map Topic (SLAM / Nav2)</option>`,
-        ...(APP.availableMaps || []).map(m =>
-            `<option value="${m.name}" ${APP.mapFile === m.name ? 'selected' : ''}>🗺️ ${m.name}</option>`
-        )
+        ...(APP.availableMaps || []).map(m => {
+            const mapId = (typeof m === 'object' && m.id) ? m.id : (typeof m === 'object' ? m.name : m);
+            const mapLabel = (typeof m === 'object' && m.name) ? m.name : mapId;
+            const isSelected = APP.mapFile === mapId || APP.mapFile === mapLabel;
+            return `<option value="${mapId}" ${isSelected ? 'selected' : ''}>🗺️ ${mapLabel}</option>`;
+        })
     ].join('');
 
     div.innerHTML = `
@@ -533,6 +543,24 @@ function renderDelivery() {
                     <div class="section-title">
                         <span>01 // PETA SLAM & TITIK TUJUAN</span>
                         <span class="mono" style="color:var(--accent-bright);">${modeBadgeText}</span>
+                    </div>
+
+                    <!-- NAV2 NAVIGATION RUNTIME CONTROLLER -->
+                    <div class="nav-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:12px; gap:12px;">
+                        <div style="display:flex; align-items:center; gap:10px;">
+                            <span id="nav-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.navActive ? 'var(--success)' : 'var(--danger)'}; box-shadow:${APP.navActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
+                            <div>
+                                <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="nav-status-text">
+                                    NAV2 NAVIGATION: ${APP.navActive ? '<span style="color:var(--success)">ONLINE (AMCL + Costmap)</span>' : '<span style="color:var(--danger)">OFFLINE</span>'}
+                                </div>
+                                <div style="font-size:0.68rem; color:var(--text-muted);" id="nav-sub-text">
+                                    ${APP.navActive ? 'Navigasi siap menerima perintah pengantaran' : 'Nyalakan Nav2 sebelum memulai misi pengantaran'}
+                                </div>
+                            </div>
+                        </div>
+                        <button type="button" id="nav-toggle-btn" class="btn btn-sm ${APP.navActive ? 'btn-danger' : 'btn-success'}" onclick="toggleNavigation()" style="min-width:130px; font-weight:600; border-radius:6px;">
+                            ${APP.navActive ? '🛑 Stop Navigasi' : '🚀 Jalankan Navigasi'}
+                        </button>
                     </div>
 
                     <div class="map-toolbar-strip">
@@ -548,7 +576,13 @@ function renderDelivery() {
                         </div>
                         <div class="map-toolbar-group">
                             <button class="btn btn-outline btn-sm" style="padding:4px 9px; font-size:0.7rem;" onclick="openInitialPoseModal()" title="Set 2D Pose Estimate (/initialpose) untuk lokalisasi AMCL">
-                                📍 Set Posisi Awal (AMCL)
+                                📍 Set Posisi Awal
+                            </button>
+                            <button class="btn btn-outline btn-sm" style="padding:4px 9px; font-size:0.7rem;" onclick="openAutoRelocalizeModal()" title="Kalibrasi posisi otomatis dengan memutar robot 360° menggunakan AMCL & LiDAR">
+                                🔄 Relokalisasi (360°)
+                            </button>
+                            <button class="btn btn-outline btn-sm" style="padding:4px 9px; font-size:0.7rem;" onclick="clearRobotTrail()" title="Hapus jejak lintasan hijau robot pada peta">
+                                🧹 Reset Jejak
                             </button>
                         </div>
                     </div>
@@ -585,6 +619,23 @@ function renderDelivery() {
                             <button class="btn btn-primary btn-sm" onclick="controlMission('resume')" id="btn-resume">${getIcon('play', 14)} Resume</button>
                             <button class="btn btn-danger btn-sm" onclick="controlMission('cancel')">${getIcon('x', 14)} Cancel</button>
                         </div>
+                    </div>
+                </div>
+
+                <!-- 05 // PANTAUAN TERMINAL & STATUS NAVIGASI -->
+                <div class="page-section" id="dispatch-terminal-section">
+                    <div class="section-title">
+                        <span>05 // PANTAUAN TERMINAL &amp; STATUS NAVIGASI</span>
+                        <span class="mono" id="dispatch-nav-status" style="font-size:0.7rem; color:var(--text-muted);">${APP.navActive ? 'NAV2 ONLINE' : 'NAV2 STANDBY'}</span>
+                    </div>
+                    <div class="panel" style="padding:10px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; font-size:0.72rem; flex-wrap:wrap; gap:4px;">
+                            <span class="mono" id="dispatch-phase-indicator" style="color:var(--accent-bright); font-weight:600;">STATUS: MENUNGGU TASK</span>
+                            <div style="display:flex; gap:6px;">
+                                <button type="button" class="btn btn-outline btn-sm" style="padding:2px 8px; font-size:0.68rem;" onclick="clearDispatchLogs()" title="Bersihkan log di tampilan">Bersihkan</button>
+                            </div>
+                        </div>
+                        <pre id="dispatch-log-box" class="mono" style="margin:0; max-height:170px; overflow-y:auto; font-size:0.70rem; line-height:1.45; color:var(--text-secondary); background:rgba(9,13,20,0.85); padding:10px; border-radius:6px; border:1px solid var(--border-subtle); white-space:pre-wrap;">Menunggu log proses navigasi...</pre>
                     </div>
                 </div>
             </div>
@@ -771,7 +822,82 @@ function renderTaskList() {
     `).join('');
 }
 
+async function toggleNavigation() {
+    const btn = document.getElementById('nav-toggle-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.style.opacity = '0.6';
+    }
+    try {
+        if (APP.navActive) {
+            showToast('Menghentikan Navigasi Nav2...', 'info');
+            const res = await apiPost('/api/navigation/stop', {});
+            if (res && res.success) {
+                APP.navActive = false;
+                updateNavigationUI(false);
+                showToast('Navigasi Nav2 berhasil dihentikan.', 'warning');
+            } else {
+                showToast(res ? (res.error || res.message) : 'Gagal menghentikan navigasi', 'error');
+            }
+        } else {
+            showToast('Meluncurkan Navigasi Nav2... Tunggu ~5-8 detik.', 'info');
+            const res = await apiPost('/api/navigation/start', {});
+            if (res && res.success) {
+                APP.navActive = true;
+                updateNavigationUI(true);
+                showToast(res.message || 'Navigasi Nav2 berhasil dijalankan!', 'success');
+            } else {
+                showToast(res ? (res.error || res.message) : 'Gagal meluncurkan navigasi', 'error');
+            }
+        }
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.style.opacity = '1';
+        }
+    }
+}
+
+function updateNavigationUI(active) {
+    const ind = document.getElementById('nav-status-indicator');
+    const text = document.getElementById('nav-status-text');
+    const sub = document.getElementById('nav-sub-text');
+    const btn = document.getElementById('nav-toggle-btn');
+    const startDelBtn = document.getElementById('btn-start-delivery');
+    if (!ind || !text || !btn) return;
+
+    if (active) {
+        ind.style.background = 'var(--success)';
+        ind.style.boxShadow = '0 0 8px var(--success)';
+        text.innerHTML = 'NAV2 NAVIGATION: <span style="color:var(--success)">ONLINE (AMCL + Costmap)</span>';
+        if (sub) sub.textContent = 'Navigasi siap menerima perintah pengantaran';
+        btn.className = 'btn btn-sm btn-danger';
+        btn.innerHTML = '🛑 Stop Navigasi';
+        if (startDelBtn) {
+            startDelBtn.title = 'Mulai Eksekusi Misi';
+            startDelBtn.style.opacity = '1';
+        }
+    } else {
+        ind.style.background = 'var(--danger)';
+        ind.style.boxShadow = 'none';
+        text.innerHTML = 'NAV2 NAVIGATION: <span style="color:var(--danger)">OFFLINE</span>';
+        if (sub) sub.textContent = 'Nyalakan Nav2 sebelum memulai misi pengantaran';
+        btn.className = 'btn btn-sm btn-success';
+        btn.innerHTML = '🚀 Jalankan Navigasi';
+        if (startDelBtn) {
+            startDelBtn.title = 'Nyalakan navigasi terlebih dahulu';
+        }
+    }
+}
+
 async function startDelivery() {
+    if (!APP.navActive) {
+        showToast('Navigasi Nav2 belum aktif! Tekan tombol "Jalankan Navigasi" terlebih dahulu.', 'warning');
+        return;
+    }
+
     if (APP.taskQueue.length === 0) {
         showToast('Tambahkan minimal 1 task ke antrean', 'error');
         return;
@@ -1055,6 +1181,7 @@ function updateMissionUI() {
             at_delivery: 'Tiba di delivery',
             waiting_delivery: 'Menunggu barang diambil',
             returning_home: 'Kembali ke titik awal...',
+            waiting_human: '🚶 Menunggu manusia melintas...',
             idle: 'Selesai'
         };
         if (progressText) {
@@ -1262,14 +1389,71 @@ async function confirmAction(command) {
     }
 }
 
+function updateDispatchLogs(data) {
+    if (!data) return;
+    const logBox = document.getElementById('dispatch-log-box');
+    const phaseEl = document.getElementById('dispatch-phase-indicator');
+    const navStatusEl = document.getElementById('dispatch-nav-status');
+
+    if (navStatusEl) {
+        navStatusEl.textContent = data.nav_active ? 'NAV2 ONLINE (ACTIVE)' : 'NAV2 STANDBY';
+        navStatusEl.style.color = data.nav_active ? 'var(--success)' : 'var(--text-muted)';
+    }
+
+    if (phaseEl && data.delivery) {
+        const d = data.delivery;
+        const phase = d.current_phase || 'idle';
+        const taskIdx = (d.current_task_index || 0) + 1;
+        const total = d.total_tasks || 1;
+        const phaseLabels = {
+            idle: 'STATUS: IDLE (Siap Menerima Misi)',
+            navigating_pickup: `STATUS: [TASK ${taskIdx}/${total}] Menuju Titik Pickup...`,
+            waiting_pickup: `STATUS: [TASK ${taskIdx}/${total}] Sampai di Pickup (Menunggu Muat)`,
+            navigating_delivery: `STATUS: [TASK ${taskIdx}/${total}] Menuju Titik Delivery...`,
+            waiting_delivery: `STATUS: [TASK ${taskIdx}/${total}] Sampai di Delivery (Menunggu Ambil)`,
+            returning_home: 'STATUS: Kembali ke Titik Awal (Home)...',
+            completed: 'STATUS: Misi Selesai!',
+            cancelled: 'STATUS: Misi Dibatalkan'
+        };
+        phaseEl.textContent = phaseLabels[phase] || `STATUS: ${phase.toUpperCase()}`;
+        if (phase.includes('navigating') || phase === 'returning_home') {
+            phaseEl.style.color = 'var(--accent-bright)';
+        } else if (phase.includes('waiting')) {
+            phaseEl.style.color = 'var(--warning)';
+        } else if (phase === 'completed') {
+            phaseEl.style.color = 'var(--success)';
+        } else {
+            phaseEl.style.color = 'var(--text-muted)';
+        }
+    }
+
+    if (logBox && data.nav_logs && data.nav_logs.length > 0) {
+        const shouldScroll = (logBox.scrollTop + logBox.clientHeight) >= (logBox.scrollHeight - 35);
+        logBox.textContent = data.nav_logs.join('\n');
+        if (shouldScroll) {
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+    }
+}
+
+function clearDispatchLogs() {
+    const logBox = document.getElementById('dispatch-log-box');
+    if (logBox) logBox.textContent = 'Log tampilan dibersihkan oleh pengguna.';
+}
+window.clearDispatchLogs = clearDispatchLogs;
+window.updateDispatchLogs = updateDispatchLogs;
+
 function startDeliveryPolling() {
-    APP.statusPollTimer = setInterval(async () => {
+    const pollFn = async () => {
         const data = await apiGet('/api/status');
         if (data) {
             APP.delivery = data.delivery || APP.delivery;
             updateMissionUI();
+            updateDispatchLogs(data);
         }
-    }, 1000);
+    };
+    pollFn();
+    APP.statusPollTimer = setInterval(pollFn, 1000);
 }
 
 window.onBannerClick = onBannerClick;
@@ -1323,20 +1507,22 @@ function renderMonitoring() {
                     <!-- Viewport Container -->
                     <div class="viewport-display" id="cockpit-viewport">
                         <!-- View 1: Camera Live -->
-                        <div class="viewport-view active" id="view-camera">
+                        <div class="viewport-view active" id="view-camera" style="position:relative;">
                             <img id="cockpit-cam-img" class="cockpit-cam-img" src="/api/camera/stream" alt="Live Kamera"
                                  onerror="this.style.display='none'; document.getElementById('cockpit-cam-offline').style.display='flex';">
+                            <canvas id="cockpit-cam-canvas" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:2;"></canvas>
                             <div id="cockpit-cam-offline" class="flex-center mono" style="display:none; width:100%; height:100%; color:var(--text-muted); font-size:0.78rem; flex-direction:column; gap:8px;">
                                 ${getIcon('video', 32)}
                                 STREAM KAMERA OFFLINE
                             </div>
-                            <div class="viewport-hud">
+                            <div class="viewport-hud" style="z-index:3;">
                                 <div class="viewport-hud-left">
                                     <span class="hud-badge hud-badge-rec"><span class="rec-dot"></span>CAM_01 // LIVE</span>
                                     <span class="hud-badge hud-badge-human" id="hud-human-badge">AI: AMAN</span>
                                 </div>
                             </div>
-                            <div class="viewport-tools">
+                            <div class="viewport-tools" style="z-index:4;">
+                                <button class="tool-btn" id="cockpit-bbox-toggle-btn" onclick="toggleBboxOverlay()" title="Toggle Bbox HUD" style="color:${APP.showBbox ? 'var(--accent)' : 'var(--text-muted)'};">${getIcon('eye', 15)}</button>
                                 <button class="tool-btn" onclick="captureScreenshot()" title="Ambil Screenshot">${getIcon('camera', 15)}</button>
                             </div>
                         </div>
@@ -1544,10 +1730,52 @@ function renderCamera() {
                     <span>01 // OPTICAL CAMERA FEED</span>
                     <span>/api/camera/stream</span>
                 </div>
+                <!-- CAMERA CONTROL BAR -->
+                <div class="camera-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:10px; gap:12px;">
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <span id="cam-page-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.cameraActive ? 'var(--success)' : 'var(--text-muted)'}; box-shadow:${APP.cameraActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
+                        <div>
+                            <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="cam-page-status-text">
+                                USB CAMERA: ${APP.cameraActive ? '<span style="color:var(--success)">ONLINE</span>' : '<span style="color:var(--text-muted)">OFFLINE</span>'}
+                            </div>
+                            <div style="font-size:0.68rem; color:var(--text-muted);" id="cam-page-sub-text">
+                                ${APP.cameraActive ? 'Hardware kamera & publisher terhubung' : 'Hardware kamera standby'}
+                            </div>
+                        </div>
+                    </div>
+                    <button type="button" id="cam-page-toggle-btn" class="btn btn-sm ${APP.cameraActive ? 'btn-danger' : 'btn-success'}" onclick="toggleCamera()" style="min-width:120px; font-weight:600; border-radius:6px;">
+                        ${APP.cameraActive ? '🛑 Stop Kamera' : '📷 Start Kamera'}
+                    </button>
+                </div>
+
+                <!-- HUMAN AWARENESS AI CONTROL BAR -->
+                <div class="human-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:12px; gap:12px; flex-wrap:wrap;">
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <span id="human-node-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.humanNodeActive ? 'var(--success)' : 'var(--text-muted)'}; box-shadow:${APP.humanNodeActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
+                        <div>
+                            <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="human-node-status-text">
+                                HUMAN AI NODE: ${APP.humanNodeActive ? '<span style="color:var(--success)">RUNNING</span>' : '<span style="color:var(--text-muted)">STOPPED</span>'}
+                            </div>
+                            <div style="font-size:0.68rem; color:var(--text-muted);" id="human-node-sub-text">
+                                ${APP.humanNodeActive ? 'Deteksi YOLO & estimasi jarak aktif (/human_info)' : 'Tes deteksi manusia mandiri tanpa perlu navigasi'}
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        <button type="button" id="bbox-toggle-btn" class="btn btn-sm ${APP.showBbox ? 'btn-accent' : 'btn-outline'}" onclick="toggleBboxOverlay()" style="font-weight:600; border-radius:6px;">
+                            ${APP.showBbox ? '👁️ Bbox HUD: ON' : '👁️ Bbox HUD: OFF'}
+                        </button>
+                        <button type="button" id="human-node-toggle-btn" class="btn btn-sm ${APP.humanNodeActive ? 'btn-danger' : 'btn-primary'}" onclick="toggleHumanAwareness()" style="min-width:130px; font-weight:600; border-radius:6px;">
+                            ${APP.humanNodeActive ? '🛑 Stop Human AI' : '🚀 Start Human AI'}
+                        </button>
+                    </div>
+                </div>
+
                 <div class="camera-frame">
                     <img id="camera-feed" src="/api/camera/stream" alt="Kamera AMR"
                          onerror="this.style.display='none'; document.getElementById('cam-offline').style.display='flex';">
-                    <div class="camera-overlay">
+                    <canvas id="camera-feed-canvas" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:2;"></canvas>
+                    <div class="camera-overlay" style="z-index:3;">
                         <div class="camera-badge"><span class="rec-dot"></span>CAM_01 // LIVE</div>
                     </div>
                     <div id="cam-offline" class="flex-center mono" style="display:none; min-height:280px; color:var(--text-muted); font-size:0.8rem; flex-direction:column; gap:8px;">
@@ -1633,6 +1861,18 @@ function startCameraPolling() {
             if (data.delivery && typeof handleDeliveryStatusUpdate === 'function') {
                 handleDeliveryStatusUpdate(data.delivery);
             }
+            if (data.hasOwnProperty('human_node_active')) {
+                APP.humanNodeActive = !!data.human_node_active;
+                updateHumanAwarenessUI(APP.humanNodeActive);
+            }
+            if (data.hasOwnProperty('camera_active')) {
+                APP.cameraActive = !!data.camera_active;
+                updateCameraUI(APP.cameraActive);
+            }
+            if (data.human_info) {
+                APP.humanInfo = data.human_info;
+            }
+            drawBboxHUD('camera-feed-canvas', 'camera-feed', APP.humanInfo);
             const camPos = document.getElementById('cam-pos');
             updateCameraReadout(data);
             if (camPos && data.pose) camPos.textContent = `${data.pose.x.toFixed(2)}, ${data.pose.y.toFixed(2)}`;
@@ -2246,12 +2486,37 @@ function renderJoystick() {
             <div class="page-section">
                 <div class="section-title">
                     <span>01 // FORWARD OPTICAL STREAM</span>
-                    <span>LIVE TELEOP VIEW</span>
+                    <span id="teleop-cam-status-label">${APP.cameraActive ? 'LIVE TELEOP VIEW' : 'CAMERA OFFLINE'}</span>
                 </div>
+
+                <!-- CAMERA HARDWARE CONTROLLER BAR -->
+                <div class="camera-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:14px; gap:12px; flex-wrap:wrap;">
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <span id="camera-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.cameraActive ? 'var(--success)' : 'var(--text-muted)'}; box-shadow:${APP.cameraActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
+                        <div>
+                            <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="camera-status-text">
+                                USB CAMERA: ${APP.cameraActive ? '<span style="color:var(--success)">ONLINE</span>' : '<span style="color:var(--text-muted)">OFFLINE</span>'}
+                            </div>
+                            <div style="font-size:0.68rem; color:var(--text-muted);" id="camera-sub-text">
+                                ${APP.cameraActive ? 'Stream /camera/image_raw/compressed aktif' : 'Nyalakan kamera untuk melihat video real-time'}
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        <button type="button" id="teleop-bbox-toggle-btn" class="btn btn-sm ${APP.showBbox ? 'btn-accent' : 'btn-outline'}" onclick="toggleBboxOverlay()" style="font-weight:600; border-radius:6px;">
+                            ${APP.showBbox ? '👁️ Bbox HUD: ON' : '👁️ Bbox HUD: OFF'}
+                        </button>
+                        <button type="button" id="camera-toggle-btn" class="btn btn-sm ${APP.cameraActive ? 'btn-danger' : 'btn-success'}" onclick="toggleCamera()" style="min-width:120px; font-weight:600; border-radius:6px;">
+                            ${APP.cameraActive ? '🛑 Stop Kamera' : '📷 Start Kamera'}
+                        </button>
+                    </div>
+                </div>
+
                 <div class="camera-frame">
-                    <img src="/api/camera/stream" alt="Kamera AMR"
+                    <img id="teleop-cam-img" src="/api/camera/stream" alt="Kamera AMR"
                          onerror="this.style.display='none'; this.nextElementSibling.style.display='none'; this.parentElement.querySelector('.teleop-cam-offline').style.display='flex';">
-                    <div class="camera-overlay">
+                    <canvas id="teleop-cam-canvas" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:2;"></canvas>
+                    <div class="camera-overlay" style="z-index:3;">
                         <div class="camera-badge"><span class="rec-dot"></span>TELEOP_CAM // LIVE</div>
                     </div>
                     <div class="teleop-cam-offline flex-center mono" style="display:none; min-height:240px; color:var(--text-muted); font-size:0.78rem; flex-direction:column; gap:8px;">
@@ -2266,6 +2531,24 @@ function renderJoystick() {
                     <span>/cmd_vel</span>
                 </div>
                 <div class="panel">
+                    <!-- ARDUINO HARDWARE BRIDGE CONTROLLER -->
+                    <div class="arduino-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:14px; gap:12px;">
+                        <div style="display:flex; align-items:center; gap:10px;">
+                            <span id="arduino-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.arduinoActive ? 'var(--success)' : 'var(--text-muted)'}; box-shadow:${APP.arduinoActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
+                            <div>
+                                <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="arduino-status-text">
+                                    ARDUINO BRIDGE: ${APP.arduinoActive ? '<span style="color:var(--success)">ONLINE</span>' : '<span style="color:var(--text-muted)">OFFLINE</span>'}
+                                </div>
+                                <div style="font-size:0.68rem; color:var(--text-muted);" id="arduino-sub-text">
+                                    ${APP.arduinoActive ? 'Hardware motor & odometri aktif' : 'Nyalakan agar robot merespon /cmd_vel'}
+                                </div>
+                            </div>
+                        </div>
+                        <button type="button" id="arduino-toggle-btn" class="btn btn-sm ${APP.arduinoActive ? 'btn-danger' : 'btn-success'}" onclick="toggleArduinoBridge()" style="min-width:120px; font-weight:600; border-radius:6px;">
+                            ${APP.arduinoActive ? '🛑 Stop Bridge' : '⚡ Start Bridge'}
+                        </button>
+                    </div>
+
                     <div class="joystick-container">
                         <div class="joystick-canvas-wrap">
                             <canvas id="joystick-canvas" width="240" height="240"></canvas>
@@ -2297,7 +2580,498 @@ function renderJoystick() {
     return div;
 }
 
+async function toggleArduinoBridge() {
+    const btn = document.getElementById('arduino-toggle-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.style.opacity = '0.6';
+    }
+    try {
+        if (APP.arduinoActive) {
+            showToast('Menghentikan Arduino Bridge...', 'info');
+            const res = await apiPost('/api/arduino/stop', {});
+            if (res && res.success) {
+                APP.arduinoActive = false;
+                updateArduinoBridgeUI(false);
+                showToast('Arduino Bridge berhasil dihentikan.', 'warning');
+            } else {
+                showToast(res ? (res.error || res.message) : 'Gagal menghentikan Arduino Bridge', 'error');
+            }
+        } else {
+            showToast('Menyalakan Arduino Bridge...', 'info');
+            const res = await apiPost('/api/arduino/start', {});
+            if (res && res.success) {
+                APP.arduinoActive = true;
+                updateArduinoBridgeUI(true);
+                showToast('Arduino Bridge berhasil dinyalakan!', 'success');
+            } else {
+                showToast(res ? (res.error || res.message) : 'Gagal menyalakan Arduino Bridge', 'error');
+            }
+        }
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.style.opacity = '1';
+        }
+    }
+}
+
+function updateArduinoBridgeUI(active) {
+    const ind = document.getElementById('arduino-status-indicator');
+    const text = document.getElementById('arduino-status-text');
+    const sub = document.getElementById('arduino-sub-text');
+    const btn = document.getElementById('arduino-toggle-btn');
+    if (!ind || !text || !btn) return;
+
+    if (active) {
+        ind.style.background = 'var(--success)';
+        ind.style.boxShadow = '0 0 8px var(--success)';
+        text.innerHTML = 'ARDUINO BRIDGE: <span style="color:var(--success)">ONLINE</span>';
+        if (sub) sub.textContent = 'Hardware motor & odometri aktif';
+        btn.className = 'btn btn-sm btn-danger';
+        btn.innerHTML = '🛑 Stop Bridge';
+    } else {
+        ind.style.background = 'var(--text-muted)';
+        ind.style.boxShadow = 'none';
+        text.innerHTML = 'ARDUINO BRIDGE: <span style="color:var(--text-muted)">OFFLINE</span>';
+        if (sub) sub.textContent = 'Nyalakan agar robot merespon /cmd_vel';
+        btn.className = 'btn btn-sm btn-success';
+        btn.innerHTML = '⚡ Start Bridge';
+    }
+}
+
+async function toggleCamera() {
+    const btns = [
+        document.getElementById('camera-toggle-btn'),
+        document.getElementById('cam-page-toggle-btn')
+    ].filter(Boolean);
+
+    btns.forEach(b => {
+        b.disabled = true;
+        b.style.opacity = '0.6';
+    });
+
+    try {
+        if (APP.cameraActive) {
+            showToast('Menghentikan kamera...', 'info');
+            const res = await apiPost('/api/camera/stop', {});
+            if (res && res.success) {
+                APP.cameraActive = false;
+                updateCameraUI(false);
+                showToast('Kamera berhasil dihentikan.', 'warning');
+            } else {
+                showToast(res ? (res.error || res.message) : 'Gagal menghentikan kamera', 'error');
+            }
+        } else {
+            showToast('Menyalakan kamera USB...', 'info');
+            const res = await apiPost('/api/camera/start', {});
+            if (res && res.success) {
+                APP.cameraActive = true;
+                updateCameraUI(true);
+                showToast('Kamera berhasil dinyalakan!', 'success');
+                // Beri jeda 1 detik agar proses kamera bind hardware V4L2 lalu refresh src stream
+                setTimeout(() => {
+                    const ts = Date.now();
+                    ['teleop-cam-img', 'camera-feed', 'cockpit-cam-img', 'split-cam-img'].forEach(id => {
+                        const img = document.getElementById(id);
+                        if (img) {
+                            img.src = '/api/camera/stream?t=' + ts;
+                            img.style.display = 'block';
+                        }
+                    });
+                }, 1000);
+            } else {
+                showToast(res ? (res.error || res.message) : 'Gagal menyalakan kamera', 'error');
+            }
+        }
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    } finally {
+        btns.forEach(b => {
+            b.disabled = false;
+            b.style.opacity = '1';
+        });
+    }
+}
+
+function updateCameraUI(active) {
+    // 1. Update Joystick / Teleop page controls
+    const ind = document.getElementById('camera-status-indicator');
+    const text = document.getElementById('camera-status-text');
+    const sub = document.getElementById('camera-sub-text');
+    const btn = document.getElementById('camera-toggle-btn');
+    const lbl = document.getElementById('teleop-cam-status-label');
+
+    if (ind && text && btn) {
+        if (active) {
+            ind.style.background = 'var(--success)';
+            ind.style.boxShadow = '0 0 8px var(--success)';
+            text.innerHTML = 'USB CAMERA: <span style="color:var(--success)">ONLINE</span>';
+            if (sub) sub.textContent = 'Stream /camera/image_raw/compressed aktif';
+            btn.className = 'btn btn-sm btn-danger';
+            btn.innerHTML = '🛑 Stop Kamera';
+            if (lbl) lbl.textContent = 'LIVE TELEOP VIEW';
+        } else {
+            ind.style.background = 'var(--text-muted)';
+            ind.style.boxShadow = 'none';
+            text.innerHTML = 'USB CAMERA: <span style="color:var(--text-muted)">OFFLINE</span>';
+            if (sub) sub.textContent = 'Nyalakan kamera untuk melihat video real-time';
+            btn.className = 'btn btn-sm btn-success';
+            btn.innerHTML = '📷 Start Kamera';
+            if (lbl) lbl.textContent = 'CAMERA OFFLINE';
+        }
+    }
+
+    // 2. Update Camera page controls (if on Camera page)
+    const pageInd = document.getElementById('cam-page-status-indicator');
+    const pageText = document.getElementById('cam-page-status-text');
+    const pageSub = document.getElementById('cam-page-sub-text');
+    const pageBtn = document.getElementById('cam-page-toggle-btn');
+    if (pageInd && pageText && pageBtn) {
+        if (active) {
+            pageInd.style.background = 'var(--success)';
+            pageInd.style.boxShadow = '0 0 8px var(--success)';
+            pageText.innerHTML = 'USB CAMERA: <span style="color:var(--success)">ONLINE</span>';
+            if (pageSub) pageSub.textContent = 'Hardware kamera & publisher terhubung';
+            pageBtn.className = 'btn btn-sm btn-danger';
+            pageBtn.innerHTML = '🛑 Stop Kamera';
+        } else {
+            pageInd.style.background = 'var(--text-muted)';
+            pageInd.style.boxShadow = 'none';
+            pageText.innerHTML = 'USB CAMERA: <span style="color:var(--text-muted)">OFFLINE</span>';
+            if (pageSub) pageSub.textContent = 'Hardware kamera standby';
+            pageBtn.className = 'btn btn-sm btn-success';
+            pageBtn.innerHTML = '📷 Start Kamera';
+        }
+    }
+
+    // 3. Reset image visibility if turning active
+    if (active) {
+        ['teleop-cam-img', 'camera-feed', 'cockpit-cam-img', 'split-cam-img'].forEach(id => {
+            const img = document.getElementById(id);
+            if (img) {
+                img.style.display = 'block';
+                if (img.parentElement) {
+                    const off = img.parentElement.querySelector('.teleop-cam-offline, #cam-offline');
+                    if (off) off.style.display = 'none';
+                    const overlay = img.parentElement.querySelector('.camera-overlay');
+                    if (overlay) overlay.style.display = '';
+                }
+            }
+        });
+    } else {
+        ['camera-feed-canvas', 'teleop-cam-canvas', 'cockpit-cam-canvas'].forEach(id => {
+            const c = document.getElementById(id);
+            if (c) {
+                const ctx = c.getContext('2d');
+                ctx.clearRect(0, 0, c.width, c.height);
+            }
+        });
+    }
+}
+
+window.toggleCamera = toggleCamera;
+window.updateCameraUI = updateCameraUI;
+window.toggleArduinoBridge = toggleArduinoBridge;
+window.updateArduinoBridgeUI = updateArduinoBridgeUI;
+
+// ====================== HUMAN AWARENESS AI CONTROLLER ======================
+async function toggleHumanAwareness() {
+    const btns = [
+        document.getElementById('human-node-toggle-btn')
+    ].filter(Boolean);
+
+    btns.forEach(b => {
+        b.disabled = true;
+        b.style.opacity = '0.6';
+    });
+
+    try {
+        if (APP.humanNodeActive) {
+            showToast('Menghentikan Human Awareness AI...', 'info');
+            const res = await apiPost('/api/human/stop', {});
+            if (res && res.success) {
+                APP.humanNodeActive = false;
+                updateHumanAwarenessUI(false);
+                ['camera-feed-canvas', 'teleop-cam-canvas', 'cockpit-cam-canvas'].forEach(id => {
+                    const c = document.getElementById(id);
+                    if (c) {
+                        const ctx = c.getContext('2d');
+                        ctx.clearRect(0, 0, c.width, c.height);
+                    }
+                });
+                showToast('Human Awareness AI dihentikan.', 'warning');
+            } else {
+                showToast(res ? (res.error || res.message) : 'Gagal menghentikan Human AI', 'error');
+            }
+        } else {
+            showToast('Menjalankan Human Awareness AI...', 'info');
+            const res = await apiPost('/api/human/start', {});
+            if (res && res.success) {
+                APP.humanNodeActive = true;
+                APP.cameraActive = true;
+                updateCameraUI(true);
+                updateHumanAwarenessUI(true);
+                showToast('Human Awareness AI aktif! Kamera & YOLO berjalan.', 'success');
+            } else {
+                showToast(res ? (res.error || res.message) : 'Gagal menjalankan Human AI', 'error');
+            }
+        }
+    } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+    } finally {
+        btns.forEach(b => {
+            b.disabled = false;
+            b.style.opacity = '1';
+        });
+    }
+}
+
+function updateHumanAwarenessUI(active) {
+    const ind = document.getElementById('human-node-status-indicator');
+    const text = document.getElementById('human-node-status-text');
+    const sub = document.getElementById('human-node-sub-text');
+    const btn = document.getElementById('human-node-toggle-btn');
+
+    if (ind && text && btn) {
+        if (active) {
+            ind.style.background = 'var(--success)';
+            ind.style.boxShadow = '0 0 8px var(--success)';
+            text.innerHTML = 'HUMAN AI NODE: <span style="color:var(--success)">RUNNING</span>';
+            if (sub) sub.textContent = 'Deteksi YOLO & estimasi jarak aktif (/human_info)';
+            btn.className = 'btn btn-sm btn-danger';
+            btn.innerHTML = '🛑 Stop Human AI';
+        } else {
+            ind.style.background = 'var(--text-muted)';
+            ind.style.boxShadow = 'none';
+            text.innerHTML = 'HUMAN AI NODE: <span style="color:var(--text-muted)">STOPPED</span>';
+            if (sub) sub.textContent = 'Tes deteksi manusia mandiri tanpa perlu navigasi';
+            btn.className = 'btn btn-sm btn-primary';
+            btn.innerHTML = '🚀 Start Human AI';
+        }
+    }
+}
+
+function toggleBboxOverlay() {
+    APP.showBbox = !APP.showBbox;
+    localStorage.setItem('amr_show_bbox', APP.showBbox ? 'true' : 'false');
+    updateBboxUI();
+
+    ['camera-feed-canvas', 'teleop-cam-canvas', 'cockpit-cam-canvas'].forEach(id => {
+        const c = document.getElementById(id);
+        if (c) {
+            const ctx = c.getContext('2d');
+            ctx.clearRect(0, 0, c.width, c.height);
+        }
+    });
+
+    if (APP.showBbox && APP.humanInfo) {
+        renderActiveBboxHUD();
+    }
+    showToast(`Bounding Box HUD: ${APP.showBbox ? 'ON (Ditampilkan)' : 'OFF (Disembunyikan)'}`, 'info');
+}
+
+function updateBboxUI() {
+    const mainBtns = [
+        document.getElementById('bbox-toggle-btn'),
+        document.getElementById('teleop-bbox-toggle-btn')
+    ].filter(Boolean);
+
+    mainBtns.forEach(b => {
+        if (APP.showBbox) {
+            b.className = 'btn btn-sm btn-accent';
+            b.innerHTML = '👁️ Bbox HUD: ON';
+        } else {
+            b.className = 'btn btn-sm btn-outline';
+            b.innerHTML = '👁️ Bbox HUD: OFF';
+        }
+    });
+
+    const cockpitBtn = document.getElementById('cockpit-bbox-toggle-btn');
+    if (cockpitBtn) {
+        cockpitBtn.style.color = APP.showBbox ? 'var(--accent)' : 'var(--text-muted)';
+        cockpitBtn.title = APP.showBbox ? 'Bbox HUD: ON (Klik untuk sembunyikan)' : 'Bbox HUD: OFF (Klik untuk tampilkan)';
+    }
+}
+
+function drawBboxHUD(canvasId, imgId, humanInfo) {
+    const canvas = document.getElementById(canvasId);
+    const img = document.getElementById(imgId);
+    if (!canvas || !img) return;
+
+    if (img.style.display === 'none' || img.offsetParent === null) {
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        return;
+    }
+
+    const w = img.clientWidth;
+    const h = img.clientHeight;
+    if (w === 0 || h === 0) return;
+
+    if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+    }
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
+
+    if (!APP.showBbox) return;
+    if (!humanInfo || !humanInfo.boxes || humanInfo.boxes.length === 0) return;
+
+    const fw = humanInfo.frame_width || 640;
+    const fh = humanInfo.frame_height || 480;
+
+    const computedStyle = window.getComputedStyle(img);
+    const fit = computedStyle.objectFit;
+
+    let sx = w / fw;
+    let sy = h / fh;
+    let ox = 0;
+    let oy = 0;
+
+    if (fit === 'cover' || fit === 'contain') {
+        const frameAspect = fw / fh;
+        const elemAspect = w / h;
+        if (fit === 'cover') {
+            if (elemAspect > frameAspect) {
+                const scale = w / fw;
+                sx = scale;
+                sy = scale;
+                oy = (h - fh * scale) / 2;
+            } else {
+                const scale = h / fh;
+                sx = scale;
+                sy = scale;
+                ox = (w - fw * scale) / 2;
+            }
+        } else if (fit === 'contain') {
+            if (elemAspect > frameAspect) {
+                const scale = h / fh;
+                sx = scale;
+                sy = scale;
+                ox = (w - fw * scale) / 2;
+            } else {
+                const scale = w / fw;
+                sx = scale;
+                sy = scale;
+                oy = (h - fh * scale) / 2;
+            }
+        }
+    }
+
+    humanInfo.boxes.forEach(box => {
+        const bx = ox + box.x1 * sx;
+        const by = oy + box.y1 * sy;
+        const bw = (box.x2 - box.x1) * sx;
+        const bh = (box.y2 - box.y1) * sy;
+
+        let strokeColor = '#3b82f6';
+        let fillColor = 'rgba(59, 130, 246, 0.15)';
+        let tagColor = '#3b82f6';
+
+        if (box.is_target) {
+            if (box.zone === 'NEAR') {
+                strokeColor = '#ef4444';
+                fillColor = 'rgba(239, 68, 68, 0.22)';
+                tagColor = '#ef4444';
+            } else if (box.zone === 'MEDIUM') {
+                strokeColor = '#f59e0b';
+                fillColor = 'rgba(245, 158, 11, 0.20)';
+                tagColor = '#f59e0b';
+            } else {
+                strokeColor = '#10b981';
+                fillColor = 'rgba(16, 185, 129, 0.16)';
+                tagColor = '#10b981';
+            }
+        }
+
+        // Kotak Bounding Box
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = box.is_target ? 2.5 : 1.5;
+        ctx.strokeRect(bx, by, bw, bh);
+
+        // Tech HUD Corner Brackets
+        const cornerLen = Math.max(6, Math.min(14, bw / 3, bh / 3));
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        // Top-left
+        ctx.beginPath();
+        ctx.moveTo(bx, by + cornerLen);
+        ctx.lineTo(bx, by);
+        ctx.lineTo(bx + cornerLen, by);
+        ctx.stroke();
+        // Top-right
+        ctx.beginPath();
+        ctx.moveTo(bx + bw - cornerLen, by);
+        ctx.lineTo(bx + bw, by);
+        ctx.lineTo(bx + bw, by + cornerLen);
+        ctx.stroke();
+        // Bottom-left
+        ctx.beginPath();
+        ctx.moveTo(bx, by + bh - cornerLen);
+        ctx.lineTo(bx, by + bh);
+        ctx.lineTo(bx + cornerLen, by + bh);
+        ctx.stroke();
+        // Bottom-right
+        ctx.beginPath();
+        ctx.moveTo(bx + bw - cornerLen, by + bh);
+        ctx.lineTo(bx + bw, by + bh);
+        ctx.lineTo(bx + bw, by + bh - cornerLen);
+        ctx.stroke();
+
+        // Area Fill transparan
+        ctx.fillStyle = fillColor;
+        ctx.fillRect(bx, by, bw, bh);
+
+        // HUD Text Label
+        let label = `HUMAN ${(box.conf * 100).toFixed(0)}%`;
+        if (box.dist !== null && box.dist !== undefined) {
+            label += ` · ${box.dist.toFixed(2)}m`;
+        }
+        if (box.zone && box.zone !== 'NONE') {
+            label += ` [${box.zone}]`;
+        }
+
+        ctx.font = 'bold 11px Inter, system-ui, sans-serif';
+        const textWidth = ctx.measureText(label).width;
+        const tagH = 18;
+        const tagW = textWidth + 10;
+        const tagY = Math.max(0, by - tagH);
+
+        ctx.fillStyle = tagColor;
+        ctx.fillRect(bx, tagY, tagW, tagH);
+
+        ctx.fillStyle = '#ffffff';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, bx + 5, tagY + tagH / 2);
+    });
+}
+
+function renderActiveBboxHUD() {
+    if (APP.currentPage === 'camera') {
+        drawBboxHUD('camera-feed-canvas', 'camera-feed', APP.humanInfo);
+    } else if (APP.currentPage === 'joystick') {
+        drawBboxHUD('teleop-cam-canvas', 'teleop-cam-img', APP.humanInfo);
+    } else if (APP.currentPage === 'delivery') {
+        drawBboxHUD('cockpit-cam-canvas', 'cockpit-cam-img', APP.humanInfo);
+    }
+}
+
+window.toggleHumanAwareness = toggleHumanAwareness;
+window.updateHumanAwarenessUI = updateHumanAwarenessUI;
+window.toggleBboxOverlay = toggleBboxOverlay;
+window.updateBboxUI = updateBboxUI;
+window.drawBboxHUD = drawBboxHUD;
+window.renderActiveBboxHUD = renderActiveBboxHUD;
+
 async function emergencyStop() {
+    if (typeof cancelAutoRelocalize === 'function') {
+        cancelAutoRelocalize();
+    }
     await apiPost('/api/cmd_vel', { linear: 0, angular: 0 });
     await apiPost('/api/delivery/control', { command: 'cancel' });
     _modalDismissedForCurrentPhase = false;
@@ -2317,9 +3091,12 @@ function renderSettings() {
 
     const mapOptionsHtml = [
         `<option value="live" ${APP.mapFile === 'live' ? 'selected' : ''}>📡 Live ROS /map Topic (SLAM / Nav2)</option>`,
-        ...(APP.availableMaps || []).map(m =>
-            `<option value="${m.name}" ${APP.mapFile === m.name ? 'selected' : ''}>🗺️ ${m.name}</option>`
-        )
+        ...(APP.availableMaps || []).map(m => {
+            const mapId = (typeof m === 'object' && m.id) ? m.id : (typeof m === 'object' ? m.name : m);
+            const mapLabel = (typeof m === 'object' && m.name) ? m.name : mapId;
+            const isSelected = APP.mapFile === mapId || APP.mapFile === mapLabel;
+            return `<option value="${mapId}" ${isSelected ? 'selected' : ''}>🗺️ ${mapLabel}</option>`;
+        })
     ].join('');
 
     const themeCardsHtml = STUDIO_THEMES.map(t => `
@@ -2387,6 +3164,9 @@ function renderSettings() {
                         </select>
                         <button type="button" class="btn btn-outline btn-sm" onclick="openInitialPoseModal()">
                             📍 Set Initial Pose (AMCL)
+                        </button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="openAutoRelocalizeModal()">
+                            🔄 Relokalisasi (360°)
                         </button>
                     </div>
                 </div>
@@ -2667,40 +3447,94 @@ async function sendInitialPoseToRobot(x, y, yaw = 0.0, setAsHome = false) {
         if (setAsHome) {
             APP.homePosition = { x: parseFloat(x) || 0, y: parseFloat(y) || 0, yaw: parseFloat(yaw) || 0 };
         }
+        if (typeof clearRobotTrail === 'function') {
+            clearRobotTrail(false);
+        }
         showToast(res.message || 'Initial Pose dikirim ke AMCL!', 'success');
     } else {
         showToast(res ? res.error : 'Gagal mengirim Initial Pose', 'error');
     }
 }
 
-function openInitialPoseModal() {
-    const curX = (APP.pose && APP.pose.x) ? APP.pose.x.toFixed(2) : '0.0';
-    const curY = (APP.pose && APP.pose.y) ? APP.pose.y.toFixed(2) : '0.0';
-    const curYawDeg = (APP.pose && APP.pose.yaw) ? ((APP.pose.yaw * 180) / Math.PI).toFixed(0) : '0';
+function openInitialPoseModal(initX = null, initY = null, initYawDeg = null) {
+    const curX = (initX !== null && initX !== undefined)
+        ? (typeof initX === 'number' ? initX.toFixed(2) : initX)
+        : ((APP.pose && APP.pose.x != null) ? APP.pose.x.toFixed(2) : '0.00');
+
+    const curY = (initY !== null && initY !== undefined)
+        ? (typeof initY === 'number' ? initY.toFixed(2) : initY)
+        : ((APP.pose && APP.pose.y != null) ? APP.pose.y.toFixed(2) : '0.00');
+
+    const curYawDeg = (initYawDeg !== null && initYawDeg !== undefined)
+        ? Math.round(Number(initYawDeg))
+        : ((APP.pose && APP.pose.yaw != null) ? Math.round((APP.pose.yaw * 180) / Math.PI) : 0);
 
     document.getElementById('modal-title').textContent = '📍 Set Posisi Awal Robot (AMCL /initialpose)';
     document.getElementById('modal-body').innerHTML = `
-        <p style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:10px;">
-            Kirim <strong>2D Pose Estimate</strong> ke topik <code>/initialpose</code> agar AMCL tahu posisi awal robot di peta tanpa perlu membuka RViz2.
+        <p style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:10px; line-height:1.45;">
+            Kirim <strong>2D Pose Estimate</strong> ke topik <code>/initialpose</code> agar AMCL mengetahui koordinat dan arah hadap robot di peta secara presisi.
         </p>
-        <div class="input-row">
-            <div class="input-group">
+
+        <div class="input-row" style="margin-bottom:10px;">
+            <div class="input-group" style="flex:1;">
                 <div class="input-label">Koordinat X (m)</div>
-                <input class="input-field" id="initpose-x" type="number" step="0.1" value="${curX}">
+                <input class="input-field" id="initpose-x" type="number" step="0.05" value="${curX}">
             </div>
-            <div class="input-group">
+            <div class="input-group" style="flex:1;">
                 <div class="input-label">Koordinat Y (m)</div>
-                <input class="input-field" id="initpose-y" type="number" step="0.1" value="${curY}">
-            </div>
-            <div class="input-group">
-                <div class="input-label">Arah Yaw (°)</div>
-                <input class="input-field" id="initpose-yaw-deg" type="number" step="5" value="${curYawDeg}">
+                <input class="input-field" id="initpose-y" type="number" step="0.05" value="${curY}">
             </div>
         </div>
-        <label style="display:flex; align-items:center; gap:8px; font-size:0.76rem; color:var(--text-primary); cursor:pointer; margin-top:4px;">
+
+        <!-- QUICK DIRECTION BUTTONS -->
+        <div style="background:var(--bg-tertiary, rgba(255,255,255,0.02)); border:1px solid var(--border-subtle); border-radius:8px; padding:10px; margin-bottom:10px;">
+            <div style="font-size:0.71rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px;">
+                Pilih Cepat Arah Hadap (Mata Angin):
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px;">
+                <button type="button" class="btn btn-outline btn-sm" onclick="setInitPoseHeading(0)" style="font-size:0.72rem; padding:6px 2px; display:flex; flex-direction:column; align-items:center;">
+                    <span>➡️ Timur</span>
+                    <span class="mono" style="font-size:0.65rem; color:var(--text-muted);">(0°)</span>
+                </button>
+                <button type="button" class="btn btn-outline btn-sm" onclick="setInitPoseHeading(90)" style="font-size:0.72rem; padding:6px 2px; display:flex; flex-direction:column; align-items:center;">
+                    <span>⬆️ Utara</span>
+                    <span class="mono" style="font-size:0.65rem; color:var(--text-muted);">(+90°)</span>
+                </button>
+                <button type="button" class="btn btn-outline btn-sm" onclick="setInitPoseHeading(180)" style="font-size:0.72rem; padding:6px 2px; display:flex; flex-direction:column; align-items:center;">
+                    <span>⬅️ Barat</span>
+                    <span class="mono" style="font-size:0.65rem; color:var(--text-muted);">(180°)</span>
+                </button>
+                <button type="button" class="btn btn-outline btn-sm" onclick="setInitPoseHeading(-90)" style="font-size:0.72rem; padding:6px 2px; display:flex; flex-direction:column; align-items:center;">
+                    <span>⬇️ Selatan</span>
+                    <span class="mono" style="font-size:0.65rem; color:var(--text-muted);">(-90°)</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- FINE YAW SLIDER & NUMBER -->
+        <div class="input-group" style="margin-bottom:12px;">
+            <div class="input-label flex-between">
+                <span>Atur Sudut Yaw Robot (°)</span>
+                <span id="initpose-yaw-preview" class="mono text-accent" style="font-weight:700;">${curYawDeg}°</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <input class="input-field" id="initpose-yaw-slider" type="range" min="-180" max="180" step="5" value="${curYawDeg}"
+                       oninput="onInitPoseYawChange(this.value)" style="flex:1;">
+                <input class="input-field" id="initpose-yaw-num" type="number" step="5" min="-180" max="180" value="${curYawDeg}"
+                       oninput="onInitPoseYawChange(this.value)" style="width:75px; text-align:center;">
+            </div>
+        </div>
+
+        <label style="display:flex; align-items:center; gap:8px; font-size:0.75rem; color:var(--text-primary); cursor:pointer; margin-top:4px;">
             <input type="checkbox" id="initpose-set-home" checked>
             Simpan juga titik ini sebagai posisi <strong>Home / Docking</strong> untuk mode ${APP.mode.toUpperCase()}
         </label>
+        <div style="margin-top:12px; padding:9px 12px; background:rgba(255,255,255,0.03); border:1px solid var(--border-subtle); border-radius:6px; font-size:0.72rem; color:var(--text-secondary); display:flex; justify-content:space-between; align-items:center; gap:8px;">
+            <span>Mau kalibrasi otomatis dengan sensor LiDAR?</span>
+            <button type="button" class="btn btn-sm btn-outline" style="font-size:0.68rem; padding:3px 8px; white-space:nowrap;" onclick="hideModal(); openAutoRelocalizeModal();">
+                🔄 Relokalisasi Otomatis (360°)
+            </button>
+        </div>
     `;
     const actionsEl = document.getElementById('modal-actions');
     actionsEl.innerHTML = '';
@@ -2724,7 +3558,7 @@ function openInitialPoseModal() {
     btnSend.onclick = async () => {
         const x = parseFloat(document.getElementById('initpose-x').value) || 0.0;
         const y = parseFloat(document.getElementById('initpose-y').value) || 0.0;
-        const yawDeg = parseFloat(document.getElementById('initpose-yaw-deg').value) || 0.0;
+        const yawDeg = parseFloat(document.getElementById('initpose-yaw-num')?.value || document.getElementById('initpose-yaw-slider')?.value) || 0.0;
         const setHome = document.getElementById('initpose-set-home').checked;
         hideModal();
         await sendInitialPoseToRobot(x, y, (yawDeg * Math.PI) / 180.0, setHome);
@@ -2734,6 +3568,248 @@ function openInitialPoseModal() {
     actionsEl.appendChild(btnZero);
     actionsEl.appendChild(btnSend);
     document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
+window.setInitPoseHeading = function(deg) {
+    const slider = document.getElementById('initpose-yaw-slider');
+    const num = document.getElementById('initpose-yaw-num');
+    const prev = document.getElementById('initpose-yaw-preview');
+    if (slider) slider.value = deg;
+    if (num) num.value = deg;
+    if (prev) prev.textContent = deg + '°';
+};
+
+window.onInitPoseYawChange = function(val) {
+    const deg = parseFloat(val) || 0;
+    const slider = document.getElementById('initpose-yaw-slider');
+    const num = document.getElementById('initpose-yaw-num');
+    const prev = document.getElementById('initpose-yaw-preview');
+    if (slider && slider.value != deg) slider.value = deg;
+    if (num && num.value != deg) num.value = deg;
+    if (prev) prev.textContent = deg + '°';
+};
+
+let _relocalizePollTimer = null;
+
+function openAutoRelocalizeModal() {
+    const isNavOnline = !!APP.navActive;
+    const isArdOnline = !!APP.arduinoActive;
+    const canStart = isNavOnline && isArdOnline;
+
+    document.getElementById('modal-title').textContent = '🔄 Relokalisasi Posisi Robot (AMCL 360°)';
+    document.getElementById('modal-body').innerHTML = `
+        <p style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:12px; line-height:1.5;">
+            Gunakan fitur ini untuk menyelaraskan kembali posisi dan orientasi AMCL robot dengan dinding menggunakan pantulan sensor LiDAR dengan memutar robot 360°.
+        </p>
+
+        <!-- PILIHAN METODE RELOKALISASI -->
+        <div style="background:var(--bg-tertiary, rgba(255,255,255,0.02)); border:1px solid var(--border-subtle); border-radius:8px; padding:10px 12px; margin-bottom:12px;">
+            <div style="font-size:0.71rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px;">
+                Pilih Metode Kalibrasi:
+            </div>
+            <div style="display:flex; flex-direction:column; gap:8px;">
+                <label style="display:flex; align-items:flex-start; gap:8px; padding:8px 10px; background:rgba(16, 185, 129, 0.08); border:1px solid rgba(16, 185, 129, 0.3); border-radius:6px; cursor:pointer;">
+                    <input type="radio" name="relocalize-mode" value="local" checked style="margin-top:2px;">
+                    <div style="font-size:0.74rem;">
+                        <strong style="color:var(--success);">Kalibrasi Halus Posisi Saat Ini (Putar 360°) [Direkomendasikan]</strong>
+                        <div style="color:var(--text-secondary); font-size:0.7rem; margin-top:2px; line-height:1.4;">
+                            Robot memutar 360° untuk mengunci dinding terhadap posisi perkiraan saat ini. <strong>Paling aman untuk koridor & lorong simetris agar hadap robot tidak tertukar 180°</strong>.
+                        </div>
+                    </div>
+                </label>
+                <label style="display:flex; align-items:flex-start; gap:8px; padding:8px 10px; background:rgba(255,255,255,0.02); border:1px solid var(--border-subtle); border-radius:6px; cursor:pointer;">
+                    <input type="radio" name="relocalize-mode" value="global" style="margin-top:2px;">
+                    <div style="font-size:0.74rem;">
+                        <strong>Pencarian Global (Sebar Partikel ke Seluruh Peta)</strong>
+                        <div style="color:var(--text-secondary); font-size:0.7rem; margin-top:2px; line-height:1.4;">
+                            AMCL menyebarkan partikel ke seluruh area peta. Gunakan hanya jika robot benar-benar diletakkan di lokasi yang tidak diketahui sama sekali.
+                        </div>
+                    </div>
+                </label>
+            </div>
+        </div>
+
+        <!-- STATUS HARDWARE CEK -->
+        <div style="background:var(--bg-tertiary, rgba(255,255,255,0.02)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; padding:10px 14px; margin-bottom:12px;">
+            <div style="font-size:0.7rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:8px;">
+                Status Kesiapan Sistem:
+            </div>
+            <div style="display:flex; flex-direction:column; gap:6px;">
+                <div class="flex-between" style="font-size:0.75rem;">
+                    <span>1. Navigasi (Nav2 / AMCL):</span>
+                    <span style="font-weight:700; color:${isNavOnline ? 'var(--success)' : 'var(--danger)'};">
+                        ${isNavOnline ? '✅ READY (ONLINE)' : '❌ OFFLINE (Nyalakan Navigasi)'}
+                    </span>
+                </div>
+                <div class="flex-between" style="font-size:0.75rem;">
+                    <span>2. Hardware Motor (Arduino Bridge):</span>
+                    <span style="font-weight:700; color:${isArdOnline ? 'var(--success)' : 'var(--danger)'};">
+                        ${isArdOnline ? '✅ READY (ONLINE)' : '❌ OFFLINE (Nyalakan Bridge)'}
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- SAFETY WARNING -->
+        <div style="padding:10px 12px; background:rgba(234, 88, 12, 0.1); border:1px solid rgba(234, 88, 12, 0.3); border-radius:8px; font-size:0.74rem; color:var(--warning); margin-bottom:14px; line-height:1.45;">
+            <strong>⚠️ Peringatan Keamanan:</strong>
+            Pastikan area radius minimal <strong>50 cm di sekeliling robot bebas dari rintangan</strong> manusia atau barang agar robot dapat berputar di tempat dengan aman.
+        </div>
+
+        <div id="relocalize-progress-wrap" style="display:none; margin-bottom:12px;">
+            <div class="flex-between" style="font-size:0.75rem; font-weight:600; margin-bottom:6px;">
+                <span id="relocalize-status-label">Menyebarkan partikel...</span>
+                <span id="relocalize-pct-label" class="mono text-accent">0%</span>
+            </div>
+            <div style="width:100%; height:8px; background:var(--bg-tertiary); border-radius:4px; overflow:hidden; border:1px solid var(--border-subtle);">
+                <div id="relocalize-progress-bar" style="width:0%; height:100%; background:var(--accent); transition:width 0.3s ease;"></div>
+            </div>
+        </div>
+    `;
+
+    const actionsEl = document.getElementById('modal-actions');
+    actionsEl.innerHTML = '';
+
+    const btnCancel = document.createElement('button');
+    btnCancel.className = 'btn btn-outline';
+    btnCancel.id = 'relocalize-btn-cancel';
+    btnCancel.textContent = 'Batal';
+    btnCancel.onclick = () => {
+        cancelAutoRelocalize();
+        hideModal();
+    };
+
+    const btnStart = document.createElement('button');
+    btnStart.className = `btn ${canStart ? 'btn-primary' : 'btn-secondary'}`;
+    btnStart.id = 'relocalize-btn-start';
+    btnStart.textContent = '🚀 Mulai Putar & Kalibrasi (360°)';
+    btnStart.disabled = !canStart;
+    btnStart.onclick = startAutoRelocalize;
+
+    actionsEl.appendChild(btnCancel);
+    actionsEl.appendChild(btnStart);
+
+    document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
+async function startAutoRelocalize() {
+    const btnStart = document.getElementById('relocalize-btn-start');
+    const btnCancel = document.getElementById('relocalize-btn-cancel');
+    const progWrap = document.getElementById('relocalize-progress-wrap');
+
+    if (btnStart) {
+        btnStart.disabled = true;
+        btnStart.style.display = 'none';
+    }
+    if (btnCancel) {
+        btnCancel.className = 'btn btn-danger';
+        btnCancel.textContent = '⏹️ Batalkan Relokalisasi';
+        btnCancel.onclick = cancelAutoRelocalize;
+    }
+    if (progWrap) {
+        progWrap.style.display = 'block';
+    }
+
+    const modeEl = document.querySelector('input[name="relocalize-mode"]:checked');
+    const relocMode = modeEl ? modeEl.value : 'local';
+
+    if (typeof clearRobotTrail === 'function') {
+        clearRobotTrail(false);
+    }
+
+    showToast(`Memulai relokalisasi AMCL (${relocMode === 'local' ? 'Kalibrasi Halus' : 'Pencarian Global'})...`, 'info');
+    const res = await apiPost('/api/relocalize/start', { mode: relocMode });
+    if (!res || !res.success) {
+        showToast(res ? (res.error || res.message) : 'Gagal memulai relokalisasi', 'error');
+        if (btnStart) {
+            btnStart.disabled = false;
+            btnStart.style.display = 'inline-block';
+        }
+        if (btnCancel) {
+            btnCancel.className = 'btn btn-outline';
+            btnCancel.textContent = 'Batal';
+            btnCancel.onclick = hideModal;
+        }
+        return;
+    }
+
+    showToast(res.message, 'success');
+    if (_relocalizePollTimer) clearInterval(_relocalizePollTimer);
+    _relocalizePollTimer = setInterval(pollRelocalizeProgress, 600);
+}
+
+async function cancelAutoRelocalize() {
+    if (_relocalizePollTimer) {
+        clearInterval(_relocalizePollTimer);
+        _relocalizePollTimer = null;
+    }
+    await apiPost('/api/relocalize/cancel', {});
+    showToast('Relokalisasi dihentikan.', 'warning');
+
+    const btnCancel = document.getElementById('relocalize-btn-cancel');
+    if (btnCancel) {
+        btnCancel.className = 'btn btn-outline';
+        btnCancel.textContent = 'Tutup';
+        btnCancel.onclick = hideModal;
+    }
+    const lbl = document.getElementById('relocalize-status-label');
+    if (lbl) {
+        lbl.textContent = 'Dibatalkan oleh pengguna';
+        lbl.style.color = 'var(--danger)';
+    }
+}
+
+async function pollRelocalizeProgress() {
+    const st = await apiGet('/api/relocalize/status');
+    if (!st) return;
+
+    const bar = document.getElementById('relocalize-progress-bar');
+    const pctLbl = document.getElementById('relocalize-pct-label');
+    const statLbl = document.getElementById('relocalize-status-label');
+    const btnCancel = document.getElementById('relocalize-btn-cancel');
+
+    if (bar) bar.style.width = (st.progress || 0) + '%';
+    if (pctLbl) pctLbl.textContent = (st.progress || 0) + '%';
+    if (statLbl && st.message) statLbl.textContent = st.message;
+
+    if (!st.active) {
+        if (_relocalizePollTimer) {
+            clearInterval(_relocalizePollTimer);
+            _relocalizePollTimer = null;
+        }
+
+        if (st.phase === 'completed') {
+            if (bar) {
+                bar.style.width = '100%';
+                bar.style.background = 'var(--success)';
+            }
+            if (pctLbl) {
+                pctLbl.textContent = '100%';
+                pctLbl.style.color = 'var(--success)';
+            }
+            if (statLbl) {
+                statLbl.innerHTML = `<strong>✅ Selesai!</strong> ${st.message}`;
+                statLbl.style.color = 'var(--success)';
+            }
+            if (btnCancel) {
+                btnCancel.className = 'btn btn-success';
+                btnCancel.textContent = '✅ Selesai & Tutup';
+                btnCancel.onclick = hideModal;
+            }
+            showToast(st.message || 'Relokalisasi selesai!', 'success');
+        } else if (st.phase === 'failed') {
+            if (statLbl) {
+                statLbl.textContent = `❌ ${st.message || 'Gagal'}`;
+                statLbl.style.color = 'var(--danger)';
+            }
+            if (btnCancel) {
+                btnCancel.className = 'btn btn-outline';
+                btnCancel.textContent = 'Tutup';
+                btnCancel.onclick = hideModal;
+            }
+            showToast(st.message || 'Relokalisasi gagal', 'error');
+        }
+    }
 }
 
 function openSavePointFromMapModal(wx, wy) {
@@ -2800,6 +3876,9 @@ window.onChangeActiveMap = onChangeActiveMap;
 window.refreshActiveMap = refreshActiveMap;
 window.openInitialPoseModal = openInitialPoseModal;
 window.sendInitialPoseToRobot = sendInitialPoseToRobot;
+window.openAutoRelocalizeModal = openAutoRelocalizeModal;
+window.startAutoRelocalize = startAutoRelocalize;
+window.cancelAutoRelocalize = cancelAutoRelocalize;
 window.openSavePointFromMapModal = openSavePointFromMapModal;
 
 function renderSavedPointsList() {
@@ -2940,13 +4019,18 @@ async function updateSystemInfo() {
         poseSrcEl.textContent = data.pose_source || 'NONE';
     }
     if (camEl) {
-        try {
-            const res = await fetch('/api/camera/snapshot');
-            camEl.textContent = res.ok ? 'ONLINE' : 'OFFLINE';
-            camEl.style.color = res.ok ? 'var(--success)' : 'var(--text-muted)';
-        } catch {
-            camEl.textContent = 'OFFLINE';
-            camEl.style.color = 'var(--text-muted)';
+        if (data && data.hasOwnProperty('camera_active')) {
+            camEl.textContent = data.camera_active ? 'ONLINE' : 'OFFLINE';
+            camEl.style.color = data.camera_active ? 'var(--success)' : 'var(--text-muted)';
+        } else {
+            try {
+                const res = await fetch('/api/camera/snapshot');
+                camEl.textContent = res.ok ? 'ONLINE' : 'OFFLINE';
+                camEl.style.color = res.ok ? 'var(--success)' : 'var(--text-muted)';
+            } catch {
+                camEl.textContent = 'OFFLINE';
+                camEl.style.color = 'var(--text-muted)';
+            }
         }
     }
 }
@@ -2973,6 +4057,35 @@ async function globalStatusPoll() {
             APP.mapFile = data.map_file;
             if (typeof reloadMapData === 'function') reloadMapData();
         }
+
+        if (data.hasOwnProperty('arduino_active')) {
+            APP.arduinoActive = !!data.arduino_active;
+            updateArduinoBridgeUI(APP.arduinoActive);
+        }
+
+        if (data.hasOwnProperty('nav_active')) {
+            APP.navActive = !!data.nav_active;
+            updateNavigationUI(APP.navActive);
+        }
+
+        if (data.hasOwnProperty('camera_active')) {
+            APP.cameraActive = !!data.camera_active;
+            updateCameraUI(APP.cameraActive);
+        }
+
+        if (data.hasOwnProperty('human_node_active')) {
+            APP.humanNodeActive = !!data.human_node_active;
+            updateHumanAwarenessUI(APP.humanNodeActive);
+        }
+
+        if (data.human_info) {
+            APP.humanInfo = data.human_info;
+        }
+
+        if (APP.currentPage === 'camera') {
+            updateCameraReadout(data);
+        }
+        renderActiveBboxHUD();
 
         if (typeof handleDeliveryStatusUpdate === 'function') {
             handleDeliveryStatusUpdate(APP.delivery);
@@ -3021,7 +4134,8 @@ async function globalStatusPoll() {
                 navigating_delivery: 'Menuju Titik Tujuan',
                 waiting_delivery: 'Menunggu Ambil Barang',
                 at_delivery: 'Tiba di Tujuan',
-                returning_home: 'Kembali ke Home Base'
+                returning_home: 'Kembali ke Home Base',
+                waiting_human: '🚶 Menunggu Manusia Lewat'
             };
             const homePhase = document.getElementById('home-phase');
             if (homePhase) homePhase.textContent = phaseLabels[APP.delivery.current_phase] || APP.delivery.current_phase;
@@ -3453,10 +4567,10 @@ async function init() {
     globalStatusPoll();
     APP._lastPollTime = 0;
     setInterval(() => {
-        const isMapPage = ['delivery', 'monitoring', 'mapping', 'joystick'].includes(APP.currentPage);
+        const isMapPage = ['delivery', 'monitoring', 'mapping', 'joystick', 'camera'].includes(APP.currentPage);
         const isRunning = APP.delivery && APP.delivery.status === 'running';
         const now = Date.now();
-        // 250ms saat di halaman peta atau navigasi sedang berjalan, 1000ms saat di halaman lain
+        // 250ms saat di halaman peta, teleop, kamera, atau navigasi berjalan, 1000ms saat di halaman lain
         const interval = (isMapPage || isRunning) ? 250 : 1000;
         if (now - APP._lastPollTime >= interval) {
             APP._lastPollTime = now;

@@ -33,6 +33,12 @@ from nav_msgs.msg import OccupancyGrid, Odometry, Path
 import numpy as np
 
 try:
+    from std_srvs.srv import Empty
+    HAS_STD_SRVS = True
+except ImportError:
+    HAS_STD_SRVS = False
+
+try:
     from tf2_ros import Buffer, TransformListener
     HAS_TF2 = True
 except ImportError:
@@ -177,7 +183,15 @@ def find_map_files(map_yaml_name=None):
     global MAP_PGM_PATH, MAP_YAML_PATH, MAP_METADATA, ACTIVE_MAP_FILE
 
     if map_yaml_name:
-        ACTIVE_MAP_FILE = map_yaml_name
+        raw = str(map_yaml_name).strip()
+        # Bersihkan nama jika membawa label UI (misal 'peta_l1_ddc.yaml (Peta Lantai 1 DDC)')
+        clean = raw.split(' ')[0].split('(')[0].strip()
+        if clean == 'live':
+            ACTIVE_MAP_FILE = 'live'
+        else:
+            if not clean.endswith('.yaml'):
+                clean += '.yaml'
+            ACTIVE_MAP_FILE = clean
 
     if ACTIVE_MAP_FILE == 'live':
         print('[MAP] Mode peta diset ke LIVE ROS2 /map topic')
@@ -195,6 +209,7 @@ def find_map_files(map_yaml_name=None):
             break
 
     if not yaml_candidate:
+        print(f'[WARN] File peta "{target_yaml}" tidak ditemukan, mencari fallback...')
         for d in get_maps_directories():
             for fallback in ('peta_1b.yaml', 'peta_dc.yaml'):
                 cand = os.path.join(d, fallback)
@@ -206,10 +221,11 @@ def find_map_files(map_yaml_name=None):
 
     if yaml_candidate and os.path.exists(yaml_candidate):
         MAP_YAML_PATH = yaml_candidate
+        ACTIVE_MAP_FILE = os.path.basename(yaml_candidate)
         with open(MAP_YAML_PATH, 'r') as f:
             MAP_METADATA = yaml.safe_load(f) or {}
 
-        img_field = MAP_METADATA.get('image', target_yaml.replace('.yaml', '.pgm'))
+        img_field = MAP_METADATA.get('image', ACTIVE_MAP_FILE.replace('.yaml', '.pgm'))
         map_dir = os.path.dirname(MAP_YAML_PATH)
         cand_pgm = os.path.join(map_dir, img_field)
         if not os.path.exists(cand_pgm):
@@ -351,6 +367,8 @@ class DashboardNode(Node):
         # Status delivery dari waypoint_manager
         self.status_sub = self.create_subscription(
             String, '/amr/delivery_status', self.on_delivery_status, 10)
+        self.delivery_log_sub = self.create_subscription(
+            String, '/amr/delivery_log', self.on_delivery_log, 20)
         
         # Status human awareness (/human_state, /human_status, dan /human_info)
         self.human_sub = self.create_subscription(
@@ -377,6 +395,12 @@ class DashboardNode(Node):
         # Initial pose AMCL (/initialpose)
         self.initialpose_pub = self.create_publisher(
             PoseWithCovarianceStamped, '/initialpose', 10)
+        
+        # Service client untuk AMCL global localization (sebar partikel)
+        if HAS_STD_SRVS:
+            self.relocalize_client = self.create_client(Empty, '/reinitialize_global_localization')
+        else:
+            self.relocalize_client = None
         
         # === CAMERA SUBSCRIBER ===
         if HAS_CAMERA:
@@ -549,15 +573,16 @@ class DashboardNode(Node):
                 'origin': [ox, oy, 0.0],
                 'width': w,
                 'height': h,
-                'source': 'live_ros_topic'
+                'source': 'live_slam'
             }
             with self.lock:
                 self.latest_map_msg = msg
                 self.live_map_png = png_bytes
                 self.live_map_meta = meta
 
-            # Auto-sinkronisasi file peta aktif jika origin /map berbeda dengan file statis saat ini
-            if ACTIVE_MAP_FILE != 'live':
+            # Auto-sinkronisasi file peta aktif HANYA jika Nav2 sedang berjalan aktif
+            # Jangan auto-sinkronisasi jika Nav2 mati agar tidak menimpa pilihan peta manual user di dashboard!
+            if is_navigation_active() and ACTIVE_MAP_FILE != 'live':
                 cur_orig = MAP_METADATA.get('origin', [0.0, 0.0, 0.0])
                 if abs(float(cur_orig[0]) - ox) > 0.05 or abs(float(cur_orig[1]) - oy) > 0.05:
                     matched_yaml = None
@@ -577,7 +602,7 @@ class DashboardNode(Node):
                         if matched_yaml:
                             break
                     if matched_yaml and matched_yaml != ACTIVE_MAP_FILE:
-                        self.get_logger().info(f'Auto-sync peta dashboard ke peta aktif ROS2: {matched_yaml}')
+                        self.get_logger().info(f'Auto-sync peta dashboard ke peta aktif Nav2: {matched_yaml}')
                         find_map_files(matched_yaml)
         except Exception as e:
             self.get_logger().warn(f'Gagal memproses /map OccupancyGrid: {e}')
@@ -589,7 +614,29 @@ class DashboardNode(Node):
             with self.lock:
                 self.last_status_time = time.time()
                 if data.get('mission'):
+                    prev_phase = getattr(self, '_last_logged_phase', None)
+                    prev_task_idx = getattr(self, '_last_logged_task_idx', None)
+
                     self.delivery_status = data['mission']
+                    cur_phase = data['mission'].get('current_phase')
+                    cur_task_idx = data['mission'].get('current_task_index', 0)
+                    total_tasks = data['mission'].get('total_tasks', 1)
+
+                    if cur_phase != prev_phase or cur_task_idx != prev_task_idx:
+                        self._last_logged_phase = cur_phase
+                        self._last_logged_task_idx = cur_task_idx
+                        phase_names = {
+                            'navigating_pickup': f'Menuju titik Pickup (Task {cur_task_idx+1}/{total_tasks})',
+                            'waiting_pickup': f'Sampai di titik Pickup! Menunggu barang dimuat...',
+                            'navigating_delivery': f'Menuju titik Delivery (Task {cur_task_idx+1}/{total_tasks})',
+                            'waiting_delivery': f'Sampai di titik Delivery! Menunggu barang diambil...',
+                            'returning_home': 'Mengarahkan AMR kembali ke titik awal (Home)...',
+                            'completed': 'Misi Pengantaran SELESAI.',
+                            'cancelled': 'Misi Pengantaran DIBATALKAN.'
+                        }
+                        desc = phase_names.get(cur_phase, f'Fase: {cur_phase}')
+                        _append_navigation_log(f'📦 [WAYPOINT] {desc}')
+
                     # Simpan ke history jika misi selesai (hanya sekali per misi)
                     mission_id = data['mission'].get('mission_id', '')
                     if (data['mission']['status'] in ('completed', 'cancelled')
@@ -599,6 +646,15 @@ class DashboardNode(Node):
                 else:
                     self.delivery_status = {'status': 'idle', 'current_phase': 'idle'}
         except json.JSONDecodeError:
+            pass
+
+    def on_delivery_log(self, msg):
+        """Menerima stream log dari waypoint_manager dan menyalurkannya ke panel log dashboard."""
+        try:
+            line = msg.data.strip()
+            if line:
+                _append_navigation_log(line)
+        except Exception:
             pass
     
     def check_stale_status(self):
@@ -739,6 +795,29 @@ class DashboardNode(Node):
             }
         self.get_logger().info(f'Initial Pose dikirim ke /initialpose: ({x:.2f}, {y:.2f}, yaw={yaw:.2f})')
 
+    def request_global_localization(self):
+        """Panggil service /reinitialize_global_localization untuk menyebarkan partikel AMCL."""
+        if not self.relocalize_client:
+            try:
+                subprocess.Popen(
+                    ['ros2', 'service', 'call', '/reinitialize_global_localization', 'std_srvs/srv/Empty', '{}'],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                return True
+            except Exception:
+                return False
+        try:
+            if not self.relocalize_client.service_is_ready():
+                ready = self.relocalize_client.wait_for_service(timeout_sec=1.5)
+                if not ready:
+                    return False
+            req = Empty.Request()
+            self.relocalize_client.call_async(req)
+            return True
+        except Exception as e:
+            self.get_logger().error(f'Error call /reinitialize_global_localization: {e}')
+            return False
+
 
 # =====================================================================
 # FLASK APPLICATION
@@ -824,7 +903,11 @@ def apply_mode_profile(mode, custom_map_file=None, save=True):
 
     prof = waypoints_config['profiles'][mode]
     if custom_map_file:
-        prof['map_file'] = custom_map_file
+        raw = str(custom_map_file).strip()
+        clean = raw.split(' ')[0].split('(')[0].strip()
+        if clean != 'live' and not clean.endswith('.yaml'):
+            clean += '.yaml'
+        prof['map_file'] = clean
 
     map_to_load = prof.get('map_file', default_map)
     waypoints_config['predefined_points'] = list(prof.get('predefined_points', []))
@@ -832,6 +915,7 @@ def apply_mode_profile(mode, custom_map_file=None, save=True):
     waypoints_config['settings'] = dict(prof.get('settings', {}))
 
     find_map_files(map_to_load)
+    prof['map_file'] = ACTIVE_MAP_FILE
     if save:
         save_waypoints_config()
     if ros_node is not None:
@@ -902,19 +986,107 @@ def _read_mapping_stdout(proc):
         pass
 
 
+CAMERA_PROC = None
+CAMERA_LOCK = threading.Lock()
+HUMAN_NODE_PROC = None
+HUMAN_NODE_LOCK = threading.Lock()
+
+# =====================================================================
+# ASYNC RUNTIME PROCESS STATE CACHE (ZERO-LATENCY FOR TELEOP)
+# =====================================================================
+RUNTIME_CACHE = {
+    'slam_active': False,
+    'arduino_active': False,
+    'nav_active': False,
+    'camera_active': False,
+    'human_node_active': False,
+    'last_updated': 0
+}
+
+def _update_process_states_loop():
+    """Background loop setiap 2.0s untuk cek proses di OS tanpa memblokir HTTP teleop."""
+    while True:
+        try:
+            # 1. Cek SLAM Mapping
+            slam_act = False
+            with MAPPING_LOCK:
+                if MAPPING_PROC is not None and MAPPING_PROC.poll() is None:
+                    slam_act = True
+            if not slam_act:
+                try:
+                    res = subprocess.run(['pgrep', '-f', '(async_slam_toolbox_node|real_mapping\\.launch\\.py)'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                    slam_act = (res.returncode == 0 and bool(res.stdout.strip()))
+                except Exception:
+                    pass
+
+            # 2. Cek Arduino Bridge
+            ard_act = False
+            with ARDUINO_LOCK:
+                if ARDUINO_PROC is not None and ARDUINO_PROC.poll() is None:
+                    ard_act = True
+            if not ard_act:
+                try:
+                    res = subprocess.run(['pgrep', '-f', 'arduino_bridge'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                    ard_act = (res.returncode == 0 and bool(res.stdout.strip()))
+                except Exception:
+                    pass
+
+            # 3. Cek Navigation (Nav2)
+            nav_act = False
+            with NAVIGATION_LOCK:
+                if NAVIGATION_PROC is not None and NAVIGATION_PROC.poll() is None:
+                    nav_act = True
+            if not nav_act:
+                try:
+                    res = subprocess.run(['pgrep', '-f', '(real_navigation\\.launch\\.py|bt_navigator)'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                    nav_act = (res.returncode == 0 and bool(res.stdout.strip()))
+                except Exception:
+                    pass
+
+            # 4. Cek Kamera (camera_publisher)
+            cam_act = False
+            with CAMERA_LOCK:
+                if CAMERA_PROC is not None and CAMERA_PROC.poll() is None:
+                    cam_act = True
+            if not cam_act:
+                try:
+                    res = subprocess.run(['pgrep', '-f', 'camera_publisher'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                    cam_act = (res.returncode == 0 and bool(res.stdout.strip()))
+                except Exception:
+                    pass
+
+            # 5. Cek Human Awareness Node (YOLO AI)
+            human_act = False
+            with HUMAN_NODE_LOCK:
+                if HUMAN_NODE_PROC is not None and HUMAN_NODE_PROC.poll() is None:
+                    human_act = True
+            if not human_act:
+                try:
+                    res = subprocess.run(['pgrep', '-f', 'human_awareness_node'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                    human_act = (res.returncode == 0 and bool(res.stdout.strip()))
+                except Exception:
+                    pass
+
+            RUNTIME_CACHE['slam_active'] = slam_act
+            RUNTIME_CACHE['arduino_active'] = ard_act
+            RUNTIME_CACHE['nav_active'] = nav_act
+            RUNTIME_CACHE['camera_active'] = cam_act
+            RUNTIME_CACHE['human_node_active'] = human_act
+            RUNTIME_CACHE['last_updated'] = time.time()
+        except Exception:
+            pass
+        time.sleep(2.0)
+
+_proc_cache_thread = threading.Thread(target=_update_process_states_loop, daemon=True)
+_proc_cache_thread.start()
+
+
 def is_slam_active():
-    """Cek apakah SLAM Mapping sedang berjalan (baik via dashboard maupun terminal)."""
+    """Cek apakah SLAM Mapping sedang berjalan (instant O(1))."""
     with MAPPING_LOCK:
         if MAPPING_PROC is not None and MAPPING_PROC.poll() is None:
             return True
-    if ros_node is not None:
-        try:
-            names = [n.lower() for n in ros_node.get_node_names()]
-            if any('slam_toolbox' in n for n in names):
-                return True
-        except Exception:
-            pass
-    return False
+    return bool(RUNTIME_CACHE.get('slam_active', False))
 
 
 def stop_slam_process():
@@ -932,12 +1104,285 @@ def stop_slam_process():
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except Exception:
                 pass
-    # Pastikan node SLAM/LiDAR/Arduino dari sesi mapping berhenti tanpa mematikan dashboard
     subprocess.run(
         ['pkill', '-f', '(real_mapping\\.launch\\.py|async_slam_toolbox_node|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py)'],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     _append_mapping_log('🛑 Proses SLAM Mapping dihentikan.')
+
+
+# =====================================================================
+# ARDUINO BRIDGE PROCESS MANAGER
+# =====================================================================
+ARDUINO_PROC = None
+ARDUINO_LOCK = threading.Lock()
+
+
+def is_arduino_active():
+    """Cek apakah Arduino Bridge sedang berjalan (instant O(1))."""
+    with ARDUINO_LOCK:
+        if ARDUINO_PROC is not None and ARDUINO_PROC.poll() is None:
+            return True
+    return bool(RUNTIME_CACHE.get('arduino_active', False))
+
+
+def stop_arduino_process():
+    """Hentikan proses arduino_bridge.py."""
+    global ARDUINO_PROC
+    with ARDUINO_LOCK:
+        proc = ARDUINO_PROC
+        ARDUINO_PROC = None
+    if proc is not None and proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            proc.wait(timeout=2.0)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
+    subprocess.run(
+        ['pkill', '-f', 'arduino_bridge\\.py'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+
+
+# =====================================================================
+# REAL NAVIGATION (NAV2) PROCESS MANAGER
+# =====================================================================
+NAVIGATION_PROC = None
+NAVIGATION_LOCK = threading.Lock()
+NAVIGATION_LOGS = []
+
+
+def _append_navigation_log(line):
+    global NAVIGATION_LOGS
+    ts = datetime.now().strftime('%H:%M:%S')
+    NAVIGATION_LOGS.append(f'[{ts}] {line}')
+    if len(NAVIGATION_LOGS) > 80:
+        NAVIGATION_LOGS = NAVIGATION_LOGS[-80:]
+
+
+def _read_navigation_stdout(proc):
+    try:
+        for line in iter(proc.stdout.readline, ''):
+            if not line:
+                break
+            clean = line.strip()
+            if clean:
+                _append_navigation_log(clean)
+    except Exception:
+        pass
+
+
+def is_navigation_active():
+    """Cek apakah Nav2 / Real Navigation sedang berjalan (instant O(1))."""
+    with NAVIGATION_LOCK:
+        if NAVIGATION_PROC is not None and NAVIGATION_PROC.poll() is None:
+            return True
+    return bool(RUNTIME_CACHE.get('nav_active', False))
+
+
+def stop_navigation_process():
+    """Hentikan proses real_navigation.launch.py dan bersihkan node Nav2."""
+    global NAVIGATION_PROC
+    with NAVIGATION_LOCK:
+        proc = NAVIGATION_PROC
+        NAVIGATION_PROC = None
+    if proc is not None and proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            proc.wait(timeout=3.0)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
+    subprocess.run(
+        ['pkill', '-f', '(real_navigation\\.launch\\.py|amcl|bt_navigator|controller_server|planner_server|recoveries_server|lifecycle_manager|adaptive_velocity_node)'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    _append_navigation_log('🛑 Proses Navigasi (Nav2) dihentikan.')
+
+
+# =====================================================================
+# CAMERA PROCESS MANAGER
+# =====================================================================
+def is_camera_active():
+    """Cek apakah Camera Publisher sedang berjalan (instant O(1))."""
+    with CAMERA_LOCK:
+        if CAMERA_PROC is not None and CAMERA_PROC.poll() is None:
+            return True
+    return bool(RUNTIME_CACHE.get('camera_active', False))
+
+
+def stop_camera_process():
+    """Hentikan proses camera_publisher.py."""
+    global CAMERA_PROC
+    with CAMERA_LOCK:
+        proc = CAMERA_PROC
+        CAMERA_PROC = None
+    if proc is not None and proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            proc.wait(timeout=2.0)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
+    subprocess.run(
+        ['pkill', '-f', 'camera_publisher'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    if ros_node is not None:
+        with ros_node.lock:
+            ros_node.latest_frame = None
+
+
+# =====================================================================
+# HUMAN AWARENESS AI PROCESS MANAGER
+# =====================================================================
+def is_human_node_active():
+    """Cek apakah Human Awareness Node (YOLO AI) sedang berjalan (instant O(1))."""
+    with HUMAN_NODE_LOCK:
+        if HUMAN_NODE_PROC is not None and HUMAN_NODE_PROC.poll() is None:
+            return True
+    return bool(RUNTIME_CACHE.get('human_node_active', False))
+
+
+def stop_human_node_process():
+    """Hentikan proses human_awareness_node.py."""
+    global HUMAN_NODE_PROC
+    with HUMAN_NODE_LOCK:
+        proc = HUMAN_NODE_PROC
+        HUMAN_NODE_PROC = None
+    if proc is not None and proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            proc.wait(timeout=2.0)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
+    subprocess.run(
+        ['pkill', '-f', 'human_awareness_node'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    if ros_node is not None:
+        with ros_node.lock:
+            ros_node.human_info = None
+            ros_node.human_state = None
+            ros_node.human_status = 'NO_HUMAN'
+
+
+# =====================================================================
+# AUTO-RELOCALIZATION PROCESS MANAGER (360° SPIN CALIBRATION)
+# =====================================================================
+RELOCALIZE_STATE = {
+    'active': False,
+    'phase': 'idle',        # 'idle', 'starting', 'resetting', 'spinning', 'converging', 'completed', 'failed', 'cancelled'
+    'progress': 0,          # 0 - 100
+    'message': '',
+    'cancel_requested': False
+}
+RELOCALIZE_LOCK = threading.Lock()
+RELOCALIZE_THREAD = None
+
+
+def _run_relocalize_sequence(mode='local'):
+    """Sequence relokalisasi: (opsional) sebar partikel AMCL -> putar robot 360° -> konvergensi partikel."""
+    global RELOCALIZE_STATE
+    try:
+        if mode == 'global':
+            # Phase 1: Reset partikel AMCL global
+            with RELOCALIZE_LOCK:
+                RELOCALIZE_STATE['phase'] = 'resetting'
+                RELOCALIZE_STATE['progress'] = 10
+                RELOCALIZE_STATE['message'] = 'Menyebarkan partikel AMCL ke seluruh ruangan...'
+
+            if ros_node is not None:
+                ros_node.request_global_localization()
+            time.sleep(1.2)
+        else:
+            # Mode local: Pertahankan partikel di sekitar perkiraan posisi saat ini, langsung kalibrasi
+            with RELOCALIZE_LOCK:
+                RELOCALIZE_STATE['phase'] = 'starting'
+                RELOCALIZE_STATE['progress'] = 15
+                RELOCALIZE_STATE['message'] = 'Menyelaraskan orientasi robot dengan dinding sekitar (tanpa sebar ulang global)...'
+            time.sleep(0.5)
+
+        with RELOCALIZE_LOCK:
+            if RELOCALIZE_STATE['cancel_requested']:
+                raise InterruptedError('Dibatalkan oleh pengguna')
+            RELOCALIZE_STATE['phase'] = 'spinning'
+            RELOCALIZE_STATE['progress'] = 20
+            RELOCALIZE_STATE['message'] = 'Robot berputar 360° membaca dinding dengan LiDAR...'
+
+        # Phase 2: Putar robot ~360° perlahan
+        # Kecepatan sudut 0.35 rad/s. Putaran 360° (6.28 rad) butuh ~18 detik
+        spin_speed = 0.35
+        spin_duration = 18.0  # detik
+        start_t = time.time()
+
+        while (time.time() - start_t) < spin_duration:
+            with RELOCALIZE_LOCK:
+                if RELOCALIZE_STATE['cancel_requested']:
+                    raise InterruptedError('Dibatalkan oleh pengguna')
+                elapsed = time.time() - start_t
+                pct = int(20 + (elapsed / spin_duration) * 65)  # 20% s.d. 85%
+                RELOCALIZE_STATE['progress'] = min(pct, 85)
+                deg_done = int((elapsed / spin_duration) * 360)
+                RELOCALIZE_STATE['message'] = f'Robot berputar mencocokkan LiDAR ({deg_done}° / 360°)...'
+
+            if ros_node is not None:
+                ros_node.send_cmd_vel(0.0, spin_speed)
+            time.sleep(0.1)
+
+        # Phase 3: Hentikan robot
+        if ros_node is not None:
+            for _ in range(5):
+                ros_node.send_cmd_vel(0.0, 0.0)
+                time.sleep(0.05)
+
+        # Phase 4: Konvergensi AMCL
+        with RELOCALIZE_LOCK:
+            RELOCALIZE_STATE['phase'] = 'converging'
+            RELOCALIZE_STATE['progress'] = 90
+            RELOCALIZE_STATE['message'] = 'Mengunci koordinat posisi akhir AMCL...'
+
+        time.sleep(2.0)
+
+        # Selesai
+        cur_pose = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+        if ros_node is not None:
+            with ros_node.lock:
+                cur_pose = dict(ros_node.robot_pose)
+
+        yaw_deg = int(math.degrees(cur_pose.get('yaw', 0.0)))
+        with RELOCALIZE_LOCK:
+            RELOCALIZE_STATE['active'] = False
+            RELOCALIZE_STATE['phase'] = 'completed'
+            RELOCALIZE_STATE['progress'] = 100
+            RELOCALIZE_STATE['message'] = f'Relokalisasi AMCL berhasil! Robot terkunci di X: {cur_pose.get("x", 0.0):.2f}m, Y: {cur_pose.get("y", 0.0):.2f}m ({yaw_deg}°)'
+
+    except InterruptedError:
+        if ros_node is not None:
+            ros_node.send_cmd_vel(0.0, 0.0)
+        with RELOCALIZE_LOCK:
+            RELOCALIZE_STATE['active'] = False
+            RELOCALIZE_STATE['phase'] = 'cancelled'
+            RELOCALIZE_STATE['progress'] = 0
+            RELOCALIZE_STATE['message'] = 'Relokalisasi dibatalkan. Robot dihentikan.'
+    except Exception as e:
+        if ros_node is not None:
+            ros_node.send_cmd_vel(0.0, 0.0)
+        with RELOCALIZE_LOCK:
+            RELOCALIZE_STATE['active'] = False
+            RELOCALIZE_STATE['phase'] = 'failed'
+            RELOCALIZE_STATE['progress'] = 0
+            RELOCALIZE_STATE['message'] = f'Relokalisasi gagal: {str(e)}'
 
 
 # --- ROUTES ---
@@ -1045,6 +1490,164 @@ def api_mapping_stop():
     return jsonify({
         'success': True,
         'message': 'Proses SLAM Mapping berhasil dihentikan.'
+    })
+
+
+@app.route('/api/arduino/status')
+def api_arduino_status():
+    """Status proses Arduino Bridge."""
+    return jsonify({
+        'active': is_arduino_active()
+    })
+
+
+@app.route('/api/arduino/start', methods=['POST'])
+def api_arduino_start():
+    """Jalankan arduino_bridge.py di background."""
+    global ARDUINO_PROC
+    if is_arduino_active():
+        return jsonify({
+            'success': True,
+            'active': True,
+            'message': 'Arduino Bridge sudah aktif!'
+        })
+
+    ws_roots = get_workspace_roots()
+    domain_id = os.environ.get('ROS_DOMAIN_ID', '1')
+    setup_parts = [
+        f'export ROS_DOMAIN_ID={domain_id}',
+        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
+    ]
+    for wr in reversed(ws_roots):
+        setup_bash = os.path.join(wr, 'install', 'setup.bash')
+        if os.path.exists(setup_bash):
+            setup_parts.append(f'source "{setup_bash}"')
+    setup_parts.append('exec ros2 run amr_simulation arduino_bridge.py')
+    full_cmd = ' && '.join(setup_parts)
+
+    try:
+        with ARDUINO_LOCK:
+            ARDUINO_PROC = subprocess.Popen(
+                ['/bin/bash', '-c', full_cmd],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid
+            )
+        time.sleep(0.5)
+        return jsonify({
+            'success': True,
+            'active': True,
+            'message': 'Arduino Bridge berhasil dinyalakan!'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/arduino/stop', methods=['POST'])
+def api_arduino_stop():
+    """Hentikan proses Arduino Bridge."""
+    if ros_node is not None:
+        ros_node.send_cmd_vel(0.0, 0.0)
+    stop_arduino_process()
+    return jsonify({
+        'success': True,
+        'active': False,
+        'message': 'Arduino Bridge berhasil dihentikan.'
+    })
+
+
+@app.route('/api/navigation/status')
+def api_navigation_status():
+    """Status real-time proses Nav2 Navigation."""
+    return jsonify({
+        'active': is_navigation_active(),
+        'map_file': ACTIVE_MAP_FILE,
+        'logs': NAVIGATION_LOGS[-35:]
+    })
+
+
+@app.route('/api/navigation/start', methods=['POST'])
+def api_navigation_start():
+    """Jalankan ros2 launch amr_simulation real_navigation.launch.py di background."""
+    global NAVIGATION_PROC
+    if is_navigation_active():
+        return jsonify({
+            'success': True,
+            'active': True,
+            'message': 'Navigasi Nav2 sudah aktif!'
+        })
+
+    # Hentikan mapping & bridge standalone jika aktif agar port serial LiDAR & Arduino dilepas
+    stop_slam_process()
+    stop_arduino_process()
+    time.sleep(0.8)
+
+    ws_roots = get_workspace_roots()
+    domain_id = os.environ.get('ROS_DOMAIN_ID', '1')
+    setup_parts = [
+        f'export ROS_DOMAIN_ID={domain_id}',
+        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
+    ]
+    for wr in reversed(ws_roots):
+        setup_bash = os.path.join(wr, 'install', 'setup.bash')
+        if os.path.exists(setup_bash):
+            setup_parts.append(f'source "{setup_bash}"')
+
+    # Cari file peta aktif
+    map_to_use = None
+    if MAP_YAML_PATH and os.path.exists(MAP_YAML_PATH):
+        map_to_use = MAP_YAML_PATH
+    else:
+        for wr in ws_roots:
+            cand = os.path.join(wr, 'src', 'amr_simulation', 'maps', ACTIVE_MAP_FILE if ACTIVE_MAP_FILE != 'live' else 'peta_1b.yaml')
+            if os.path.exists(cand):
+                map_to_use = cand
+                break
+        if not map_to_use:
+            for wr in ws_roots:
+                cand = os.path.join(wr, 'src', 'amr_simulation', 'maps', 'peta_1b.yaml')
+                if os.path.exists(cand):
+                    map_to_use = cand
+                    break
+
+    map_arg = f'map:="{map_to_use}"' if map_to_use else ''
+    setup_parts.append(f'exec ros2 launch amr_simulation real_navigation.launch.py {map_arg} use_sim_time:=False')
+    full_cmd = ' && '.join(setup_parts)
+
+    try:
+        with NAVIGATION_LOCK:
+            NAVIGATION_LOGS.clear()
+            _append_navigation_log(f'🚀 Meluncurkan Navigasi dengan peta: {os.path.basename(map_to_use or "default")} ...')
+            NAVIGATION_PROC = subprocess.Popen(
+                ['/bin/bash', '-c', full_cmd],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                preexec_fn=os.setsid
+            )
+            t = threading.Thread(target=_read_navigation_stdout, args=(NAVIGATION_PROC,), daemon=True)
+            t.start()
+
+        return jsonify({
+            'success': True,
+            'active': True,
+            'message': f'Navigasi Nav2 berhasil dijalankan! Tunggu ~5-8 detik hingga sensor & AMCL siap.'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/navigation/stop', methods=['POST'])
+def api_navigation_stop():
+    """Hentikan proses Navigasi Nav2."""
+    if ros_node is not None:
+        ros_node.send_cmd_vel(0.0, 0.0)
+    stop_navigation_process()
+    return jsonify({
+        'success': True,
+        'active': False,
+        'message': 'Proses Navigasi Nav2 berhasil dihentikan.'
     })
 
 
@@ -1204,6 +1807,11 @@ def api_status():
             'map_file': ACTIVE_MAP_FILE,
             'has_live_map': ros_node.live_map_png is not None,
             'nav_path': getattr(ros_node, 'nav_path', []),
+            'nav_logs': list(NAVIGATION_LOGS[-50:]),
+            'arduino_active': is_arduino_active(),
+            'nav_active': is_navigation_active(),
+            'camera_active': is_camera_active(),
+            'human_node_active': is_human_node_active(),
             'connected': True,
             'timestamp': time.time()
         })
@@ -1258,6 +1866,7 @@ def api_map_metadata():
         if live_meta:
             meta = dict(live_meta)
             meta['map_file'] = 'live'
+            meta['source'] = 'live_slam'
             meta['mode'] = waypoints_config.get('operation_mode', 'real')
             return jsonify(meta)
         if force_live:
@@ -1319,6 +1928,7 @@ def api_initialpose():
     set_as_home = bool(data.get('set_as_home', False))
 
     ros_node.send_initial_pose(x, y, yaw)
+    _append_navigation_log(f'📍 [AMCL] Initial Pose dikirim: X={x:.2f}m, Y={y:.2f}m, Yaw={math.degrees(yaw):.1f}°{" (disimpan sebagai Home)" if set_as_home else ""}')
 
     if set_as_home:
         home_obj = {'x': round(x, 3), 'y': round(y, 3), 'yaw': round(yaw, 3)}
@@ -1337,6 +1947,78 @@ def api_initialpose():
     })
 
 
+@app.route('/api/relocalize/status')
+def api_relocalize_status():
+    """Status proses relokalisasi AMCL saat ini."""
+    with RELOCALIZE_LOCK:
+        st = dict(RELOCALIZE_STATE)
+    return jsonify(st)
+
+
+@app.route('/api/relocalize/start', methods=['POST'])
+def api_relocalize_start():
+    """Mulai proses relokalisasi otomatis (sebar partikel AMCL + putar robot 360°)."""
+    global RELOCALIZE_THREAD
+    if not is_navigation_active():
+        return jsonify({
+            'success': False,
+            'error': 'Navigasi Nav2 / AMCL belum aktif! Nyalakan Navigasi terlebih dahulu.'
+        }), 400
+
+    if not is_arduino_active():
+        return jsonify({
+            'success': False,
+            'error': 'Arduino Bridge belum aktif! Nyalakan Arduino Bridge agar motor dapat berputar.'
+        }), 400
+
+    if ros_node is not None:
+        with ros_node.lock:
+            if ros_node.delivery_status.get('status') == 'running':
+                return jsonify({
+                    'success': False,
+                    'error': 'Tidak dapat melakukan relokalisasi saat misi pengantaran sedang berjalan!'
+                }), 400
+
+    data = request.get_json(silent=True) or {}
+    reloc_mode = data.get('mode', 'local')
+    if reloc_mode not in ('local', 'global'):
+        reloc_mode = 'local'
+
+    with RELOCALIZE_LOCK:
+        if RELOCALIZE_STATE['active']:
+            return jsonify({
+                'success': False,
+                'error': 'Proses relokalisasi sudah sedang berjalan!'
+            }), 400
+        RELOCALIZE_STATE['active'] = True
+        RELOCALIZE_STATE['cancel_requested'] = False
+        RELOCALIZE_STATE['phase'] = 'starting'
+        RELOCALIZE_STATE['progress'] = 5
+        RELOCALIZE_STATE['message'] = f'Memulai proses relokalisasi AMCL (mode: {reloc_mode})...'
+
+    RELOCALIZE_THREAD = threading.Thread(target=_run_relocalize_sequence, args=(reloc_mode,), daemon=True)
+    RELOCALIZE_THREAD.start()
+
+    mode_label = 'Kalibrasi Halus Posisi Saat Ini' if reloc_mode == 'local' else 'Pencarian Global'
+    return jsonify({
+        'success': True,
+        'message': f'Relokalisasi AMCL ({mode_label}) dimulai! Robot akan berputar 360° perlahan.'
+    })
+
+
+@app.route('/api/relocalize/cancel', methods=['POST'])
+def api_relocalize_cancel():
+    """Batalkan proses relokalisasi dan hentikan robot segera."""
+    with RELOCALIZE_LOCK:
+        RELOCALIZE_STATE['cancel_requested'] = True
+    if ros_node is not None:
+        ros_node.send_cmd_vel(0.0, 0.0)
+    return jsonify({
+        'success': True,
+        'message': 'Perintah pembatalan relokalisasi telah dikirim.'
+    })
+
+
 @app.route('/api/delivery/start', methods=['POST'])
 def api_delivery_start():
     """Mulai misi delivery dengan daftar task."""
@@ -1350,6 +2032,11 @@ def api_delivery_start():
         return jsonify({'error': 'Daftar task kosong'}), 400
     
     ros_node.send_delivery_tasks(tasks)
+    _append_navigation_log(f'🚀 [DISPATCH] Memulai eksekusi misi ({len(tasks)} task dikirim ke waypoint_manager).')
+    for idx, t in enumerate(tasks):
+        pk = t.get('pickup', {})
+        dl = t.get('delivery', {})
+        _append_navigation_log(f'   - Task {idx+1}: [{pk.get("name","Pickup")}] ({pk.get("x",0):.2f}, {pk.get("y",0):.2f}) → [{dl.get("name","Delivery")}] ({dl.get("x",0):.2f}, {dl.get("y",0):.2f})')
     return jsonify({'message': f'Misi dikirim: {len(tasks)} task', 'success': True})
 
 
@@ -1366,6 +2053,7 @@ def api_delivery_control():
         return jsonify({'error': f'Perintah tidak valid: {command}'}), 400
     
     ros_node.send_control(command)
+    _append_navigation_log(f'🎮 [DISPATCH] Perintah operator: {command.upper()}')
     return jsonify({'message': f'Perintah [{command}] terkirim', 'success': True})
 
 
@@ -1854,6 +2542,163 @@ def get_placeholder_frame():
         _placeholder_jpeg_cache = jpeg.tobytes()
         return _placeholder_jpeg_cache
     return b''
+
+
+@app.route('/api/camera/status')
+def api_camera_status():
+    """Status real-time proses Camera Publisher."""
+    return jsonify({
+        'active': is_camera_active()
+    })
+
+
+@app.route('/api/camera/start', methods=['POST'])
+def api_camera_start():
+    """Jalankan camera_publisher.py di background."""
+    global CAMERA_PROC
+    if is_camera_active():
+        return jsonify({
+            'success': True,
+            'active': True,
+            'message': 'Kamera sudah aktif!'
+        })
+
+    ws_roots = get_workspace_roots()
+    domain_id = os.environ.get('ROS_DOMAIN_ID', '1')
+    setup_parts = [
+        f'export ROS_DOMAIN_ID={domain_id}',
+        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
+    ]
+    for wr in reversed(ws_roots):
+        setup_bash = os.path.join(wr, 'install', 'setup.bash')
+        if os.path.exists(setup_bash):
+            setup_parts.append(f'source "{setup_bash}"')
+
+    cam_script = None
+    for wr in ws_roots:
+        cand = os.path.join(wr, 'src', 'amr_simulation', 'scripts', 'camera_publisher.py')
+        if os.path.exists(cand):
+            cam_script = cand
+            break
+
+    if cam_script:
+        setup_parts.append(f'exec python3 "{cam_script}"')
+    else:
+        setup_parts.append('exec ros2 run amr_simulation camera_publisher.py')
+
+    full_cmd = ' && '.join(setup_parts)
+
+    try:
+        with CAMERA_LOCK:
+            CAMERA_PROC = subprocess.Popen(
+                ['/bin/bash', '-c', full_cmd],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid
+            )
+        time.sleep(0.5)
+        return jsonify({
+            'success': True,
+            'active': True,
+            'message': 'Kamera USB berhasil dinyalakan!'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/camera/stop', methods=['POST'])
+def api_camera_stop():
+    """Hentikan proses camera_publisher."""
+    stop_camera_process()
+    return jsonify({
+        'success': True,
+        'active': False,
+        'message': 'Kamera USB berhasil dimatikan.'
+    })
+
+
+@app.route('/api/human/status')
+def api_human_status():
+    """Status proses Human Awareness AI node."""
+    info = None
+    if ros_node is not None:
+        with ros_node.lock:
+            info = ros_node.human_info
+    return jsonify({
+        'active': is_human_node_active(),
+        'info': info
+    })
+
+
+@app.route('/api/human/start', methods=['POST'])
+def api_human_start():
+    """Jalankan human_awareness_node.py di background (mandiri tanpa navigasi)."""
+    global HUMAN_NODE_PROC
+    if is_human_node_active():
+        return jsonify({
+            'success': True,
+            'active': True,
+            'message': 'Human Awareness AI sudah aktif!'
+        })
+
+    # Pastikan kamera USB aktif terlebih dahulu agar node menerima frame
+    if not is_camera_active():
+        api_camera_start()
+        time.sleep(1.0)
+
+    ws_roots = get_workspace_roots()
+    domain_id = os.environ.get('ROS_DOMAIN_ID', '1')
+    setup_parts = [
+        f'export ROS_DOMAIN_ID={domain_id}',
+        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
+    ]
+    for wr in reversed(ws_roots):
+        setup_bash = os.path.join(wr, 'install', 'setup.bash')
+        if os.path.exists(setup_bash):
+            setup_parts.append(f'source "{setup_bash}"')
+
+    human_script = None
+    for wr in ws_roots:
+        cand = os.path.join(wr, 'src', 'amr_simulation', 'scripts', 'human_awareness_node.py')
+        if os.path.exists(cand):
+            human_script = cand
+            break
+
+    cmd_args = '--source ros --image-topic /camera/image_raw/compressed --no-display'
+    if human_script:
+        setup_parts.append(f'exec python3 "{human_script}" {cmd_args}')
+    else:
+        setup_parts.append(f'exec ros2 run amr_simulation human_awareness_node.py {cmd_args}')
+
+    full_cmd = ' && '.join(setup_parts)
+
+    try:
+        with HUMAN_NODE_LOCK:
+            HUMAN_NODE_PROC = subprocess.Popen(
+                ['/bin/bash', '-c', full_cmd],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid
+            )
+        time.sleep(0.8)
+        return jsonify({
+            'success': True,
+            'active': True,
+            'message': 'Human Awareness AI (YOLO) berhasil dijalankan! Kamera siap mendeteksi orang.'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/human/stop', methods=['POST'])
+def api_human_stop():
+    """Hentikan proses human_awareness_node."""
+    stop_human_node_process()
+    return jsonify({
+        'success': True,
+        'active': False,
+        'message': 'Human Awareness AI berhasil dihentikan.'
+    })
 
 
 @app.route('/api/camera/stream')
