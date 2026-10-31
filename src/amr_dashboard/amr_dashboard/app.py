@@ -1554,7 +1554,20 @@ def api_arduino_start():
         })
 
     setup_parts = get_ros_launch_prefix()
-    setup_parts.append('exec ros2 run amr_simulation arduino_bridge.py')
+    ws_roots = get_workspace_roots()
+
+    arduino_script = None
+    for wr in ws_roots:
+        cand = os.path.join(wr, 'src', 'amr_simulation', 'scripts', 'arduino_bridge.py')
+        if os.path.exists(cand):
+            arduino_script = cand
+            break
+
+    if arduino_script:
+        setup_parts.append(f'exec python3 "{arduino_script}"')
+    else:
+        setup_parts.append('exec ros2 run amr_simulation arduino_bridge.py')
+
     full_cmd = ' && '.join(setup_parts)
 
     try:
