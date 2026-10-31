@@ -1,13 +1,76 @@
 import os
+import time
+import signal
+import subprocess
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition, UnlessCondition
 
+
+def _get_ancestor_pids():
+    ancestors = set()
+    pid = os.getpid()
+    while pid > 1 and pid not in ancestors:
+        ancestors.add(pid)
+        try:
+            with open(f"/proc/{pid}/status", "r") as f:
+                for line in f:
+                    if line.startswith("PPid:"):
+                        pid = int(line.split()[1])
+                        break
+                else:
+                    break
+        except Exception:
+            break
+    return ancestors
+
+
+def _cleanup_stale_processes():
+    protected_pids = _get_ancestor_pids()
+    patterns = [
+        'real_navigation.launch.py',
+        'real_mapping.launch.py',
+        'localization_launch.py',
+        'navigation_launch.py',
+        'bt_navigator',
+        'planner_server',
+        'controller_server',
+        'recoveries_server',
+        'waypoint_follower',
+        'map_server',
+        'amcl',
+        'lifecycle_manager',
+        'async_slam_toolbox_node',
+        'adaptive_velocity_node.py',
+        'rplidar_bridge.py',
+        'rplidar_composition',
+        'arduino_bridge.py',
+        'laser_filter_node.py',
+        'static_transform_publisher',
+    ]
+    for pat in patterns:
+        try:
+            res = subprocess.run(['pgrep', '-f', pat], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            for line in res.stdout.splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    pid = int(line)
+                    if pid not in protected_pids:
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+    time.sleep(0.3)
+
+
 def generate_launch_description():
+    _cleanup_stale_processes()
+
     use_arduino_arg = DeclareLaunchArgument(
         'use_arduino',
         default_value='True',
@@ -19,7 +82,7 @@ def generate_launch_description():
         default_value='False',
         description='Aktifkan streaming kamera USB untuk pantau jarak jauh'
     )
-    
+
     # 1. Driver RPLiDAR A1 Fisik via rplidar_bridge
     lidar_port = '/dev/rplidar' if os.path.exists('/dev/rplidar') else '/dev/ttyUSB0'
     start_rplidar = Node(
@@ -32,10 +95,8 @@ def generate_launch_description():
             'serial_baudrate': 115200,
             'frame_id': 'laser',
             'auto_launch_driver': True,
-            'quiet': True,  # Nonaktifkan spam log telemetri berkala (terminal bersih)
+            'quiet': True,
         }],
-        respawn=True,
-        respawn_delay=2.0,
     )
 
     # 1B. Node Kamera USB (Streaming Ringan JPEG untuk Pantau Jarak Jauh)
@@ -64,8 +125,6 @@ def generate_launch_description():
             'base_frame': 'base_link',
             'publish_tf': True
         }],
-        respawn=True,
-        respawn_delay=2.0,
         condition=IfCondition(LaunchConfiguration('use_arduino'))
     )
 
@@ -74,33 +133,25 @@ def generate_launch_description():
         package='tf2_ros',
         executable='static_transform_publisher',
         arguments=['0', '0', '0', '0', '0', '0', 'odom', 'base_link'],
-        respawn=True,
-        respawn_delay=1.0,
         condition=UnlessCondition(LaunchConfiguration('use_arduino'))
     )
 
     tf_base_to_laser = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['0', '0', '0', '3.14159', '0', '0', 'base_link', 'laser'],
-        respawn=True,
-        respawn_delay=1.0
+        arguments=['0', '0', '0', '3.14159', '0', '0', 'base_link', 'laser']
     )
 
     tf_base_to_footprint = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint'],
-        respawn=True,
-        respawn_delay=1.0
+        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
     )
 
     tf_base_to_camera = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         arguments=['0.2', '0', '0.15', '0', '0', '0', 'base_link', 'camera_link'],
-        respawn=True,
-        respawn_delay=1.0,
         condition=IfCondition(LaunchConfiguration('camera'))
     )
 
@@ -113,9 +164,7 @@ def generate_launch_description():
         parameters=[{
             'min_range': 0.34,
             'max_range': 12.0
-        }],
-        respawn=True,
-        respawn_delay=2.0
+        }]
     )
 
     # 4. Otak SLAM Toolbox
@@ -133,7 +182,7 @@ def generate_launch_description():
         parameters=[
             slam_config_path,
             {
-                'use_sim_time': False, 
+                'use_sim_time': False,
                 'base_frame': 'base_link',
                 'odom_frame': 'odom',
                 'map_frame': 'map',
@@ -148,7 +197,7 @@ def generate_launch_description():
 
     # 5. RViz2 untuk melihat hasil
     rviz_config_dir = os.path.join(get_package_share_directory('amr_simulation'), 'rviz', 'slam_config.rviz')
-    
+
     start_rviz2 = Node(
         package='rviz2',
         executable='rviz2',

@@ -1,14 +1,87 @@
 import os
+import time
+import signal
+import subprocess
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
+def _get_ancestor_pids():
+    """Ambil semua PID leluhur (proses ros2 launch saat ini, bash, sshd, dll) agar tidak ikut terbunuh."""
+    ancestors = set()
+    pid = os.getpid()
+    while pid > 1 and pid not in ancestors:
+        ancestors.add(pid)
+        try:
+            with open(f"/proc/{pid}/stat", "r") as f:
+                parts = f.read().split()
+                # Field ke-4 (index 3 setelah comm) adalah ppid
+                close_paren = parts.indexnext if hasattr(parts, 'indexnext') else None
+            with open(f"/proc/{pid}/status", "r") as f:
+                for line in f:
+                    if line.startswith("PPid:"):
+                        pid = int(line.split()[1])
+                        break
+                else:
+                    break
+        except Exception:
+            break
+    return ancestors
+
+
+def _cleanup_stale_processes():
+    """
+    Bersihkan secara sinkron seluruh proses navigasi/mapping yatim dari sesi sebelumnya
+    SEBELUM node-node baru diluncurkan. Mengecualikan proses launch ini sendiri.
+    """
+    protected_pids = _get_ancestor_pids()
+    patterns = [
+        'real_navigation.launch.py',
+        'real_mapping.launch.py',
+        'localization_launch.py',
+        'navigation_launch.py',
+        'bt_navigator',
+        'planner_server',
+        'controller_server',
+        'recoveries_server',
+        'waypoint_follower',
+        'map_server',
+        'amcl',
+        'lifecycle_manager',
+        'async_slam_toolbox_node',
+        'adaptive_velocity_node.py',
+        'rplidar_bridge.py',
+        'rplidar_composition',
+        'arduino_bridge.py',
+        'laser_filter_node.py',
+        'static_transform_publisher',
+    ]
+    for pat in patterns:
+        try:
+            res = subprocess.run(['pgrep', '-f', pat], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            for line in res.stdout.splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    pid = int(line)
+                    if pid not in protected_pids:
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+    time.sleep(0.3)
+
+
 def generate_launch_description():
+    # 0. Bersihkan sisa proses sesi sebelumnya secara sinkron sebelum memulai node baru
+    _cleanup_stale_processes()
+
     pkg_amr = get_package_share_directory('amr_simulation')
     pkg_nav2 = get_package_share_directory('nav2_bringup')
 
@@ -54,7 +127,7 @@ def generate_launch_description():
         description='Jalankan RViz2 untuk visualisasi di laptop'
     )
 
-    # 1. Driver RPLiDAR A1 Fisik via rplidar_bridge (Auto-detect port /dev/rplidar /dev/ttyUSB0 & auto-recovery)
+    # 1. Driver RPLiDAR A1 Fisik via rplidar_bridge (Sudah memiliki internal auto-recovery sendiri)
     lidar_port = '/dev/rplidar' if os.path.exists('/dev/rplidar') else '/dev/ttyUSB0'
     start_rplidar = Node(
         package='amr_simulation',
@@ -66,10 +139,8 @@ def generate_launch_description():
             'serial_baudrate': 115200,
             'frame_id': 'laser',
             'auto_launch_driver': True,
-            'quiet': True,  # Nonaktifkan spam log telemetri berkala (terminal bersih)
+            'quiet': True,
         }],
-        respawn=True,
-        respawn_delay=2.0,
         condition=IfCondition(LaunchConfiguration('use_arduino'))
     )
 
@@ -82,12 +153,10 @@ def generate_launch_description():
         parameters=[{
             'min_range': 0.29,
             'max_range': 12.0
-        }],
-        respawn=True,
-        respawn_delay=2.0
+        }]
     )
 
-    # 3. Arduino Bridge (Odometry Asli & Motor Control via /dev/arduino)
+    # 3. Arduino Bridge (Odometry Asli & Motor Control via /dev/arduino - memiliki internal auto-reconnect)
     start_arduino_bridge = Node(
         package='amr_simulation',
         executable='arduino_bridge.py',
@@ -104,56 +173,35 @@ def generate_launch_description():
             'base_frame': 'base_link',
             'publish_tf': True
         }],
-        respawn=True,
-        respawn_delay=2.0,
         condition=IfCondition(LaunchConfiguration('use_arduino'))
     )
 
-    # 4. Static Transforms (dilengkapi respawn=True agar tidak pernah putus jika ada cleanup proses)
+    # 4. Static Transforms (FIKS PERMANEN: base_link -> laser & base_link -> base_footprint)
     tf_base_to_laser = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['0', '0', '0', '3.14159', '0', '0', 'base_link', 'laser'],
-        respawn=True,
-        respawn_delay=1.0
+        arguments=['0', '0', '0', '3.14159', '0', '0', 'base_link', 'laser']
     )
 
     tf_base_to_footprint = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint'],
-        respawn=True,
-        respawn_delay=1.0
+        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
     )
 
     tf_odom_to_base = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         arguments=['0', '0', '0', '0', '0', '0', 'odom', 'base_link'],
-        respawn=True,
-        respawn_delay=1.0,
         condition=UnlessCondition(LaunchConfiguration('use_arduino'))
     )
 
-    # 5. Pembersihan otomatis proses Nav2 yatim (zombie) dari sesi sebelumnya pada t=0.0s
-    # Mencegah duplikasi action server (/compute_path_to_pose, /follow_path) yang memicu
-    # "send_goal failed" dan crash exit code -11 pada bt_navigator saat diberi 2D Goal Pose.
-    cleanup_stale_nav2 = ExecuteProcess(
-        cmd=[
-            '/bin/bash', '-c',
-            'pkill -9 -f "(bt_navigator|planner_server|controller_server|recoveries_server|waypoint_follower|map_server|amcl|lifecycle_manager)" 2>/dev/null; true'
-        ],
-        output='log'
-    )
-
-    # 5B. Adaptive Velocity & Nav2 Bootstrap Node (dijalankan sejak t=0s agar TF map->odom langsung tersedia)
+    # 5. Adaptive Velocity & Nav2 Bootstrap Node (dijalankan sejak t=0s agar TF map->odom langsung tersedia)
     start_adaptive_velocity = Node(
         package='amr_simulation',
         executable='adaptive_velocity_node.py',
         name='adaptive_velocity_node',
-        output='screen',
-        respawn=True,
-        respawn_delay=2.0
+        output='screen'
     )
 
     # 6A. Nav2 Localization (Map Server + AMCL) - dijalankan pada t=2.0s setelah sensor & TF siap
@@ -211,7 +259,6 @@ def generate_launch_description():
         autostart_arg,
         use_arduino_arg,
         rviz_arg,
-        cleanup_stale_nav2,
         start_rplidar,
         start_laser_filter,
         start_arduino_bridge,
