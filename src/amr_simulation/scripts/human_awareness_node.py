@@ -524,10 +524,10 @@ def main():
         default="height"
     )
 
-    parser.add_argument("--t-near-enter", type=float, default=0.75)
-    parser.add_argument("--t-near-exit", type=float, default=0.70)
-    parser.add_argument("--t-med-enter", type=float, default=0.55)
-    parser.add_argument("--t-med-exit", type=float, default=0.45)
+    parser.add_argument("--t-near-enter", type=float, default=0.95)
+    parser.add_argument("--t-near-exit", type=float, default=0.90)
+    parser.add_argument("--t-med-enter", type=float, default=0.85)
+    parser.add_argument("--t-med-exit", type=float, default=0.70)
     parser.add_argument("--debounce", type=int, default=8)
 
     parser.add_argument("--calib-h", default=DEFAULT_CALIB_H)
