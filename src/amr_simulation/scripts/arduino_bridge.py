@@ -39,7 +39,7 @@ class ArduinoBridgeNode(Node):
         self.declare_parameter('cmd_vel_timeout', 1.0)       # Timeout 1.0s (halus, tidak getar/tersendat saat jitter)
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
         self.declare_parameter('odom_frame', 'odom')
-        self.declare_parameter('base_frame', 'base_footprint')
+        self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('publish_tf', True)
 
         self.port = self.get_parameter('serial_port').value
@@ -264,12 +264,12 @@ class ArduinoBridgeNode(Node):
         qx, qy, qz, qw = euler_to_quaternion(self.yaw)
         stamp = now.to_msg()
 
-        future_stamp = (now + rclpy.duration.Duration(seconds=0.05)).to_msg()
+        future_stamp = (now + rclpy.duration.Duration(seconds=0.10)).to_msg()
 
         # Broadcast TF: odom -> base_link
         if self.publish_tf:
             t = TransformStamped()
-            t.header.stamp = future_stamp     # <-- GANTI stamp MENJADI future_stamp DI SINI
+            t.header.stamp = future_stamp
             t.header.frame_id = self.odom_frame
             t.child_frame_id = self.base_frame
             t.transform.translation.x = self.x

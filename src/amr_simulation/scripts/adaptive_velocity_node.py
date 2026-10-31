@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
+import math
 import time
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from geometry_msgs.msg import Twist, TransformStamped, PoseWithCovarianceStamped
-from nav_msgs.msg import OccupancyGrid
+from nav_msgs.msg import OccupancyGrid, Odometry
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
-from tf2_ros import TransformBroadcaster
+from tf2_ros import TransformBroadcaster, StaticTransformBroadcaster
 
 try:
     from rclpy.action import ActionClient
@@ -40,24 +41,27 @@ class AdaptiveVelocityNode(Node):
         self.last_linear_v = 0.0
         self.last_time = self.get_clock().now()
 
-        # --- NAV2 BOOTSTRAP TF (map -> odom) & AUTO-INITIALPOSE ---
-        # Menjamin frame 'map' selalu ada sejak detik ke-0 agar global_costmap,
-        # planner_server, bt_navigator, dan RViz tidak pernah gagal "frame map does not exist".
-        # Begitu AMCL aktif (/amcl_pose diterima & /scan_filtered mengalir), kendali TF map->odom
-        # diserahkan sepenuhnya ke AMCL.
+        # --- NAV2 BOOTSTRAP TF (map -> odom -> base_link -> laser/base_footprint) ---
+        # Menjamin seluruh pohon TF selalu utuh 100% sejak detik ke-0 agar AMCL,
+        # global_costmap, local_costmap, dan RViz tidak pernah kehilangan frame 'laser' atau 'map'.
         self.tf_broadcaster = TransformBroadcaster(self)
+        self.static_tf_broadcaster = StaticTransformBroadcaster(self)
         self.start_wall_time = time.time()
         self.amcl_initialized = False
         self.map_received = False
         self.nav_ready_announced = False
         self.last_ready_check_time = 0.0
         self.last_scan_wall_time = 0.0
+        self.last_odom_wall_time = 0.0
         self.last_initpose_sent_time = 0.0
         self.initpose_sent_count = 0
         self.last_map_odom_x = 0.0
         self.last_map_odom_y = 0.0
         self.last_map_odom_qz = 0.0
         self.last_map_odom_qw = 1.0
+
+        # Siarkan Static TF (base_link -> laser & base_link -> base_footprint) secara permanen
+        self.publish_static_robot_transforms()
 
         tl_qos = QoSProfile(
             depth=1,
@@ -66,6 +70,7 @@ class AdaptiveVelocityNode(Node):
         )
         self.create_subscription(OccupancyGrid, '/map', self.on_map, tl_qos)
         self.create_subscription(LaserScan, '/scan_filtered', self.on_scan, 10)
+        self.create_subscription(Odometry, '/odom', self.on_odom, 10)
         self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, 10)
         self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, tl_qos)
         self.initialpose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
@@ -82,6 +87,38 @@ class AdaptiveVelocityNode(Node):
         self.create_timer(0.05, self.control_loop)
         self.get_logger().info("Adaptive Velocity & Nav2 Bootstrap TF aktif")
 
+    def publish_static_robot_transforms(self):
+        """Pastikan base_link -> laser dan base_link -> base_footprint selalu tersedia di /tf_static."""
+        now_msg = self.get_clock().now().to_msg()
+
+        # 1. base_link -> laser (yaw = 180 deg / pi rad)
+        t_laser = TransformStamped()
+        t_laser.header.stamp = now_msg
+        t_laser.header.frame_id = 'base_link'
+        t_laser.child_frame_id = 'laser'
+        t_laser.transform.translation.x = 0.0
+        t_laser.transform.translation.y = 0.0
+        t_laser.transform.translation.z = 0.0
+        t_laser.transform.rotation.x = 0.0
+        t_laser.transform.rotation.y = 0.0
+        t_laser.transform.rotation.z = math.sin(3.14159 / 2.0)
+        t_laser.transform.rotation.w = math.cos(3.14159 / 2.0)
+
+        # 2. base_link -> base_footprint (identitas)
+        t_fp = TransformStamped()
+        t_fp.header.stamp = now_msg
+        t_fp.header.frame_id = 'base_link'
+        t_fp.child_frame_id = 'base_footprint'
+        t_fp.transform.translation.x = 0.0
+        t_fp.transform.translation.y = 0.0
+        t_fp.transform.translation.z = 0.0
+        t_fp.transform.rotation.x = 0.0
+        t_fp.transform.rotation.y = 0.0
+        t_fp.transform.rotation.z = 0.0
+        t_fp.transform.rotation.w = 1.0
+
+        self.static_tf_broadcaster.sendTransform([t_laser, t_fp])
+
     def on_map(self, msg: OccupancyGrid):
         if not self.map_received:
             self.map_received = True
@@ -90,24 +127,75 @@ class AdaptiveVelocityNode(Node):
     def on_scan(self, msg: LaserScan):
         self.last_scan_wall_time = time.time()
 
+    def on_odom(self, msg: Odometry):
+        self.last_odom_wall_time = time.time()
+
     def on_amcl_pose(self, msg: PoseWithCovarianceStamped):
         if not self.amcl_initialized:
             self.amcl_initialized = True
             self.get_logger().info("✅ AMCL telah aktif (/amcl_pose diterima) -> TF map->odom dikelola penuh oleh AMCL.")
 
-    def publish_bootstrap_tf(self, now_msg):
-        t = TransformStamped()
-        t.header.stamp = now_msg
-        t.header.frame_id = 'map'
-        t.child_frame_id = 'odom'
-        t.transform.translation.x = self.last_map_odom_x
-        t.transform.translation.y = self.last_map_odom_y
-        t.transform.translation.z = 0.0
-        t.transform.rotation.x = 0.0
-        t.transform.rotation.y = 0.0
-        t.transform.rotation.z = self.last_map_odom_qz
-        t.transform.rotation.w = self.last_map_odom_qw
-        self.tf_broadcaster.sendTransform(t)
+    def publish_bootstrap_tf(self, future_msg, publish_odom_fallback=False):
+        transforms = []
+
+        # 1. Bootstrap map -> odom (sebelum AMCL aktif)
+        if not self.amcl_initialized:
+            t_map = TransformStamped()
+            t_map.header.stamp = future_msg
+            t_map.header.frame_id = 'map'
+            t_map.child_frame_id = 'odom'
+            t_map.transform.translation.x = self.last_map_odom_x
+            t_map.transform.translation.y = self.last_map_odom_y
+            t_map.transform.translation.z = 0.0
+            t_map.transform.rotation.x = 0.0
+            t_map.transform.rotation.y = 0.0
+            t_map.transform.rotation.z = self.last_map_odom_qz
+            t_map.transform.rotation.w = self.last_map_odom_qw
+            transforms.append(t_map)
+
+        # 2. Fallback odom -> base_link (hanya saat Arduino sedang booting/reset dan belum publish /odom)
+        if publish_odom_fallback:
+            t_odom = TransformStamped()
+            t_odom.header.stamp = future_msg
+            t_odom.header.frame_id = 'odom'
+            t_odom.child_frame_id = 'base_link'
+            t_odom.transform.translation.x = 0.0
+            t_odom.transform.translation.y = 0.0
+            t_odom.transform.translation.z = 0.0
+            t_odom.transform.rotation.x = 0.0
+            t_odom.transform.rotation.y = 0.0
+            t_odom.transform.rotation.z = 0.0
+            t_odom.transform.rotation.w = 1.0
+            transforms.append(t_odom)
+
+        # 3. Pastikan base_link -> laser & base_footprint juga disiarkan di /tf agar AMCL MessageFilter tidak pernah drop
+        t_laser = TransformStamped()
+        t_laser.header.stamp = future_msg
+        t_laser.header.frame_id = 'base_link'
+        t_laser.child_frame_id = 'laser'
+        t_laser.transform.translation.x = 0.0
+        t_laser.transform.translation.y = 0.0
+        t_laser.transform.translation.z = 0.0
+        t_laser.transform.rotation.x = 0.0
+        t_laser.transform.rotation.y = 0.0
+        t_laser.transform.rotation.z = math.sin(3.14159 / 2.0)
+        t_laser.transform.rotation.w = math.cos(3.14159 / 2.0)
+        transforms.append(t_laser)
+
+        t_fp = TransformStamped()
+        t_fp.header.stamp = future_msg
+        t_fp.header.frame_id = 'base_link'
+        t_fp.child_frame_id = 'base_footprint'
+        t_fp.transform.translation.x = 0.0
+        t_fp.transform.translation.y = 0.0
+        t_fp.transform.translation.z = 0.0
+        t_fp.transform.rotation.x = 0.0
+        t_fp.transform.rotation.y = 0.0
+        t_fp.transform.rotation.z = 0.0
+        t_fp.transform.rotation.w = 1.0
+        transforms.append(t_fp)
+
+        self.tf_broadcaster.sendTransform(transforms)
 
     def send_auto_initialpose(self, now_msg):
         msg = PoseWithCovarianceStamped()
@@ -152,16 +240,17 @@ class AdaptiveVelocityNode(Node):
     def control_loop(self):
         now = self.get_clock().now()
         now_msg = now.to_msg()
+        future_msg = (now + rclpy.duration.Duration(seconds=0.10)).to_msg()
         wall_now = time.time()
 
-        # 1. Bootstrap TF map -> odom sebelum AMCL aktif (agar global_costmap & RViz langsung jalan sekali klik)
+        # 1. Bootstrap & pengaman rantai TF (map -> odom -> base_link -> laser/base_footprint)
         scan_active = (wall_now - self.last_scan_wall_time) < 2.0
-        if not self.amcl_initialized:
-            self.publish_bootstrap_tf(now_msg)
+        odom_active = (wall_now - self.last_odom_wall_time) < 1.0
+        self.publish_bootstrap_tf(future_msg, publish_odom_fallback=(not odom_active))
 
-        # 2. Kirim otomatis /initialpose (0,0,0) saat /map & /scan_filtered sudah siap tapi AMCL belum init
+        # 2. Kirim otomatis /initialpose (0,0,0) maksimal 2 kali saat /map & /scan_filtered sudah siap tapi AMCL belum init
         if (not self.amcl_initialized) and self.map_received and scan_active:
-            if (wall_now - self.start_wall_time > 3.0) and (wall_now - self.last_initpose_sent_time > 2.0) and (self.initpose_sent_count < 8):
+            if (wall_now - self.start_wall_time > 3.5) and (wall_now - self.last_initpose_sent_time > 3.0) and (self.initpose_sent_count < 2):
                 self.last_initpose_sent_time = wall_now
                 self.initpose_sent_count += 1
                 self.send_auto_initialpose(now_msg)

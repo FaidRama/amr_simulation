@@ -109,23 +109,29 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('use_arduino'))
     )
 
-    # 4. Static Transforms
+    # 4. Static Transforms (dilengkapi respawn=True agar tidak pernah putus jika ada cleanup proses)
     tf_base_to_laser = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['0', '0', '0', '3.14159', '0', '0', 'base_link', 'laser']
+        arguments=['0', '0', '0', '3.14159', '0', '0', 'base_link', 'laser'],
+        respawn=True,
+        respawn_delay=1.0
     )
 
     tf_base_to_footprint = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
+        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint'],
+        respawn=True,
+        respawn_delay=1.0
     )
 
     tf_odom_to_base = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         arguments=['0', '0', '0', '0', '0', '0', 'odom', 'base_link'],
+        respawn=True,
+        respawn_delay=1.0,
         condition=UnlessCondition(LaunchConfiguration('use_arduino'))
     )
 
