@@ -196,7 +196,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /local_costmap/costmap_updates
+        Value: /none
       Use Timestamp: false
       Value: true
     - Alpha: 0.6000000238418579

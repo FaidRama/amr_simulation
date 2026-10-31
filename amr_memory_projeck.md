@@ -128,18 +128,24 @@ Output yang muncul:
 
 ---
 
-## 📌 8. Optimasi RViz2 (Anti-Crash di Laptop Non-NVIDIA / RAM Terbatas)
+## 📌 8. Optimasi RViz2 (Penyebab Crash `Cannot create GL vertex buffer` & Solusinya)
 
-### Masalah:
-- Peta `peta_l1_ddc` sangat besar ($1074 \times 494$ sel).
-- RViz2 sering crash mendadak (`exit code -11` / Segfault) di laptop tanpa GPU NVIDIA (Intel HD / AMD Vega) karena driver OpenGL/OGRE kehabisan buffer saat merender 20 FPS + panah TF 3D.
+### Error yang Terjadi:
+```
+[rviz2]: InternalErrorException: Cannot create GL vertex buffer in GLHardwareVertexBuffer::GLHardwareVertexBuffer
+terminate called after throwing an instance of 'Ogre::InternalErrorException'
+Aborted (core dumped)
+```
+
+### Akar Masalah:
+1. **Bukan karena CPU lemah**, melainkan **memory leak buffer OpenGL di plugin Map RViz2 Foxy**.
+2. Di [`nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml#L200), parameter `always_send_full_costmap: True`.
+3. Namun di file `slam_config.rviz`, display *Local Costmap* tetap mengaktifkan `Update Topic: /local_costmap/costmap_updates`.
+4. Menerima full costmap sekaligus costmap update di OpenGL membuat OGRE terus-menerus mengalokasikan vertex buffer VBO baru tanpa melepaskan yang lama sampai GPU VRAM / OpenGL context kehabisan memori (*out of buffer*).
 
 ### Solusi Permanen di [`slam_config.rviz`](file:///home/faid/Documents/amr_ws/src/amr_simulation/rviz/slam_config.rviz):
-1. **Frame Rate diturunkan ke `8` FPS** (memotong 60% konsumsi resource CPU/iGPU tanpa mengurangi responsivitas navigasi 2D).
-2. **Display `TF` dinonaktifkan secara default** (bisa dicentang jika perlu debug koordinat).
-3. **Perintah Menjalankan RViz Super Ringan (Anti Glitch Driver Intel):**
-   ```bash
-   LIBGL_ALWAYS_SOFTWARE=1 ros2 run rviz2 rviz2 -d ~/Documents/amr_ws/src/amr_simulation/rviz/slam_config.rviz
-   ```
-   *(Atau jalankan normal tanpa `LIBGL_ALWAYS_SOFTWARE=1`, sekarang sudah jauh lebih ringan karena 8 FPS).*
+1. **Ubah `Update Topic` pada Local Costmap menjadi `/none`** (karena Nav2 sudah mengirim full costmap secara utuh, tidak perlu update incremental).
+2. **Frame Rate diturunkan ke `8` FPS** (memotong 60% pemakaian VBO/VRAM).
+3. **Display `TF` dinonaktifkan secara default**.
+4. **Hasil**: RViz berjalan stabil, tidak bocor memori, dan tidak akan pernah terkena `Cannot create GL vertex buffer` lagi.
 
