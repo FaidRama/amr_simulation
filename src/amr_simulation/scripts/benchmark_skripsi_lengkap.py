@@ -61,8 +61,8 @@ class UnifiedBenchmarkNode(Node):
         self.kd_r = 0.0000
 
         # Parameter Alternatif untuk Uji Perbandingan Trial & Error (Jika diperlukan)
-        self.manual_kp_l, self.manual_ki_l, self.manual_kd_l = 1.2000, 15.0000, 0.0000
-        self.manual_kp_r, self.manual_ki_r, self.manual_kd_r = 1.0000, 15.0000, 0.0000
+        self.manual_kp_l, self.manual_ki_l, self.manual_kd_l = 3.0000, 25.0000, 0.0000
+        self.manual_kp_r, self.manual_ki_r, self.manual_kd_r = 3.0000, 25.0000, 0.0000
 
         # =====================================================================
         # 2. PARAMETER FISIK ROBOT AMR-01 (SESUAI PROPOSAL SKRIPSI)
@@ -405,6 +405,7 @@ class UnifiedBenchmarkNode(Node):
 
         log_data = []
         start_time = time.time()
+        last_tx_time = 0.0  # Rate limiter non-blocking 20 Hz
         
         # Safety Timeout: Untuk 90° maksimal 8 detik (mencegah berputar terus-menerus jika odometri drop)
         max_timeout = max(8.0, (target_deg / 90.0) * 6.0)
@@ -437,13 +438,14 @@ class UnifiedBenchmarkNode(Node):
                     print(f"\n[⚠️ TIMEOUT] Batas waktu maksimal {max_timeout:.0f}s tercapai. Robot dipaksa berhenti.")
                     break
 
-                # Perlambatan halus di 12 derajat terakhir (dengan batas bawah 0.22 rad/s agar motor tidak macet di lantai)
-                if remaining < math.radians(12.0):
-                    w_cmd = max(0.22, rot_speed * (remaining / math.radians(12.0)))
-                else:
-                    w_cmd = rot_speed
+                # Kecepatan putar tetap / konstan (1 kali jalan mulus tanpa tersendat)
+                w_cmd = rot_speed
 
-                self.send_cmd(0.0, w_cmd)
+                # Rate limiter 20 Hz non-blocking: kirim ke Arduino tiap 50 ms tanpa membekukan odometri
+                if (time.time() - last_tx_time) >= 0.05:
+                    self.send_cmd(0.0, w_cmd)
+                    last_tx_time = time.time()
+
                 sys.stdout.write(f"\r[*] Sudut Putaran Odom: {math.degrees(abs(accumulated_yaw)):6.2f}° / {target_deg:.0f}°")
                 sys.stdout.flush()
 
