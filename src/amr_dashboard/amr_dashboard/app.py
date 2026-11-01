@@ -330,8 +330,8 @@ class DashboardNode(Node):
         super().__init__('dashboard_server')
         self.declare_parameter('initial_mode', '')
         
-        # === DATA STORE (thread-safe) ===
-        self.lock = threading.Lock()
+        # === DATA STORE (thread-safe, reentrant) ===
+        self.lock = threading.RLock()
         self.robot_pose = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
         self.pose_source = 'NONE'  # 'TF_MAP', 'AMCL', 'ODOM', atau 'NONE'
         self.last_amcl_time = 0.0
@@ -1909,63 +1909,72 @@ def api_status():
     if ros_node is None:
         return jsonify({'error': 'ROS2 belum terhubung'}), 503
     
-    with ros_node.lock:
-        odom = getattr(ros_node, 'odom_speed', {'linear': 0.0, 'angular': 0.0})
-        cmd = ros_node.cmd_vel_current
-        active_speed = odom if (abs(odom.get('linear', 0.0)) > 0.001 or abs(odom.get('angular', 0.0)) > 0.001) else cmd
-        # --- Status human awareness (dengan deteksi node mati / data basi) ---
-        HUMAN_STALE_SEC = 5.0
-        now_h = time.time()
-        info_fresh = (ros_node.human_info is not None and
-                      now_h - ros_node.last_human_info_time <= HUMAN_STALE_SEC)
-        status_fresh = (ros_node.last_human_status_time > 0 and
-                        now_h - ros_node.last_human_status_time <= HUMAN_STALE_SEC)
-        state_fresh = (ros_node.last_human_state_time > 0 and
-                       now_h - ros_node.last_human_state_time <= HUMAN_STALE_SEC)
-        if info_fresh:
-            # Sumber utama: state FSM dari /human_info. NO_HUMAN hanya jika FSM sudah
-            # NORMAL dan tidak ada orang (selama FSM masih REDUCED_SPEED/SAFE_STOP
-            # karena debounce, itu yang ditampilkan).
-            human_info = ros_node.human_info
-            human_status = human_info.get('state', 'NORMAL')
-            if human_status == 'NORMAL' and human_info.get('persons', 0) == 0:
-                human_status = 'NO_HUMAN'
-        elif status_fresh:
-            human_info = None
-            human_status = ros_node.human_status
-        elif state_fresh:
-            human_info = None
-            st = ros_node.human_state
-            human_status = 'NO_HUMAN' if st == 'NORMAL' else st
-        else:
-            human_info = None
-            human_status = 'NODE_OFFLINE'
+    try:
+        with ros_node.lock:
+            odom = getattr(ros_node, 'odom_speed', {'linear': 0.0, 'angular': 0.0})
+            cmd = ros_node.cmd_vel_current
+            active_speed = odom if (abs(odom.get('linear', 0.0)) > 0.001 or abs(odom.get('angular', 0.0)) > 0.001) else cmd
+            # --- Status human awareness (dengan deteksi node mati / data basi) ---
+            HUMAN_STALE_SEC = 5.0
+            now_h = time.time()
+            info_fresh = (ros_node.human_info is not None and
+                          now_h - ros_node.last_human_info_time <= HUMAN_STALE_SEC)
+            status_fresh = (ros_node.last_human_status_time > 0 and
+                            now_h - ros_node.last_human_status_time <= HUMAN_STALE_SEC)
+            state_fresh = (ros_node.last_human_state_time > 0 and
+                           now_h - ros_node.last_human_state_time <= HUMAN_STALE_SEC)
+            if info_fresh:
+                # Sumber utama: state FSM dari /human_info. NO_HUMAN hanya jika FSM sudah
+                # NORMAL dan tidak ada orang (selama FSM masih REDUCED_SPEED/SAFE_STOP
+                # karena debounce, itu yang ditampilkan).
+                human_info = ros_node.human_info
+                human_status = human_info.get('state', 'NORMAL')
+                if human_status == 'NORMAL' and human_info.get('persons', 0) == 0:
+                    human_status = 'NO_HUMAN'
+            elif status_fresh:
+                human_info = None
+                human_status = ros_node.human_status
+            elif state_fresh:
+                human_info = None
+                st = ros_node.human_state
+                human_status = 'NO_HUMAN' if st == 'NORMAL' else st
+            else:
+                human_info = None
+                human_status = 'NODE_OFFLINE'
 
+            return jsonify({
+                'pose': ros_node.robot_pose,
+                'pose_source': ros_node.pose_source,
+                'delivery': ros_node.delivery_status,
+                'human_status': human_status,
+                'human_info': human_info,
+                'cmd_vel': cmd,
+                'odom_vel': odom,
+                'speed': active_speed,
+                'mode': waypoints_config.get('operation_mode', 'real'),
+                'map_file': ACTIVE_MAP_FILE,
+                'has_live_map': ros_node.live_map_png is not None,
+                'nav_path': getattr(ros_node, 'nav_path', []),
+                'nav_logs': list(NAVIGATION_LOGS[-50:]),
+                'arduino_active': is_arduino_active(),
+                'arduino_ready': is_arduino_ready(),
+                'nav_active': is_navigation_active(),
+                'nav_ready': is_navigation_ready(),
+                'camera_active': is_camera_active(),
+                'camera_ready': is_camera_ready(),
+                'human_node_active': is_human_node_active(),
+                'human_node_ready': is_human_node_ready(),
+                'connected': True,
+                'timestamp': time.time()
+            })
+    except Exception as e:
         return jsonify({
-            'pose': ros_node.robot_pose,
-            'pose_source': ros_node.pose_source,
-            'delivery': ros_node.delivery_status,
-            'human_status': human_status,
-            'human_info': human_info,
-            'cmd_vel': cmd,
-            'odom_vel': odom,
-            'speed': active_speed,
-            'mode': waypoints_config.get('operation_mode', 'real'),
-            'map_file': ACTIVE_MAP_FILE,
-            'has_live_map': ros_node.live_map_png is not None,
-            'nav_path': getattr(ros_node, 'nav_path', []),
-            'nav_logs': list(NAVIGATION_LOGS[-50:]),
-            'arduino_active': is_arduino_active(),
-            'arduino_ready': is_arduino_ready(),
-            'nav_active': is_navigation_active(),
-            'nav_ready': is_navigation_ready(),
-            'camera_active': is_camera_active(),
-            'camera_ready': is_camera_ready(),
-            'human_node_active': is_human_node_active(),
-            'human_node_ready': is_human_node_ready(),
+            'error': str(e),
             'connected': True,
+            'arduino_active': is_arduino_active(),
+            'camera_active': is_camera_active(),
             'timestamp': time.time()
-        })
+        }), 200
 
 
 @app.route('/api/map')
