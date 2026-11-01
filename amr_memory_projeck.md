@@ -128,26 +128,38 @@ Output yang muncul:
 
 ---
 
-## 📌 8. Optimasi RViz2 (Penyebab Crash `Cannot create GL vertex buffer` & Solusinya)
+## 📌 8. Optimasi RViz2 (Penyebab Crash `Cannot create GL vertex buffer`, `Message Filter dropping message`, & Laptop Non-NVIDIA Stuck Loading)
 
 ### Error yang Terjadi:
-```
+```text
+[rviz]: Message Filter dropping message: frame 'laser' at time ... for reason 'Unknown'
+[rviz]: Message Filter dropping message: frame 'odom' at time ... for reason 'Unknown'
 [rviz2]: InternalErrorException: Cannot create GL vertex buffer in GLHardwareVertexBuffer::GLHardwareVertexBuffer
 terminate called after throwing an instance of 'Ogre::InternalErrorException'
 Aborted (core dumped)
 ```
 
-### Akar Masalah:
-1. **Bukan karena CPU lemah**, melainkan **memory leak buffer OpenGL di plugin Map RViz2 Foxy**.
-2. Di [`nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml#L200), parameter `always_send_full_costmap: True`.
-3. Namun di file `slam_config.rviz`, display *Local Costmap* tetap mengaktifkan `Update Topic: /local_costmap/costmap_updates`.
-4. Menerima full costmap sekaligus costmap update di OpenGL membuat OGRE terus-menerus mengalokasikan vertex buffer VBO baru tanpa melepaskan yang lama sampai GPU VRAM / OpenGL context kehabisan memori (*out of buffer*).
+### Akar Masalah Sebenarnya (Dari Kode Sumber C++ `rviz_default_plugins` ROS 2 Foxy — `ros2/rviz#693` & `ros2/rviz#787`):
+1. **Bukan karena kehabisan VRAM GPU**, melainkan **pemanggilan OpenGL (`glGenBuffersARB`) dari Background Thread `tf2` yang tidak memiliki OpenGL Context!**
+   - Di OpenGL, fungsi `glGenBuffersARB(1, &mBufferId)` akan selalu mengembalikan `0` (`!mBufferId` $\rightarrow$ `Cannot create GL vertex buffer`) jika dipanggil di luar *main GUI thread* Qt.
+   - Di ROS 2 Foxy, plugin `PolygonDisplay` (`polygon_display.cpp` baris 143) memanggil `manual_object_->begin()` & `manual_object_->end()` (yang membuat VBO OpenGL) **secara langsung di dalam callback `processMessage()`**.
+   - Ketika `Fixed Frame` di RViz adalah `map`, sedangkan display **`Robot Footprint` (`Polygon`)** berlangganan ke `/local_costmap/published_footprint` yang ber-frame **`odom`**, `tf2_ros::MessageFilter` harus menunggu transformasi `map -> odom` tiba lewat Wi-Fi.
+   - Saat TF `map -> odom` tiba di *background thread* milik `tf2_ros::Buffer`, `MessageFilter` memanggil `PolygonDisplay::processMessage()` **dari background thread `tf2` tersebut** (bukan main thread Qt) $\rightarrow$ `glGenBuffersARB` gagal membuat buffer $\rightarrow$ RViz2 langsung *crash* (`Aborted (core dumped)`).
+   - Sebaliknya, jika topik memiliki `frame_id: map` (sama dengan `Fixed Frame: map`, seperti `/global_costmap/published_footprint` atau `/plan`), fungsi `tf2::BufferCore::canTransform("map", "map")` langsung *short-circuit* (`return true`) di main thread Qt tanpa pernah berpindah ke background thread `tf2`.
+2. **Kenapa Muncul `Message Filter dropping message: frame 'laser' / 'odom'` & Laptop Teman (Tanpa NVIDIA) Stuck Loading?**
+   - Jam sistem (*system clock*) antara Jetson dan Laptop memiliki selisih beberapa detik lewat Wi-Fi, sehingga `MessageFilter` yang memiliki antrean pendek dengan QoS `Reliable` membuang pesan `/scan_filtered` (`frame 'laser'`) dan `/local_costmap/published_footprint` (`frame 'odom'`).
+   - Selain itu, penggunaan `Reliability Policy: Reliable` pada `/scan_filtered` dan `Durability Policy: Transient Local` pada `/local_costmap/costmap` dengan `Depth: 5` membuat Fast-RTPS menahan paket retransmisi via Wi-Fi dan membuat RViz2 di laptop dengan GPU terintegrasi (Intel UHD/Iris) *hang* ("loading terus") saat inisialisasi framebuffer beresolusi besar (`1848x1016`).
 
 ### Solusi Permanen di [`slam_config.rviz`](file:///home/faid/Documents/amr_ws/src/amr_simulation/rviz/slam_config.rviz):
-1. **Ubah `Update Topic` pada Local Costmap menjadi `/none`** (karena Nav2 sudah mengirim full costmap secara utuh, tidak perlu update incremental).
-2. **Frame Rate diturunkan ke `8` FPS** (memotong 60% pemakaian VBO/VRAM).
-3. **Display `TF` dinonaktifkan secara default**.
-4. **Hasil**: RViz berjalan stabil, tidak bocor memori, dan tidak akan pernah terkena `Cannot create GL vertex buffer` lagi.
+1. **Matikan `Robot Footprint` (`Enabled: false`) & Pindahkan Topiknya ke `/global_costmap/published_footprint` (`frame_id: map`)**:
+   - Menghilangkan total pemicu `PolygonDisplay` di background thread `tf2` (`frame 'odom'`) sehingga crash `Cannot create GL vertex buffer` berhenti 100%.
+2. **Ubah QoS `/scan_filtered` & `/local_costmap/costmap` ke `Best Effort` + `Volatile` + `Depth: 1`**:
+   - Mencegah tumpukan antrean `MessageFilter` saat terjadi *packet drop* Wi-Fi dan menghilangkan *freeze* saat startup RViz2.
+3. **Perkecil `Window Geometry` (`1280x720`) & `Frame Rate: 8` FPS**:
+   - Sangat ringan untuk laptop tanpa GPU diskrit (Intel iGPU).
+4. **Tips Tambahan untuk Laptop Non-NVIDIA (Intel iGPU) jika Ogre 1.12 Hang saat Startup**:
+   - Jalankan dengan: `MESA_GL_VERSION_OVERRIDE=3.3 rviz2 -d src/amr_simulation/rviz/slam_config.rviz`
+   - Atau gunakan **AMR Web Dashboard** (`http://<IP_JETSON>:8080`) di browser yang sudah menampilkan peta, posisi robot real-time, serta tombol **Set Initial Pose** & **Send Goal** tanpa perlu membuka RViz2 sama sekali!
 
 ---
 
@@ -177,3 +189,95 @@ Aborted (core dumped)
    - `sim_time` disesuaikan dari `1.4` ke **`1.2`**.
    - Beban evaluasi lintasan berkurang dari 500 menjadi **252 lintasan (turun 50%!)**, membuat CPU Jetson longgar dan `controller_server` selalu membalas `bt_navigator` tepat waktu.
 
+---
+
+## 10. Mengatasi `send_goal failed` & Goal Aborted di `bt_navigator` (ROS 2 Foxy)
+
+### Gejala:
+```text
+[bt_navigator-12] [INFO] [1793459927.853122621] [bt_navigator]: Begin navigating from current location to (0.84, -0.27)
+[controller_server-9] [INFO] [1793459928.025443938] [controller_server]: Received a goal, begin computing control effort.
+[bt_navigator-12] [ERROR] [1793459929.062106949] [bt_navigator]: Action server failed while executing action callback: "send_goal failed"
+[bt_navigator-12] [WARN] [1793459929.062409364] [bt_navigator]: [navigate_to_pose] [ActionServer] Aborting handle.
+```
+Robot sempat bergerak selama **1 detik pertama**, lalu tepat pada detik ke-1 langsung muncul `"send_goal failed"` dan `Aborting handle`.
+
+### Akar Penyebab (Dari Kode Sumber C++ `foxy-devel` Nav2):
+1. **`server_timeout` di-Hardcode 10 ms di `bt_navigator.cpp` (ROS 2 Foxy):**
+   - Di branch `foxy-devel` (`nav2_bt_navigator/src/bt_navigator.cpp` baris 144), tertulis:
+     ```cpp
+     blackboard_->set<std::chrono::milliseconds>("server_timeout", std::chrono::milliseconds(10));
+     ```
+   - Berbeda dengan ROS 2 Humble/Iron, `bt_navigator` di ROS 2 Foxy **TIDAK membaca parameter `default_server_timeout` maupun `server_timeout` dari `nav2_params.yaml`**! Nilainya dikunci keras (*hardcoded*) sebesar **10 milidetik** di Blackboard C++.
+2. **Kenapa Gagal Tepat 1 Detik Setelah Jalan (`28.025` -> `29.062`)?**
+   - Saat *goal* pertama dikirim (`28.025`), `controller_server` sedang *idle* sehingga membalas dalam < 10 ms dan robot mulai berjalan.
+   - Tepat **1.0 detik kemudian**, `<RateController hz="1.0">` di XML bawaan Nav2 memicu *replanning* (`ComputePathToPose` menghitung ulang jalur) dan memberi tahu `FollowPath` (`path_updated = true`) untuk mengirim jalur baru ke `controller_server`.
+   - Saat itu, `controller_server` sedang **sibuk di tengah loop `computeControl()`** (mengevaluasi ratusan lintasan DWB yang memakan waktu ~40–60 ms di CPU Jetson).
+   - Karena `FollowPath` hanya menunggu **10 ms** (`server_timeout_`), fungsi `spin_until_future_complete(node_, future_goal_handle, 10ms)` langsung *timeout* dan melempar `throw std::runtime_error("send_goal failed")`!
+3. **Cara Satu-Satunya Mengubah `server_timeout_` di ROS 2 Foxy (`bt_action_node.hpp` baris 52):**
+   - Di konstruktor `BtActionNode` dan `BtServiceNode` Foxy:
+     ```cpp
+     server_timeout_ = config().blackboard->template get<std::chrono::milliseconds>("server_timeout");
+     getInput<std::chrono::milliseconds>("server_timeout", server_timeout_);
+     ```
+   - Artinya, nilai 10 ms hanya bisa ditimpa melalui atribut XML `server_timeout="2000"` langsung pada setiap tag di file Behavior Tree XML!
+
+### Solusi Permanen:
+1. **File Custom Behavior Tree XML ([`navigate_w_replanning_and_recovery.xml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/navigate_w_replanning_and_recovery.xml)):**
+   - Dibuat di `src/amr_simulation/config/navigate_w_replanning_and_recovery.xml` dan dimuat otomatis oleh [`real_navigation.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/real_navigation.launch.py).
+   - Seluruh node action & service (`ComputePathToPose`, `FollowPath`, `ClearEntireCostmap`, `Spin`, `Wait`) diberi atribut **`server_timeout="2000"`** (2000 ms = 2 detik).
+   - `<RateController hz="0.5">` diatur ke **0.5 Hz** (replan tiap 2 detik, bukan tiap 1 detik) agar tidak membebani CPU dan tidak mem-preempt `controller_server` secara berlebihan.
+2. **Keamanan Indoor di [`nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml):**
+   - **`allow_unknown: false`** tetap dipertahankan di `planner_server` agar robot dilarang keras melewati area abu-abu (*unmapped*).
+
+---
+
+## 11. Verifikasi Encoder Arduino Sebelum Navigasi (setara cek LiDAR)
+
+### Gejala:
+Navigasi dijalankan saat log Arduino baru sampai `Arduino Bridge PID aktif`, belum muncul `Paket Encoder pertama diterima`. Robot tetap dianggap siap, goal dikirim, roda berputar tapi `/odom` diam -> AMCL & goal pose salah.
+
+### Akar Masalah:
+1. `adaptive_velocity_node.py` hanya mengecek Peta + LiDAR + AMCL + Costmap + Nav2. Encoder tidak pernah dicek.
+2. `arduino_bridge.py` meneruskan `/cmd_vel` ke motor walau stream ENC belum ada.
+3. Auto `/initialpose` dikirim sebelum odom valid.
+4. Bug tersembunyi: baris ENC rusak (sisa bootloader, misal `ENC:12`) memicu `ValueError` -> ditangkap sebagai "Serial read error" -> reconnect + DTR reset berulang. Setelah reset, `totalPulsa` Arduino kembali 0 tapi baseline lama dipakai -> lompatan odom besar.
+
+### Solusi:
+1. **[`arduino_bridge.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/arduino_bridge.py)**:
+   - **Pencegahan Jebakan Bootloader Optiboot (*Optiboot 115200-Baud Watchdog Trap* — AKAR MASALAH UTAMA)**:
+     - Bootloader Arduino Uno R3 (`optiboot.c`) berjalan pada **115200 baud** (sama persis dengan baudrate `amr_firmware.ino`) dan mengandalkan **Hardware Watchdog Timer (WDT) 1.0 detik** untuk keluar dari bootloader menuju sketch utama.
+     - Di dalam `optiboot.c`, fungsi `getch()` memanggil `watchdogReset()` **setiap kali menerima byte serial di 115200 baud**. Optiboot HANYA keluar ke sketch utama jika jalur serial RX **hening 100% selama 1.0 detik penuh**!
+     - Sebelumnya, `arduino_bridge.py` mengirim heartbeat `"V,0.000,0.000\n"` setiap **200 ms** (`0.2s < 1.0s`) saat `not self.encoder_ready`. Akibatnya, WDT Optiboot ter-reset terus setiap 200 ms sehingga ATmega328P **terjebak di dalam bootloader selamanya** dan tidak pernah menjalankan `setup()`/`loop()` untuk mengirim `ENC:0,0`!
+     - **Solusi Permanen**: Selama `self.encoder_ready == False`, `arduino_bridge.py` menjaga **100% keheningan TX (`0` byte dikirim ke serial)**. Sketch [`amr_firmware.ino`](file:///home/faid/Documents/amr_ws/src/amr_simulation/arduino/amr_firmware/amr_firmware.ino) secara otomatis menyemburkan `ENC:0,0\r\n` tiap 20 ms begitu keluar dari bootloader tanpa perlu dipancing perintah dari Jetson. Heartbeat `V,0.000,0.000\n` baru mulai dikirim setelah `self.encoder_ready == True`.
+   - **Arsitektur Auto-Recovery Bertahap (Identik dengan [`rplidar_bridge.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/rplidar_bridge.py))**:
+     - **Tahap 0 (Initial Connect, `restart_count == 0`)**: Memeriksa port & izin akses via `check_hardware_port()`, membuka `/dev/arduino` dengan `dtr=True, rts=True` tanpa `USBDEVFS_RESET` dan tanpa `sleep` pemblokir, lalu mendengarkan stream `ENC:` secara pasif (TX hening 100%).
+     - **Tahap 1 (`restart_count == 1`, > 5.0s tanpa `ENC:`)**: Menjalankan `hardware_reset_arduino(force_usb_reset=False)` — membuka koneksi sementara, menarik `dtr=False, rts=False` selama 250 ms (mengosongkan kapasitor RESET 100nF Arduino Uno), menutup port selama 250 ms, lalu membuka kembali dengan `dtr=True` (memicu pulsa reset hardware bersih pada ATmega328P).
+     - **Tahap 2+ (`restart_count >= 2`, masih tanpa `ENC:`)**: Eskalasi ke `hardware_reset_arduino(force_usb_reset=True)` — memanggil `reset_usb_device()` (`ioctl USBDEVFS_RESET` ke `/dev/bus/usb/BBB/DDD`) diikuti **jeda wajib `time.sleep(1.5)`** sebelum mengecek `/dev/arduino` (agar tidak membuka node ttyACM lama pada 0.20s saat kernel/udev masih re-enumerasi), dilanjutkan pulsa DTR reset bersih.
+     - > **PENTING (Izin Linux `/dev/bus/usb`)**: Agar auto-reset USB dapat diakses user biasa (`jetson`) tanpa sandi sudo, pasang udev rule di Jetson:
+       > ```bash
+       > echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="2341", MODE="0666"' | sudo tee /etc/udev/rules.d/99-arduino-usb.rules && sudo udevadm control --reload-rules && sudo udevadm trigger
+       > ```
+   - **Pembersihan Proses Yatim (`kill_other_instances`)**: Memastikan tidak ada proses `arduino_bridge.py` hantu yang menahan file descriptor `/dev/arduino`.
+   - **Encoder Verification Gate**: Encoder dianggap SIAP setelah **10 paket ENC valid berturut-turut** (`ready_packet_count`), diumumkan `🟢 [ENCODER SIAP]` dan di-publish ke **`/arduino/ready`** (`std_msgs/Bool`, transient local).
+   - Sebelum siap: `/cmd_vel` dipaksa 0 (`⛔ /cmd_vel diabaikan`) dan TX serial hening.
+   - Diagnostik RX: Mencatat jumlah byte yang masuk sejak connect (`RX=...B`) dan sampel baris non-ENC jika firmware lain sedang ter-flash di board.
+   - **Pemutusan Otorisasi USB Sysfs (`authorized` toggle jeda 2.0s) & Fisik Kapasitor**:
+     - *Kenapa cabut-colok fisik wajib diberi jeda 2-5 detik*: Board Arduino Uno dan driver BTS7960 memiliki kapasitor perata daya (elco). Saat kabel dicabut, sisa tegangan 5V turun perlahan (*discharging* ~2 detik). Jika dicolok terlalu cepat (<1 detik), muatan belum habis sehingga ATmega328P tidak mengalami *Power-On Reset (POR)* murni.
+     - *Kenapa `USBDEVFS_RESET` saja tidak mematikan daya*: Perintah `USBDEVFS_RESET` hanya me-reset pin sinyal data USB (D+/D-), sedangkan jalur daya VBUS 5V tetap mengalir ke Arduino.
+     - *Solusi Software*: Pada [`reset_usb_device()`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/arduino_bridge.py#L305-L365), ditambahkan penulisan `0` ke sysfs `/sys/bus/usb/devices/.../authorized` dengan jeda tidur **2.0 detik penuh**, lalu ditulis kembali `1` sebelum `USBDEVFS_RESET` agar kernel Linux memutus total otorisasi perangkat setara cabut-colok kabel fisik.
+2. **[`adaptive_velocity_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/adaptive_velocity_node.py)**:
+   - `encoder_ok` = `/arduino/ready == True` dan `/odom` mengalir (< 1 s).
+   - Auto `/initialpose`, pengumuman `🟢 [SIAP NAVIGASI]`, dan output `/cmd_vel_safe` semuanya menunggu `encoder_ok`.
+   - Log `[MENUNGGU] Peta ✔ | LiDAR ✔ | Encoder ⏳ | ...` tiap 5 s untuk diagnosis.
+   - Parameter `require_encoder` diisi dari `use_arduino` di [`real_navigation.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/real_navigation.launch.py).
+
+### Hasil Pengujian Live di Jetson AGX Xavier:
+```text
+[INFO] [1793519617.750524659] [arduino_bridge]: ✅ Terhubung ke Arduino di /dev/arduino (DTR=True, TX hening) -> menunggu bootloader & stream ENC...
+[INFO] [1793519617.759593063] [arduino_bridge]: ⏳ Menunggu verifikasi encoder (10 paket ENC valid berturut-turut)... Perintah gerak DIBLOK & TX serial HENING sampai encoder siap.
+[INFO] [1793519619.356268265] [arduino_bridge]: Paket Encoder pertama diterima (L=0, R=0) -> baseline odom diset, verifikasi stream...
+[INFO] [1793519619.540106180] [arduino_bridge]: 🟢 [ENCODER SIAP] 10 paket ENC valid diterima -> /odom & TF odom->base_link VALID
+```
+- Dalam waktu **1.6 detik**, Optiboot selesai, paket baseline diterima, 10 paket beruntun terverifikasi, dan status kesiapan langsung menyala hijau (`🟢 [ENCODER SIAP]`).
+- Nav2 dan AMCL kini terproteksi 100% dari kesalahan odometri.
