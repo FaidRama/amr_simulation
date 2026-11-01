@@ -5,13 +5,19 @@
             <!-- Kunci komunikasi ROS 2 hanya melalui antarmuka Tailscale (Virtual Mesh VPN) -->
             <NetworkInterfaceAddress>tailscale0</NetworkInterfaceAddress>
             <AllowMulticast>false</AllowMulticast>
+            <EnableMulticastLoopback>true</EnableMulticastLoopback>
         </General>
         <Discovery>
+            <ParticipantIndex>auto</ParticipantIndex>
+            <MaxAutoParticipantIndex>120</MaxAutoParticipantIndex>
             <Peers>
-                <!-- IP Tailscale Jetson Robot -->
+                <!-- 1. LOCALHOST & LOCAL LAPTOP (Wajib agar sesama proses di Laptop saling mendeteksi!) -->
+                <Peer address="127.0.0.1"/>
+                <Peer address="100.127.135.67"/>
+
+                <!-- 2. REMOTE PEERS (Jetson Robot) -->
                 <Peer address="100.84.182.79"/>
             </Peers>
-            <ParticipantIndex>auto</ParticipantIndex>
         </Discovery>
     </Domain>
 </CycloneDDS>

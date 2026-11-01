@@ -132,15 +132,28 @@ def get_workspace_roots():
 
 
 def get_ros_launch_prefix():
-    """Menghasilkan baris setup environment ROS (Domain ID 0, Localhost 0, source workspace)."""
+    """Menghasilkan baris setup environment ROS (Domain ID, RMW CycloneDDS, source workspace)."""
     ws_roots = get_workspace_roots()
     domain_id = os.environ.get('ROS_DOMAIN_ID', '0')
     localhost_only = os.environ.get('ROS_LOCALHOST_ONLY', '0')
+    rmw = os.environ.get('RMW_IMPLEMENTATION', 'rmw_cyclonedds_cpp')
+    cdds_uri = os.environ.get('CYCLONEDDS_URI', '')
+
     parts = [
         f'export ROS_DOMAIN_ID={domain_id}',
         f'export ROS_LOCALHOST_ONLY={localhost_only}',
-        'source /opt/ros/foxy/setup.bash 2>/dev/null || true'
+        f'export RMW_IMPLEMENTATION={rmw}',
     ]
+    if cdds_uri:
+        parts.append(f'export CYCLONEDDS_URI="{cdds_uri}"')
+    else:
+        for wr in ws_roots:
+            cand = os.path.join(wr, 'src', 'amr_simulation', 'config', 'cyclonedds_jetson.xml')
+            if os.path.exists(cand):
+                parts.append(f'export CYCLONEDDS_URI="file://{cand}"')
+                break
+
+    parts.append('source /opt/ros/foxy/setup.bash 2>/dev/null || true')
     for wr in reversed(ws_roots):
         setup_bash = os.path.join(wr, 'install', 'setup.bash')
         if os.path.exists(setup_bash):

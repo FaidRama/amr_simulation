@@ -106,10 +106,18 @@ Pohon koordinat TF robot telah **dikunci mati** mengikuti standar ROS REP 105:
 
 ## 📌 6. Standar Jaringan Multi-Machine (Laptop + Jetson)
 
+> [!IMPORTANT]
+> **KESEPAKATAN MUTLAK SISTEM: DOMAIN ID = 0 & LOCALHOST ONLY = 0**
+> Seluruh mesin (Laptop Faid, Jetson Xavier robot, serta laptop teman yang bergabung) **WAJIB menggunakan `ROS_DOMAIN_ID=0`**.
+> DILARANG KERAS menggunakan `ROS_DOMAIN_ID=1` atau domain lainnya agar semua node (dashboard, teleop, nav2, camera, bridge) selalu berada pada domain DDS yang sama!
+
 Seluruh environment ROS 2 dikunci pada:
-- **`ROS_DOMAIN_ID=0`** (wajib sama di `.bashrc` laptop `faid` dan Jetson `jetson`).
-- **`ROS_LOCALHOST_ONLY=0`** (wajib 0 agar topik bisa berkomunikasi lintas Wi-Fi/Ethernet).
-- DDS Middleware: FastRTPS default ROS 2 Foxy.
+- **`ROS_DOMAIN_ID=0`** (Wajib 0 di `.bashrc` laptop `faid`, Jetson `jetson`, dan terminal mana pun).
+- **`ROS_LOCALHOST_ONLY=0`** (Wajib 0 agar topik ROS 2 dapat berkomunikasi lintas perangkat/VPN Tailscale).
+- **`RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`** (Standar resmi middleware DDS proyek, menggantikan FastRTPS default).
+- **`CYCLONEDDS_URI`**: Mengarah ke file konfigurasi XML masing-masing mesin:
+  - Jetson: `file:///home/jetson/deliver_amr/src/amr_simulation/config/cyclonedds_jetson.xml`
+  - Laptop Faid: `file:///home/faid/Documents/amr_ws/src/amr_simulation/config/cyclonedds_laptop.xml`
 
 ---
 
@@ -298,9 +306,18 @@ Navigasi dijalankan saat log Arduino baru sampai `Arduino Bridge PID aktif`, bel
 2. **CycloneDDS Unicast Configuration**:
    - Tailscale secara default tidak melewatkan paket Multicast L2.
    - Dibuatkan file konfigurasi Unicast CycloneDDS resmi:
-     - Jetson: [`src/amr_simulation/config/cyclonedds_jetson.xml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/cyclonedds_jetson.xml) (Peers: Laptop Faid `100.127.135.67`, siap ditambahkan IP teman).
-     - Laptop: [`src/amr_simulation/config/cyclonedds_laptop.xml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/cyclonedds_laptop.xml) (Peers: Jetson `100.84.182.79`).
+     - Jetson: [`src/amr_simulation/config/cyclonedds_jetson.xml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/cyclonedds_jetson.xml) (Peers: `127.0.0.1`, `100.84.182.79`, `100.127.135.67`, dan IP teman).
+     - Laptop: [`src/amr_simulation/config/cyclonedds_laptop.xml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/cyclonedds_laptop.xml) (Peers: `127.0.0.1`, `100.127.135.67`, `100.84.182.79`).
    - Mengunci interface jaringan ke `tailscale0` (`<AllowMulticast>false</AllowMulticast>`) sehingga paket ROS 2 mengalir 100% privat, anti-tabrakan dengan mahasiswa lain, dan bebas pemblokiran firewall.
+   - **Kunci Penemuan Antar-Proses di Mesin yang Sama (Same-Host Discovery)**:
+     - Saat `<AllowMulticast>false</AllowMulticast>` aktif, Cyclone DDS mematikan seluruh paket broadcast/multicast SPDP.
+     - Node HANYA mengirim paket discovery ke IP yang tertulis di `<Peers>`. Jika `<Peers>` di Jetson HANYA berisi IP Laptop, maka node Jetson hanya menyapa Laptop dan **tidak pernah menyapa sesama proses di Jetson**! Akibatnya, Laptop bisa melihat node Jetson, tapi terminal di Jetson sendiri tidak bisa melihat nodenya sendiri (`ros2 node list` kosong).
+     - **Solusi**: Daftarkan selalu `127.0.0.1` dan IP Tailscale mesin itu sendiri (`100.84.182.79`) di dalam `<Peers>` pada file XML masing-masing.
+   - **Pembersihan Cache Daemon ROS 2**:
+     - Setiap kali mengubah file konfigurasi XML atau variabel DDS di terminal, selalu jalankan `ros2 daemon stop` agar background daemon me-reload konfigurasi baru.
+   - **Sinkronisasi Domain ID (Wajib Domain 0)**:
+     - Seluruh perangkat yang terhubung ke jaringan Tailscale robot WAJIB mengekspor `export ROS_DOMAIN_ID=0` dan `export ROS_LOCALHOST_ONLY=0`.
+     - Domain 0 adalah kesepakatan mutlak; jika ada satu perangkat yang menggunakan domain lain (misal Domain 1), node di perangkat tersebut tidak akan dapat ditemukan (*isolated*) oleh Jetson maupun laptop lainnya.
 
 ---
 

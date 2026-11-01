@@ -5,10 +5,17 @@
             <!-- Kunci komunikasi ROS 2 hanya melalui antarmuka Tailscale (Virtual Mesh VPN) -->
             <NetworkInterfaceAddress>tailscale0</NetworkInterfaceAddress>
             <AllowMulticast>false</AllowMulticast>
+            <EnableMulticastLoopback>true</EnableMulticastLoopback>
         </General>
         <Discovery>
+            <ParticipantIndex>auto</ParticipantIndex>
+            <MaxAutoParticipantIndex>120</MaxAutoParticipantIndex>
             <Peers>
-                <!-- IP Tailscale Laptop Faid -->
+                <!-- 1. LOCALHOST & LOCAL JETSON (Wajib agar sesama proses di Jetson saling mendeteksi!) -->
+                <Peer address="127.0.0.1"/>
+                <Peer address="100.84.182.79"/>
+
+                <!-- 2. REMOTE PEERS (Laptop Faid) -->
                 <Peer address="100.127.135.67"/>
 
                 <!-- Jika nanti teman-teman ingin terhubung ke Jetson, cukup tambahkan IP Tailscale mereka di bawah ini: -->
@@ -16,7 +23,6 @@
                 <!-- <Peer address="100.yy.yy.yy"/> --> <!-- Teman 2 -->
                 <!-- <Peer address="100.zz.zz.zz"/> --> <!-- Teman 3 -->
             </Peers>
-            <ParticipantIndex>auto</ParticipantIndex>
         </Discovery>
     </Domain>
 </CycloneDDS>
