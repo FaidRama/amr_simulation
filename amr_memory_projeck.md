@@ -629,3 +629,97 @@ Solusi dilakukan murni dengan menyetel torsi putar awal dan bobot critic **tanpa
       Oscillation.scale: 1.0       # (Sebelumnya: 5.0) -> Mencegah pemotongan kecepatan mendadak saat manuver U-turn
 ```
 
+
+---
+
+## 📌 22. Solusi Sintaks CycloneDDS XML & Error `rcl node's rmw handle is invalid`
+
+### 1. Gejala & Pesan Error:
+Saat menjalankan node ROS 2 (misal `run arduino` atau `arduino_bridge.py`), muncul pesan kegagalan pembuatan domain DDS:
+```text
+python3: config: //CycloneDDS/Domain/Discovery/Peers: parser error invalid token encountered at line 18 (file:///home/jetson/deliver_amr/src/amr_simulation/config/cyclonedds_jetson.xml line 16)
+[ERROR] [rmw_cyclonedds_cpp]: rmw_create_node: failed to create domain, error Error
+_rclpy.RCLError: Unknown error creating node: rcl node's rmw handle is invalid, at ...
+```
+
+### 2. Akar Penyebab:
+- Terjadi kesalahan sintaks XML (*XML parser invalid token*) di dalam tag `<Peers>` pada file konfigurasi `cyclonedds_jetson.xml`.
+- Penyebab umum mencakup:
+  1. Lupa menutup tag `<Peer address="..."/>` (misal `<Peer address="...">` tanpa penutup `/>` atau tanpa `</Peer>`).
+  2. Komentar bertumpuk (*nested comment* `<!-- <!-- ... --> -->` atau karakter `--` di dalam komentar).
+  3. Tanda kutip miring / unicode (`“...”`) akibat copy-paste dari aplikasi pengolah kata.
+- Kegagalan parsing XML menyebabkan RMW layer (`rmw_cyclonedds_cpp`) gagal menginisialisasi domain DDS, sehingga semua panggilan pembuatan node (`rclpy.create_node`) gagal dengan `rmw handle is invalid`.
+
+### 3. Solusi & Format Standar:
+Pastikan file konfigurasi XML bersih dan rapi:
+```xml
+<?xml version="1.0" encoding="UTF-8" ?>
+<CycloneDDS xmlns="https://cdds.io/config" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+    <Domain id="any">
+        <General>
+            <NetworkInterfaceAddress>tailscale0</NetworkInterfaceAddress>
+            <AllowMulticast>false</AllowMulticast>
+        </General>
+        <Discovery>
+            <Peers>
+                <!-- Selalu daftarkan loopback dan IP Tailscale mesin sendiri -->
+                <Peer address="127.0.0.1"/>
+                <Peer address="100.84.182.79"/>
+                <!-- IP Tailscale Laptop Developer / Operator -->
+                <Peer address="100.127.135.67"/>
+            </Peers>
+            <ParticipantIndex>auto</ParticipantIndex>
+        </Discovery>
+    </Domain>
+</CycloneDDS>
+```
+Setelah diedit, jalankan `ros2 daemon stop` dan build kembali workspace bila perlu.
+
+---
+
+## 📌 23. Optimasi Modul Human Awareness: Solusi Lompat State Langsung ke `SAFE_STOP` (Bypassing `REDUCED_SPEED`)
+
+### 1. Gejala & Fenomena:
+Saat dilakukan penyesuaian lebar koridor lintasan robot (`corridor_width`) menjadi lebih sempit (tujuannya agar manusia di posisi serong tidak memicu perlambatan), saat robot mendekati manusia lurus di depannya, state robot dari `NORMAL` langsung melompat seketika ke `SAFE_STOP`. State `REDUCED_SPEED` sama sekali tidak tampak/terlewati.
+
+### 2. Akar Masalah:
+1. **Jebakan Matematis Overlap Koridor (`corridor_overlap >= 0.60`)**:
+   - Kode sebelumnya mengharuskan minimal 60% lebar bounding box manusia berada di dalam kotak koridor (`person["corridor_overlap"] >= 0.60`).
+   - Ketika koridor dipersempit (misal menjadi selebar 120 px) dan manusia mulai mendekat, tubuh manusia membesar (misal selebar 250 px).
+   - Irisan maksimal hanyalah selebar koridor itu sendiri (120 px), sehingga rasio overlap maksimal hanyalah $\frac{120}{250} = 48\% < 60\%$.
+   - Manusia yang berdiri tepat di depan hidung robot pun **dinyatakan bukan di dalam koridor (`target = None`)**. Akibatnya, zona koridor dipaksa bernilai `Zone.FAR` (`NORMAL`).
+2. **Logika Omnidirectional Emergency Stop (`near_person_outside_or_inside`)**:
+   - Di baris klasifikasi kedekatan, terdapat pemeriksaan:
+     ```python
+     near_person_outside_or_inside = any(person["r"] >= args.t_near_enter for person in persons)
+     ```
+   - Pemeriksaan ini sengaja memeriksa **seluruh manusia tanpa memedulikan koridor**.
+   - Ketika manusia masih berjarak sedang, manusia diabaikan karena tereliminasi oleh koridor sempit. Namun begitu manusia sudah sangat dekat hingga rasionya melewati `t_near_enter`, `force_near = True` langsung aktif dan membanting state seketika ke `SAFE_STOP`.
+3. **Rentang Ambang Batas Terlalu Rapat**:
+   - Nilai default `--t-med-enter: 0.85` dan `--t-near-enter: 0.95` hanya memiliki selisih $0.10$. Karena rasio bounding box membesar secara hiperbolik saat mendekat, rentang ini terlewati hanya dalam beberapa frame kamera.
+
+### 3. Solusi Permanen:
+1. **Ganti Logika Koridor Berbasis Titik Tengah Horizontal (*Center-X*) di [`human_awareness_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/human_awareness_node.py)**:
+   Mengganti perhitungan persentase irisan dengan pengecekan apakah titik pusat tubuh manusia berada di dalam koridor lintasan robot:
+   ```python
+   corridor_persons = []
+   for person in persons:
+       # Titik tengah horizontal tubuh
+       person_center_x = (person["x1"] + person["x2"]) / 2.0
+
+       # Manusia di dalam koridor jika titik tengahnya berada di koridor,
+       # ATAU jika tubuhnya sangat dekat hingga mencakup seluruh koridor
+       person["in_corridor"] = (
+           (corridor_x1 <= person_center_x <= corridor_x2) or
+           (person["x1"] <= corridor_x1 and person["x2"] >= corridor_x2)
+       )
+
+       if person["in_corridor"]:
+           corridor_persons.append(person)
+   ```
+2. **Standardisasi Ambang Batas Rasio Hysteresis**:
+   Menyesuaikan nilai default pada `human_awareness_node.py` dan `fsm.py` agar transisi kecepatan terlihat jelas dan halus:
+   - **`t_med_enter = 0.60`** (mulai melambat di jarak $\approx 2.0 - 2.5\text{ m}$)
+   - **`t_med_exit = 0.50`** (kembali ke kecepatan normal saat orang menjauh)
+   - **`t_near_enter = 0.85`** (rem darurat total di jarak $\approx 1.0 - 1.3\text{ m}$)
+   - **`t_near_exit = 0.80`** (keluar dari rem darurat saat orang mundur)
