@@ -450,4 +450,21 @@ Karena `amr_dashboard.service` berjalan terus-menerus di memori OS:
      sudo systemctl start amr_dashboard
      ```
 
+3. **Runner Script (`start_dashboard.sh`)**:
+   - Service mengeksekusi script `/home/jetson/deliver_amr/start_dashboard.sh`.
+   - File ini di-track di Git dan memastikan environment `ROS_DOMAIN_ID=0`, `ROS_LOCALHOST_ONLY=0`, `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`, dan `CYCLONEDDS_URI` terpasang sebelum `dashboard.launch.py` dijalankan.
+
+---
+
+## 📌 16. Akses Publik Multi-Device: Tailscale Funnel (HTTPS)
+
+- **Domain Publik Resmi**: `https://delivery-going.pompano-halosaur.ts.net/`
+  - Mem-proxy port 5000 lokal (`127.0.0.1:5000`).
+  - Dapat diakses oleh siapa pun di dunia (dosen, penguji, mahasiswa) via browser HP/laptop tanpa perlu menginstal aplikasi Tailscale.
+- **Perintah Manajemen Funnel di Jetson**:
+  - Mengaktifkan di background: `sudo tailscale funnel --bg 5000`
+  - Mengecek status: `tailscale funnel status`
+  - Mematikan / Reset: `sudo tailscale funnel reset`
+
+
 
