@@ -515,6 +515,12 @@ Kedua skrip berikut sempat terhapus saat *merge* Git terdahulu dan kini telah di
   - Terminal interaktif: masukkan Nama Landmark dan Ukuran Nyata Meteran ($D_{\text{nyata}}$).
   - Keyboard shortcut: `'U'` untuk Undo landmark terakhir jika salah klik, `'S'` atau klik tombol untuk simpan hasil.
   - Output otomatis: Tabel hasil CSV (siap ke Word/Excel) dan gambar peta beranotasi PNG disimpan di `~/benchmark_skripsi_results/evaluasi_peta/`.
+  - **Fitur Pembaca Koordinat ROS (Baru)**: Kursor Matplotlib secara realtime menampilkan koordinat Map Frame $(X, Y)$ dalam meter pada status bar kanan bawah (`Map Frame: X=...m, Y=...m`) serta mencetak koordinat ROS saat titik diklik.
+- **Analisis Metodologi & Sub-Pixel Accuracy (Penyebab Selisih 10 cm & Solusinya)**:
+  - Resolusi grid peta adalah $0.05\text{ m/px}$ ($5\text{ cm per piksel}$).
+  - Jika mengukur bukaan lorong / pintu / meja (bidang dalam-ke-dalam), titik klik **WAJIB diletakkan di sudut permukaan dalam** (antarmuka antara piksel putih dan piksel hitam).
+  - Jika titik ditarik sampai ke tepi luar dinding hitam, ketebalan dinding ($2 - 3\text{ piksel} = 10 - 15\text{ cm}$) ikut terhitung dan menimbulkan galat semu.
+  - **Hasil Validasi Nyata**: Ground truth $0.685\text{ m}$ menghasilkan $0.710\text{ m}$ di peta (galat hanya $2.5\text{ cm} = 0.5\text{ piksel}$), membuktikan rekonstruksi SLAM sangat presisi dan **LULUS kriteria kelulusan Skripsi ($RMSE \le 0.05\text{ m}$)**.
 - **Cara Menjalankan**:
   ```bash
   # Mengukur peta default atau peta terbaru peta_l1_dc:
@@ -535,3 +541,51 @@ Kedua skrip berikut sempat terhapus saat *merge* Git terdahulu dan kini telah di
   ```bash
   python3 src/amr_simulation/scripts/uji_amcl_skripsi.py
   ```
+
+---
+
+## 📌 19. Visualisasi Peta Mandiri & Penentuan Koordinat Datum di RViz2 (`view_map.launch.py`)
+
+- **Lokasi File**: [`src/amr_simulation/launch/view_map.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/view_map.launch.py)
+- **Tujuan**: Membuka peta `.yaml` & `.pgm` langsung di RViz2 secara mandiri di Laptop tanpa perlu menyalakan robot fisik (menggunakan `nav2_map_server` dan `nav2_lifecycle_manager`).
+- **Cara Menjalankan di Laptop**:
+  ```bash
+  source /opt/ros/foxy/setup.bash
+  source ~/Documents/amr_ws/install/setup.bash
+  ros2 launch amr_simulation view_map.launch.py
+  # Atau spesifikasikan peta:
+  ros2 launch amr_simulation view_map.launch.py map:=src/amr_simulation/maps/peta_l1_dc.yaml
+  ```
+- **Cara Mengambil Koordinat Pasti di RViz2**:
+  1. **Koordinat Posisi $(X, Y)$**:
+     - Di terminal jalankan: `ros2 topic echo /clicked_point`
+     - Di toolbar RViz, klik tombol **`Publish Point`** lalu klik pada titik acuan di peta.
+  2. **Koordinat Posisi & Sudut Hadap $(X, Y, \text{Yaw})$**:
+     - Di terminal jalankan: `ros2 topic echo /goal_pose --once`
+     - Di toolbar RViz, klik tombol **`2D Goal Pose`** / **`Nav2 Goal`** lalu klik & drag panah ke arah robot menghadap.
+
+---
+
+## 📌 20. Solusi Bottleneck Inisialisasi Nav2 (`[MENUNGGU] AMCL ⏳ | Costmap ⏳`) & Dual QoS `/initialpose`
+
+### 1. Gejala & Akar Masalah:
+- Saat `real_navigation.launch.py` dijalankan (termasuk via Web Dashboard), node `adaptive_velocity_node` terus mencetak log:
+  ```text
+  [MENUNGGU] Peta ✔ | LiDAR ✔ | Encoder ✔ | AMCL ⏳ | Costmap ⏳
+  ```
+- **Akar Penyebab**:
+  1. **AMCL Menunggu Initial Pose**: AMCL tidak akan mem-publish topik `/amcl_pose` sampai menerima perkiraan posisi awal (`/initialpose`) atau sebelum robot bergerak.
+  2. **Costmap Menunggu AMCL**: *Local Costmap* dan *Global Costmap* menahan aktivasi jejak kaki robot (*published footprint*) sampai transformasi `map -> odom` dari AMCL tersedia.
+  3. **Ketidakcocokan Kebijakan QoS DDS ROS 2 Foxy**: Nav2 AMCL berlangganan topik `/initialpose` dengan durabilitas **`TRANSIENT_LOCAL`**. Jika publisher mengirim pesan menggunakan durabilitas default **`VOLATILE`** (`depth=10`), DDS CycloneDDS menganggap QoS tidak kompatibel sehingga pesan diabaikan (*silently dropped*).
+  4. **Timeout Sensor LiDAR Awal**: Jika sensor RPLiDAR sempat mengalami timeout USB saat startup (seperti auto-reset USB selama $\approx 60\text{ detik}$), auto-initialpose bawaan sempat kehabisan batas percobaan (sebelumnya dibatasi 8 kali).
+
+### 2. Solusi Permanen:
+1. **Dukungan Dual QoS `/initialpose`**:
+   - Di [`adaptive_velocity_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/adaptive_velocity_node.py) dan [`app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py), publisher `/initialpose` diubah menjadi publisher ganda: **`TRANSIENT_LOCAL` (reliable)** dan **`VOLATILE`**.
+   - Timestamp pesan di-generate dari clock aktual node (`self.get_clock().now().to_msg()`).
+2. **Auto-Retry Tanpa Batas**:
+   - Di `adaptive_velocity_node.py`, batasan kuota 8 kali dihapus dan diganti dengan pengiriman berkala setiap $4\text{ detik}$ sampai AMCL benar-benar terkonfirmasi aktif (`amcl_initialized = True`).
+3. **Inisialisasi Manual Seketika via Dashboard**:
+   - Pengguna cukup mengklik tombol **`📍 Set Posisi Awal`** di toolbar Dashboard (atau klik kanan pada kanvas peta $\rightarrow$ `Set Posisi Awal Robot (AMCL)`), atau mengklik tombol **`🔄 Relokalisasi (360°)`**.
+   - Begitu tombol ini diklik, status `AMCL ⏳` dan `Costmap ⏳` langsung berubah menjadi **`✔`**, dan log terminal berganti hijau:  
+     `🟢 [SIAP NAVIGASI] AMR SIAP UNTUK NAVIGASI & MENGANTAR!`

@@ -77,7 +77,8 @@ class AdaptiveVelocityNode(Node):
         self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, tl_qos)
         self.create_subscription(PolygonStamped, '/local_costmap/published_footprint', self.on_local_footprint, 5)
         self.create_subscription(PolygonStamped, '/global_costmap/published_footprint', self.on_global_footprint, 5)
-        self.initialpose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
+        self.initialpose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', tl_qos)
+        self.initialpose_pub_vol = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
         self.delivery_log_pub = self.create_publisher(String, '/amr/delivery_log', 10)
 
         self.create_subscription(String, '/human_state', self.state_callback, 10)
@@ -149,6 +150,7 @@ class AdaptiveVelocityNode(Node):
         msg.pose.covariance[7] = 0.25
         msg.pose.covariance[35] = 0.06853891945200942
         self.initialpose_pub.publish(msg)
+        self.initialpose_pub_vol.publish(msg)
 
     def state_callback(self, msg: String):
         severity = {"NORMAL": 0, "REDUCED_SPEED": 1, "SAFE_STOP": 2}
@@ -198,9 +200,11 @@ class AdaptiveVelocityNode(Node):
         # 2. Kirim otomatis /initialpose (0,0,0) saat /map, /scan_filtered & ENCODER sudah siap tapi AMCL belum init.
         #    Initialpose sebelum odom valid membuat AMCL mengunci pose yang salah.
         if (not self.amcl_initialized) and self.map_received and scan_active and enc_ok:
-            if (wall_now - self.start_wall_time > 3.0) and (wall_now - self.last_initpose_sent_time > 2.0) and (self.initpose_sent_count < 8):
+            interval = 2.0 if self.initpose_sent_count < 5 else 4.0
+            if (wall_now - self.start_wall_time > 3.0) and (wall_now - self.last_initpose_sent_time > interval):
                 self.last_initpose_sent_time = wall_now
                 self.initpose_sent_count += 1
+                self.get_logger().info(f"📍 Mengirim auto-initialpose ke AMCL (percobaan #{self.initpose_sent_count})...")
                 self.send_auto_initialpose(now_msg)
 
         # 3. Verifikasi kesiapan penuh (Peta + LiDAR + Encoder + AMCL + Local/Global Costmap + Nav2 Stack Aktif)

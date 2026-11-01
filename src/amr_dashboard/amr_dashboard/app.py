@@ -434,8 +434,15 @@ class DashboardNode(Node):
         self.control_pub = self.create_publisher(String, '/amr/delivery_control', 10)
         # Manual velocity
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        # Initial pose AMCL (/initialpose)
+        # Initial pose AMCL (/initialpose) - Dukung Transient Local & Volatile QoS
+        qos_tl = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE
+        )
         self.initialpose_pub = self.create_publisher(
+            PoseWithCovarianceStamped, '/initialpose', qos_tl)
+        self.initialpose_pub_vol = self.create_publisher(
             PoseWithCovarianceStamped, '/initialpose', 10)
         
         # Service client untuk AMCL global localization (sebar partikel)
@@ -823,7 +830,7 @@ class DashboardNode(Node):
         """Publish 2D Pose Estimate ke /initialpose untuk lokalisasi AMCL."""
         msg = PoseWithCovarianceStamped()
         msg.header.frame_id = 'map'
-        msg.header.stamp = rclpy.time.Time().to_msg()
+        msg.header.stamp = self.get_clock().now().to_msg()
         msg.pose.pose.position.x = float(x)
         msg.pose.pose.position.y = float(y)
         msg.pose.pose.position.z = 0.0
@@ -836,6 +843,8 @@ class DashboardNode(Node):
         cov[35] = 0.0685
         msg.pose.covariance = cov
         self.initialpose_pub.publish(msg)
+        if hasattr(self, 'initialpose_pub_vol'):
+            self.initialpose_pub_vol.publish(msg)
         with self.lock:
             self.robot_pose = {
                 'x': round(float(x), 3),
