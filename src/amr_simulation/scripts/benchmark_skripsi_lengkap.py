@@ -185,15 +185,24 @@ class UnifiedBenchmarkNode(Node):
 
         try:
             loop_count = 0
+        try:
+            loop_count = 0
             while (time.time() - start_time) < duration_sec:
                 t_now = time.time() - start_time
                 self.send_cmd(v_target, 0.0)
-                rclpy.spin_once(self, timeout_sec=0.04)
 
-                target_l = self.pid_l['target']
+                # 1. Kuras antrean ROS 2 agar kedua callback (L dan R) selesai diproses bersamaan
+                for _ in range(5):
+                    rclpy.spin_once(self, timeout_sec=0.001)
+
+                # 2. Sinkronkan target: Begitu salah satu motor mulai menerima target > 0, 
+                #    kedua roda resmi dicatat serentak pada target_rpm (misal 60.0 RPM)
+                is_step_active = (self.pid_l['target'] > 0.0 or self.pid_r['target'] > 0.0)
+                target_l = float(target_rpm) if is_step_active else 0.0
+                target_r = float(target_rpm) if is_step_active else 0.0
+
                 actual_l = self.pid_l['actual']
                 pwm_l = self.pid_l['pwm']
-                target_r = self.pid_r['target']
                 actual_r = self.pid_r['actual']
                 pwm_r = self.pid_r['pwm']
 
