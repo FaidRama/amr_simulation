@@ -121,10 +121,10 @@ controller_server:
       max_vel_theta: 0.80
       min_speed_xy: 0.0
       max_speed_xy: 0.45
-      min_speed_theta: 0.00
+      min_speed_theta: 0.20
       acc_lim_x: 0.8
       acc_lim_y: 0.0
-      acc_lim_theta: 1.5
+      acc_lim_theta: 2.0
       decel_lim_x: -0.9
       decel_lim_y: 0.0
       decel_lim_theta: -1.5
@@ -150,14 +150,14 @@ controller_server:
         ]
 
       BaseObstacle.scale: 3.0
-      PathAlign.scale: 4.0
+      PathAlign.scale: 1.5
       PathAlign.forward_point_distance: 0.30
       PathDist.scale: 6.0
       GoalDist.scale: 12.0
       RotateToGoal.scale: 10.0
       RotateToGoal.slowing_factor: 3.0
       RotateToGoal.lookahead_time: -1.0
-      Oscillation.scale: 5.0
+      Oscillation.scale: 1.0
       Oscillation.oscillation_reset_dist: 0.05
 
 controller_server_rclcpp_node:
