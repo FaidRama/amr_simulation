@@ -281,3 +281,23 @@ Navigasi dijalankan saat log Arduino baru sampai `Arduino Bridge PID aktif`, bel
 ```
 - Dalam waktu **1.6 detik**, Optiboot selesai, paket baseline diterima, 10 paket beruntun terverifikasi, dan status kesiapan langsung menyala hijau (`🟢 [ENCODER SIAP]`).
 - Nav2 dan AMCL kini terproteksi 100% dari kesalahan odometri.
+
+---
+
+## 12. Solusi Jaringan WiFi Kampus: Tailscale Mesh VPN & CycloneDDS Unicast
+
+### Masalah:
+1. Jaringan WiFi kampus (eduroam / enterprise WPA2-Enterprise) menerapkan **Client Isolation** dan **Multicast Rate Limiting / Flooding Protection**, serta sering mengalami roaming drop sehingga kartu `wlan0` Jetson masuk ke status `mode DORMANT` (100% packet loss) saat robot bergerak.
+2. Penggunaan Hotspot HP rentan mengalami *bufferbloat* (antrean paket penuh tersedot RViz/Costmap/TF 50Hz) sehingga paket teleop `/cmd_vel` terlambat (> 0.6s) dan memicu watchdog motor ("maju-berhenti-maju-berhenti").
+
+### Solusi:
+1. **Tailscale Mesh VPN (WireGuard Layer-3 Tunnel)**:
+   - Terpasang di Jetson (`100.84.182.79`) dan Laptop (`100.127.135.67`).
+   - Otomatis aktif saat booting (`tailscaled.service`), menembus firewall dan Client Isolation kampus dengan enkripsi end-to-end.
+   - Tetap tersambung (*connectionless roaming*) meskipun robot berpindah Access Point kampus.
+2. **CycloneDDS Unicast Configuration**:
+   - Tailscale secara default tidak melewatkan paket Multicast L2.
+   - Dibuatkan file konfigurasi Unicast CycloneDDS resmi:
+     - Jetson: [`src/amr_simulation/config/cyclonedds_jetson.xml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/cyclonedds_jetson.xml) (Peers: Laptop Faid `100.127.135.67`, siap ditambahkan IP teman).
+     - Laptop: [`src/amr_simulation/config/cyclonedds_laptop.xml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/cyclonedds_laptop.xml) (Peers: Jetson `100.84.182.79`).
+   - Mengunci interface jaringan ke `tailscale0` (`<AllowMulticast>false</AllowMulticast>`) sehingga paket ROS 2 mengalir 100% privat, anti-tabrakan dengan mahasiswa lain, dan bebas pemblokiran firewall.
