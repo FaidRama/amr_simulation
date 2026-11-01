@@ -10,8 +10,13 @@ ROS 2 Arduino Serial Bridge Node (Jetson AGX Xavier <-> Arduino Uno)
 - Siar TF kontinu pada 50Hz agar SLAM & RViz tidak pernah drop laser message
 """
 
+import os
+import sys
 import math
 import time
+import fcntl
+import signal
+import subprocess
 import serial
 import rclpy
 from rclpy.node import Node
@@ -20,6 +25,29 @@ from geometry_msgs.msg import Twist, TransformStamped, Point
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
 from tf2_ros import TransformBroadcaster
+
+# Konstanta ioctl Linux untuk me-reset perangkat USB (setara cabut-colok kabel fisik tanpa sentuh kabel)
+USBDEVFS_RESET = 21780  # 0x5514 ('U' << 8 | 20)
+
+
+def kill_other_instances(process_pattern: str):
+    """Bunuh proses lain yang cocok dengan pattern kecuali PID proses ini sendiri dan parent-nya."""
+    my_pid = os.getpid()
+    my_ppid = os.getppid()
+    try:
+        res = subprocess.run(['pgrep', '-f', process_pattern], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        for line in res.stdout.splitlines():
+            line = line.strip()
+            if not line.isdigit():
+                continue
+            pid = int(line)
+            if pid not in (my_pid, my_ppid):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 
 def euler_to_quaternion(yaw: float):
@@ -32,6 +60,9 @@ class ArduinoBridgeNode(Node):
     def __init__(self):
         super().__init__('arduino_bridge')
 
+        # 0. Bersihkan proses arduino_bridge.py yatim/zombie dari sesi sebelumnya agar port serial bebas
+        kill_other_instances('arduino_bridge.py')
+
         # --- PARAMETER KONFIGURASI ROBOT ---
         self.declare_parameter('serial_port', '/dev/arduino')
         self.declare_parameter('baudrate', 115200)
@@ -43,6 +74,7 @@ class ArduinoBridgeNode(Node):
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('publish_tf', True)
+        self.declare_parameter('auto_usb_reset_on_start', False)
 
         self.port = self.get_parameter('serial_port').value
         self.baud = self.get_parameter('baudrate').value
@@ -54,6 +86,7 @@ class ArduinoBridgeNode(Node):
         self.odom_frame = self.get_parameter('odom_frame').value
         self.base_frame = self.get_parameter('base_frame').value
         self.publish_tf = bool(self.get_parameter('publish_tf').value)
+        self.auto_usb_reset_on_start = bool(self.get_parameter('auto_usb_reset_on_start').value)
 
         self.meters_per_tick = (math.pi * self.wheel_diameter) / self.ticks_per_rev
 
@@ -62,7 +95,7 @@ class ArduinoBridgeNode(Node):
         # dengan interval wajar. Sebelum siap: perintah gerak diblok (motor dipaksa 0).
         self.declare_parameter('ready_packet_count', 10)       # 10 paket @20Hz ~ 0.5 detik stabil
         self.declare_parameter('enc_stream_timeout', 0.5)      # >0.5s tanpa ENC -> stream hilang
-        self.declare_parameter('enc_startup_timeout', 5.0)     # >5s setelah connect tanpa ENC -> reset ulang
+        self.declare_parameter('enc_startup_timeout', 3.5)     # >3.5s tanpa ENC -> Auto-Reset USB (cabut-colok)
         self.declare_parameter('max_ticks_per_packet', 500)    # lompatan tick tak wajar -> resync baseline
         self.ready_packet_count = int(self.get_parameter('ready_packet_count').value)
         self.enc_stream_timeout = float(self.get_parameter('enc_stream_timeout').value)
@@ -76,6 +109,7 @@ class ArduinoBridgeNode(Node):
         self.connect_wall = 0.0
         self.last_warn_wall = 0.0
         self.last_ready_pub_wall = 0.0
+        self.restart_count = 0
 
         # --- STATE ODOMETRY ---
         self.x = 0.0
@@ -107,7 +141,7 @@ class ArduinoBridgeNode(Node):
 
         # --- INISIALISASI SERIAL ARDUINO ---
         self.ser = None
-        self.connect_serial()
+        self.connect_serial(force_usb_reset=self.auto_usb_reset_on_start)
 
         # --- ROS 2 PUB / SUB / TF ---
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
@@ -150,6 +184,7 @@ class ArduinoBridgeNode(Node):
         self.encoder_ready = value
         self.publish_ready(value, force=True)
         if value:
+            self.restart_count = 0
             self.get_logger().info("============================================================")
             self.get_logger().info(
                 f"🟢 [ENCODER SIAP] {self.valid_enc_count} paket ENC valid diterima -> /odom & TF odom->base_link VALID"
@@ -173,6 +208,83 @@ class ArduinoBridgeNode(Node):
         rpm_l = (v_l / (math.pi * self.wheel_diameter)) * 60.0
         rpm_r = (v_r / (math.pi * self.wheel_diameter)) * 60.0
         return rpm_l, rpm_r
+
+    def find_usb_device_path(self):
+        """Cari path perangkat USB (/dev/bus/usb/BBB/DDD) dari port serial (misal /dev/arduino)."""
+        try:
+            real_tty = os.path.realpath(self.port)
+            tty_name = os.path.basename(real_tty)
+            sys_dev_path = f"/sys/class/tty/{tty_name}/device"
+            if not os.path.exists(sys_dev_path):
+                return None
+
+            cur = os.path.realpath(sys_dev_path)
+            busnum_file = None
+            devnum_file = None
+            for _ in range(7):
+                b_cand = os.path.join(cur, "busnum")
+                d_cand = os.path.join(cur, "devnum")
+                if os.path.exists(b_cand) and os.path.exists(d_cand):
+                    busnum_file = b_cand
+                    devnum_file = d_cand
+                    break
+                cur = os.path.dirname(cur)
+
+            if not busnum_file or not devnum_file:
+                return None
+
+            with open(busnum_file, 'r') as f:
+                busnum = int(f.read().strip())
+            with open(devnum_file, 'r') as f:
+                devnum = int(f.read().strip())
+
+            usb_dev_path = f"/dev/bus/usb/{busnum:03d}/{devnum:03d}"
+            if os.path.exists(usb_dev_path):
+                return usb_dev_path
+        except Exception as e:
+            self.get_logger().debug(f"Debug find_usb_device_path: {e}")
+        return None
+
+    def reset_usb_device(self):
+        """
+        Reset port USB di level Kernel Linux (USBDEVFS_RESET).
+        Setara cabut-colok kabel fisik Arduino tanpa perlu menyentuh kabel secara manual.
+        """
+        usb_path = self.find_usb_device_path()
+        self.close_serial()
+
+        if not usb_path or not os.path.exists(usb_path):
+            self.get_logger().warn(
+                f"⚠️ Tidak dapat menemukan path USB untuk {self.port} (mungkin kabel belum tercolok/driver belum load)"
+            )
+            return False
+
+        try:
+            self.get_logger().info(
+                f"🔌 Melakukan Auto-Reset USB Kernel ({usb_path} untuk {self.port}) setara cabut-colok fisik..."
+            )
+            fd = os.open(usb_path, os.O_WRONLY)
+            try:
+                fcntl.ioctl(fd, USBDEVFS_RESET, 0)
+            finally:
+                os.close(fd)
+            self.get_logger().info("✅ Sinyal USB Reset terkirim ke hardware. Menunggu re-enumerasi udev...")
+        except Exception as e:
+            self.get_logger().warn(f"⚠️ Gagal ioctl USBDEVFS_RESET pada {usb_path}: {e}")
+            return False
+
+        # Tunggu port serial terdaftar kembali oleh udev (~1.0 - 3.5 detik)
+        t_start = time.time()
+        while time.time() - t_start < 4.0:
+            if os.path.exists(self.port) and os.access(self.port, os.R_OK | os.W_OK):
+                elapsed = time.time() - t_start
+                self.get_logger().info(f"✅ Port {self.port} kembali terdeteksi setelah USB reset ({elapsed:.2f}s).")
+                time.sleep(0.5)  # Beri jeda kecil agar driver serial stabil
+                return True
+            time.sleep(0.2)
+
+        self.get_logger().warn(f"⚠️ Port {self.port} belum muncul kembali setelah 4.0s pasca USB reset.")
+        return False
 
     def reset_encoder_session(self):
         """Dipanggil tiap (re)connect: Arduino ter-reset (totalPulsa kembali 0), jadi baseline tick
@@ -198,16 +310,21 @@ class ArduinoBridgeNode(Node):
             pass
         self.ser = None
 
-    def connect_serial(self):
+    def connect_serial(self, force_usb_reset=False):
+        if force_usb_reset:
+            self.reset_usb_device()
         self.reset_encoder_session()
         try:
             self.ser = serial.Serial(self.port, self.baud, timeout=0)
             # 1. Hardware auto-reset via DTR/RTS pulse (persis seperti saat kabel dicopot-pasang)
             self.ser.dtr = False
             self.ser.rts = False
-            time.sleep(0.1)
+            time.sleep(0.05)
             self.ser.dtr = True
             self.ser.rts = True
+            time.sleep(0.05)
+            self.ser.dtr = False
+            self.ser.rts = False
             # 2. Beri waktu bootloader Optiboot Arduino Uno selesai (~1.6 detik)
             time.sleep(1.6)
             # 3. Bersihkan buffer sisa bootloader & kirim heartbeat nol
@@ -215,6 +332,7 @@ class ArduinoBridgeNode(Node):
             self.ser.reset_output_buffer()
             self.ser.write(b"V,0.0,0.0\n")
             self.connect_wall = time.time()
+            self.last_reconnect_time = self.get_clock().now()
             self.get_logger().info(f"✅ Berhasil terhubung ke Arduino di {self.port} (DTR reset OK) -> menunggu stream ENC...")
         except Exception as e:
             self.get_logger().warn(f"⚠️ Menunggu koneksi port Arduino {self.port} ({e})")
@@ -266,19 +384,27 @@ class ArduinoBridgeNode(Node):
             # Belum pernah menerima ENC sejak connect
             since_connect = wall - self.connect_wall
             if since_connect > self.enc_startup_timeout:
-                self.get_logger().error(
-                    f"🔴 Tidak ada paket ENC selama {since_connect:.1f}s setelah connect "
-                    f"(firmware hang / baud salah / port salah) -> reset ulang Arduino..."
+                self.restart_count += 1
+                self.get_logger().warn(
+                    f"🔌 Tidak ada paket ENC selama {since_connect:.1f}s setelah connect "
+                    f"-> Melakukan Auto-Reset USB Kernel ({self.port}) setara cabut-colok fisik..."
                 )
                 self.close_serial()
+                self.reset_usb_device()
+                self.connect_serial()
             return
 
         gap = wall - self.last_enc_wall
         if self.encoder_ready and gap > self.enc_stream_timeout:
             self.set_encoder_ready(False, f"Stream ENC terputus {gap:.2f}s")
         if gap > self.enc_startup_timeout:
-            self.get_logger().error(f"🔴 Stream ENC hilang {gap:.1f}s -> reset ulang Arduino...")
+            self.restart_count += 1
+            self.get_logger().warn(
+                f"🔌 Stream ENC hilang {gap:.1f}s -> Melakukan Auto-Reset USB Kernel ({self.port}) setara cabut-colok fisik..."
+            )
             self.close_serial()
+            self.reset_usb_device()
+            self.connect_serial()
 
     def update_loop(self):
         now = self.get_clock().now()
@@ -288,7 +414,7 @@ class ArduinoBridgeNode(Node):
             dt_reconnect = (now - self.last_reconnect_time).nanoseconds / 1e9
             if dt_reconnect >= 2.0:
                 self.last_reconnect_time = now
-                self.connect_serial()
+                self.connect_serial(force_usb_reset=True)
             # Tetap broadcast TF saat disconnected agar TF tree tidak broken
             self.publish_ready(False)
             self.broadcast_tf_and_odom(now)
@@ -470,9 +596,6 @@ class ArduinoBridgeNode(Node):
         odom.twist.twist.angular.z = self.wz
         self.odom_pub.publish(odom)
 
-
-import os
-import signal
 
 def main(args=None):
     rclpy.init(args=args)

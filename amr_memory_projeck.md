@@ -245,11 +245,14 @@ Navigasi dijalankan saat log Arduino baru sampai `Arduino Bridge PID aktif`, bel
 
 ### Solusi:
 1. **[`arduino_bridge.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/arduino_bridge.py)**:
-   - Encoder dianggap SIAP setelah **10 paket ENC valid berturut-turut** (`ready_packet_count`), diumumkan `🟢 [ENCODER SIAP]` dan di-publish ke **`/arduino/ready`** (`std_msgs/Bool`, transient local).
+   - **Auto-Reset USB Kernel (`USBDEVFS_RESET` = 21780)**: Mengadopsi mekanisme yang sama persis seperti pada [`rplidar_bridge.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/rplidar_bridge.py). Jika port serial / endpoint USB Arduino macet (tidak ada data ENC masuk dalam 3.5 detik), node secara otomatis memicu `ioctl(fd, USBDEVFS_RESET, 0)` ke `/dev/bus/usb/BBB/DDD`. Ini setara **cabut-colok kabel fisik secara hardware** via kernel Linux tanpa perlu menyentuh kabel secara manual!
+   - **Pembersihan Proses Yatim (`kill_other_instances`)**: Memastikan tidak ada proses `arduino_bridge.py` hantu yang menahan file descriptor `/dev/arduino`.
+   - **Perbaikan DTR/RTS Pulse**: DTR dinonaktifkan (`dtr=False`) setelah pulsa reset agar tidak menahan sinyal kontrol aliran (flow control) atau pin reset ATmega328P.
+   - **Encoder Verification Gate**: Encoder dianggap SIAP setelah **10 paket ENC valid berturut-turut** (`ready_packet_count`), diumumkan `🟢 [ENCODER SIAP]` dan di-publish ke **`/arduino/ready`** (`std_msgs/Bool`, transient local).
    - Sebelum siap: `/cmd_vel` dipaksa 0 (`⛔ /cmd_vel diabaikan`).
    - Baris rusak hanya dihitung (`bad_line_count`), tidak memicu reconnect.
    - Baseline tick di-reset setiap (re)connect; lompatan > `max_ticks_per_packet` (500) -> resync, paket diabaikan.
-   - Watchdog: tidak ada ENC > 0.5 s -> tidak siap + motor stop; tidak ada ENC > 5 s (atau sejak connect) -> reset ulang Arduino.
+   - Watchdog: tidak ada ENC > 0.5 s -> tidak siap + motor stop; tidak ada ENC > 3.5 s (atau sejak connect) -> Auto-Reset USB kernel (`USBDEVFS_RESET`) + connect ulang.
 2. **[`adaptive_velocity_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/adaptive_velocity_node.py)**:
    - `encoder_ok` = `/arduino/ready == True` dan `/odom` mengalir (< 1 s).
    - Auto `/initialpose`, pengumuman `🟢 [SIAP NAVIGASI]`, dan output `/cmd_vel_safe` semuanya menunggu `encoder_ok`.
