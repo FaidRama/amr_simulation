@@ -410,3 +410,37 @@ Sistem dirombak menggunakan arsitektur **3-State Process Lifecycle (`OFFLINE` ->
 - **Proteksi Tombol Dispatch**: Tombol *"Mulai Eksekusi Misi"* di halaman Dispatch otomatis di-disable dan diredupkan (opacity 0.5) selama Nav2 masih dalam status `⏳ MENYIAPKAN NAV2...`, dan baru terbuka penuh saat status berubah menjadi `🟢 AMR SIAP MENGANTAR (READY)`.
 - **Notifikasi Toast**: Memberi notifikasi hijau saat hardware/sensor benar-benar siap (misal: `"🟢 Arduino Bridge siap! Hardware encoder & serial terverifikasi"` atau `"🟢 Human Awareness AI siap! Model YOLO aktif mendeteksi"`).
 
+---
+
+## 📌 15. Manajemen Daemon Service: `amr_dashboard.service` (Systemd pada Jetson)
+
+### Status & Arsitektur Service:
+- Di Jetson Xavier robot, AMR Web Dashboard Studio berjalan otomatis saat sistem booting menggunakan unit service systemd: **`amr_dashboard.service`**.
+- Ini menjelaskan mengapa proses dashboard (`dashboard.launch.py` -> `waypoint_manager` + `dashboard_server`) berjalan dengan TTY tanda tanya (`?`) di latar belakang (background OS daemon).
+
+### Prosedur Wajib Saat Ada Update Kode / DDS:
+Karena `amr_dashboard.service` berjalan terus-menerus di memori OS:
+1. Setiap kali melakukan pembaruan kode (`app.py`, template HTML, file JS frontend, parameter, atau konfigurasi CycloneDDS XML):
+   - **Wajib me-restart service** agar perubahan termuat ke RAM:
+     ```bash
+     sudo systemctl restart amr_dashboard
+     ```
+2. **Perintah Pemantauan & Diagnostik Service**:
+   - Mengecek status aktif service:
+     ```bash
+     systemctl status amr_dashboard
+     ```
+   - Melihat log real-time / streaming log output dashboard:
+     ```bash
+     journalctl -u amr_dashboard -f
+     ```
+   - Mematikan service sementara (misal saat ingin debugging manual di terminal via `run dashboard`):
+     ```bash
+     sudo systemctl stop amr_dashboard
+     ```
+   - Menghidupkan kembali service:
+     ```bash
+     sudo systemctl start amr_dashboard
+     ```
+
+
