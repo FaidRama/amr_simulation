@@ -207,7 +207,11 @@ def generate_launch_description():
         package='amr_simulation',
         executable='adaptive_velocity_node.py',
         name='adaptive_velocity_node',
-        output='screen'
+        output='screen',
+        parameters=[{
+            # Verifikasi encoder Arduino (setara cek LiDAR). Otomatis nonaktif bila use_arduino:=False
+            'require_encoder': LaunchConfiguration('use_arduino'),
+        }]
     )
 
     # 6. Unified Nav2 Stack (Map Server + AMCL + Controller + Planner + Recoveries + BT Navigator + Waypoint Follower)

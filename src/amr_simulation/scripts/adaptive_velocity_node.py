@@ -4,9 +4,9 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from geometry_msgs.msg import Twist, TransformStamped, PoseWithCovarianceStamped, PolygonStamped
-from nav_msgs.msg import OccupancyGrid
+from nav_msgs.msg import OccupancyGrid, Odometry
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import String
+from std_msgs.msg import String, Bool
 from tf2_ros import TransformBroadcaster
 
 
@@ -54,6 +54,16 @@ class AdaptiveVelocityNode(Node):
         self.last_map_odom_qz = 0.0
         self.last_map_odom_qw = 1.0
 
+        # --- VERIFIKASI ENCODER ARDUINO (setara cek LiDAR) ---
+        # require_encoder=False dipakai saat use_arduino:=False (odom->base_link static)
+        self.declare_parameter('require_encoder', True)
+        _req = self.get_parameter('require_encoder').value
+        self.require_encoder = (str(_req).strip().lower() in ('true', '1', 'yes')) if isinstance(_req, str) else bool(_req)
+        self.arduino_ready = False
+        self.last_odom_wall_time = 0.0
+        self.encoder_was_ok = False
+        self.last_wait_log_time = 0.0
+
         tl_qos = QoSProfile(
             depth=1,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -61,6 +71,8 @@ class AdaptiveVelocityNode(Node):
         )
         self.create_subscription(OccupancyGrid, '/map', self.on_map, tl_qos)
         self.create_subscription(LaserScan, '/scan_filtered', self.on_scan, 10)
+        self.create_subscription(Bool, '/arduino/ready', self.on_arduino_ready, tl_qos)
+        self.create_subscription(Odometry, '/odom', self.on_odom, 10)
         self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, 10)
         self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, tl_qos)
         self.create_subscription(PolygonStamped, '/local_costmap/published_footprint', self.on_local_footprint, 5)
@@ -85,6 +97,17 @@ class AdaptiveVelocityNode(Node):
 
     def on_scan(self, msg: LaserScan):
         self.last_scan_wall_time = time.time()
+
+    def on_arduino_ready(self, msg: Bool):
+        self.arduino_ready = bool(msg.data)
+
+    def on_odom(self, msg: Odometry):
+        self.last_odom_wall_time = time.time()
+
+    def encoder_ok(self, wall_now: float) -> bool:
+        if not self.require_encoder:
+            return True
+        return self.arduino_ready and (wall_now - self.last_odom_wall_time) < 1.0
 
     def on_amcl_pose(self, msg: PoseWithCovarianceStamped):
         if not self.amcl_initialized:
@@ -158,22 +181,35 @@ class AdaptiveVelocityNode(Node):
 
         # 1. Bootstrap TF map -> odom sebelum AMCL aktif (agar global_costmap & RViz langsung jalan sekali klik)
         scan_active = (wall_now - self.last_scan_wall_time) < 2.0
+        enc_ok = self.encoder_ok(wall_now)
         if not self.amcl_initialized:
             self.publish_bootstrap_tf(now_msg)
 
-        # 2. Kirim otomatis /initialpose (0,0,0) saat /map & /scan_filtered sudah siap tapi AMCL belum init
-        if (not self.amcl_initialized) and self.map_received and scan_active:
+        # Deteksi encoder hilang/kembali setelah sempat siap
+        if self.encoder_was_ok and not enc_ok:
+            self.get_logger().error("🔴 [ENCODER HILANG] Odometry Arduino tidak valid -> robot DIHENTIKAN sampai encoder pulih.")
+            log_msg = String()
+            log_msg.data = "🔴 ENCODER ARDUINO HILANG - robot dihentikan"
+            self.delivery_log_pub.publish(log_msg)
+        elif (not self.encoder_was_ok) and enc_ok and self.require_encoder:
+            self.get_logger().info("✅ Encoder Arduino terverifikasi (/arduino/ready=True & /odom mengalir).")
+        self.encoder_was_ok = enc_ok
+
+        # 2. Kirim otomatis /initialpose (0,0,0) saat /map, /scan_filtered & ENCODER sudah siap tapi AMCL belum init.
+        #    Initialpose sebelum odom valid membuat AMCL mengunci pose yang salah.
+        if (not self.amcl_initialized) and self.map_received and scan_active and enc_ok:
             if (wall_now - self.start_wall_time > 3.0) and (wall_now - self.last_initpose_sent_time > 2.0) and (self.initpose_sent_count < 8):
                 self.last_initpose_sent_time = wall_now
                 self.initpose_sent_count += 1
                 self.send_auto_initialpose(now_msg)
 
-        # 3. Verifikasi kesiapan penuh (Peta + LiDAR + AMCL + Local/Global Costmap + Nav2 Stack Aktif)
+        # 3. Verifikasi kesiapan penuh (Peta + LiDAR + Encoder + AMCL + Local/Global Costmap + Nav2 Stack Aktif)
         if not self.nav_ready_announced and (wall_now - self.last_ready_check_time >= 1.0):
             self.last_ready_check_time = wall_now
             if (
                 self.map_received
                 and scan_active
+                and enc_ok
                 and self.amcl_initialized
                 and self.local_costmap_active
                 and self.global_costmap_active
@@ -185,22 +221,34 @@ class AdaptiveVelocityNode(Node):
                     self.get_logger().info("🟢 [SIAP NAVIGASI] AMR SIAP UNTUK NAVIGASI & MENGANTAR!")
                     self.get_logger().info("   ✔ Peta (/map)          : AKTIF")
                     self.get_logger().info("   ✔ Sensor LiDAR (/scan) : AKTIF")
+                    if self.require_encoder:
+                        self.get_logger().info("   ✔ Encoder Arduino(/odom): AKTIF & TERVERIFIKASI")
                     self.get_logger().info("   ✔ Lokalisasi (AMCL)    : TERLOKALISASI")
                     self.get_logger().info("   ✔ Local/Global Costmap : AKTIF")
                     self.get_logger().info("   ✔ Nav2 Stack           : SIAP (bt_navigator, planner, controller)")
                     self.get_logger().info("============================================================")
                     log_msg = String()
-                    log_msg.data = "🟢 [SIAP NAVIGASI] AMR SIAP UNTUK NAVIGASI & MENGANTAR! (Peta + LiDAR + AMCL + Costmap + Nav2 Aktif)"
+                    log_msg.data = "🟢 [SIAP NAVIGASI] AMR SIAP UNTUK NAVIGASI & MENGANTAR! (Peta + LiDAR + Encoder + AMCL + Costmap + Nav2 Aktif)"
                     self.delivery_log_pub.publish(log_msg)
+            elif wall_now - self.last_wait_log_time >= 5.0:
+                # Tampilkan apa saja yang masih ditunggu agar mudah didiagnosis
+                self.last_wait_log_time = wall_now
+                def mark(ok):
+                    return "✔" if ok else "⏳"
+                self.get_logger().info(
+                    f"[MENUNGGU] Peta {mark(self.map_received)} | LiDAR {mark(scan_active)} | "
+                    f"Encoder {mark(enc_ok)} | AMCL {mark(self.amcl_initialized)} | "
+                    f"Costmap {mark(self.local_costmap_active and self.global_costmap_active)}"
+                )
 
         dt = (now - self.last_time).nanoseconds / 1e9
         self.last_time = now
         if dt <= 0.0 or dt > 0.5:
             dt = 0.05
 
-        # Watchdog: Nav2 diam -> anggap perintah nol
+        # Watchdog: Nav2 diam -> anggap perintah nol. Encoder tidak valid -> paksa nol juga.
         age = (now - self.last_cmd_time).nanoseconds / 1e9
-        if age > self.get_parameter('cmd_timeout').value:
+        if age > self.get_parameter('cmd_timeout').value or not enc_ok:
             orig_v, orig_w = 0.0, 0.0
         else:
             orig_v, orig_w = self.in_v, self.in_w

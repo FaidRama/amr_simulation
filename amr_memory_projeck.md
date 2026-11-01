@@ -230,3 +230,30 @@ Robot sempat bergerak selama **1 detik pertama**, lalu tepat pada detik ke-1 lan
 2. **Keamanan Indoor di [`nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml):**
    - **`allow_unknown: false`** tetap dipertahankan di `planner_server` agar robot dilarang keras melewati area abu-abu (*unmapped*).
 
+---
+
+## 11. Verifikasi Encoder Arduino Sebelum Navigasi (setara cek LiDAR)
+
+### Gejala:
+Navigasi dijalankan saat log Arduino baru sampai `Arduino Bridge PID aktif`, belum muncul `Paket Encoder pertama diterima`. Robot tetap dianggap siap, goal dikirim, roda berputar tapi `/odom` diam -> AMCL & goal pose salah.
+
+### Akar Masalah:
+1. `adaptive_velocity_node.py` hanya mengecek Peta + LiDAR + AMCL + Costmap + Nav2. Encoder tidak pernah dicek.
+2. `arduino_bridge.py` meneruskan `/cmd_vel` ke motor walau stream ENC belum ada.
+3. Auto `/initialpose` dikirim sebelum odom valid.
+4. Bug tersembunyi: baris ENC rusak (sisa bootloader, misal `ENC:12`) memicu `ValueError` -> ditangkap sebagai "Serial read error" -> reconnect + DTR reset berulang. Setelah reset, `totalPulsa` Arduino kembali 0 tapi baseline lama dipakai -> lompatan odom besar.
+
+### Solusi:
+1. **[`arduino_bridge.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/arduino_bridge.py)**:
+   - Encoder dianggap SIAP setelah **10 paket ENC valid berturut-turut** (`ready_packet_count`), diumumkan `🟢 [ENCODER SIAP]` dan di-publish ke **`/arduino/ready`** (`std_msgs/Bool`, transient local).
+   - Sebelum siap: `/cmd_vel` dipaksa 0 (`⛔ /cmd_vel diabaikan`).
+   - Baris rusak hanya dihitung (`bad_line_count`), tidak memicu reconnect.
+   - Baseline tick di-reset setiap (re)connect; lompatan > `max_ticks_per_packet` (500) -> resync, paket diabaikan.
+   - Watchdog: tidak ada ENC > 0.5 s -> tidak siap + motor stop; tidak ada ENC > 5 s (atau sejak connect) -> reset ulang Arduino.
+2. **[`adaptive_velocity_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/adaptive_velocity_node.py)**:
+   - `encoder_ok` = `/arduino/ready == True` dan `/odom` mengalir (< 1 s).
+   - Auto `/initialpose`, pengumuman `🟢 [SIAP NAVIGASI]`, dan output `/cmd_vel_safe` semuanya menunggu `encoder_ok`.
+   - Log `[MENUNGGU] Peta ✔ | LiDAR ✔ | Encoder ⏳ | ...` tiap 5 s untuk diagnosis.
+   - Parameter `require_encoder` diisi dari `use_arduino` di [`real_navigation.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/real_navigation.launch.py).
+
+
