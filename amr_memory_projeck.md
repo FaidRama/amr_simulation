@@ -300,7 +300,14 @@ Navigasi dijalankan saat log Arduino baru sampai `Arduino Bridge PID aktif`, bel
 
 ### Solusi:
 1. **Tailscale Mesh VPN (WireGuard Layer-3 Tunnel)**:
-   - Terpasang di Jetson (`100.84.182.79`) dan Laptop (`100.127.135.67`).
+   - Terpasang pada seluruh perangkat tim proyek:
+     | No | Mesin / Hostname | IP Tailscale | OS | Peran / Akses |
+     |---|---|---|---|---|
+     | 1 | `ubuntu-jetson` | **`100.84.182.79`** | Linux (Tegra 5.10) | Onboard Computer Robot AMR |
+     | 2 | `laptop-faid` | **`100.127.135.67`** | Linux Ubuntu | Lead Developer (ROS 2, Git, Dashboard) |
+     | 3 | `eganurf-latitude-5420` | **`100.113.121.4`** | Linux Ubuntu | Developer / ROS 2 Remote Node |
+     | 4 | `laptop-divala` | **`100.65.225.99`** | Windows 11 | Operator (Web Dashboard & SSH) |
+     | 5 | `laptop-rifdah` | **`100.111.27.6`** | Windows 11 | Operator (Web Dashboard & SSH) |
    - Otomatis aktif saat booting (`tailscaled.service`), menembus firewall dan Client Isolation kampus dengan enkripsi end-to-end.
    - Tetap tersambung (*connectionless roaming*) meskipun robot berpindah Access Point kampus.
 2. **CycloneDDS Unicast Configuration**:
