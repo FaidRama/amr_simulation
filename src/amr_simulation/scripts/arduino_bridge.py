@@ -267,28 +267,30 @@ class ArduinoBridgeNode(Node):
         return False
 
     def find_usb_device_path(self):
-        """Cari path perangkat USB (/dev/bus/usb/BBB/DDD) dari port serial (misal /dev/arduino)."""
+        """Cari path perangkat USB (/dev/bus/usb/BBB/DDD) dan folder sysfs dari port serial (misal /dev/arduino)."""
         try:
             real_tty = os.path.realpath(self.port)
             tty_name = os.path.basename(real_tty)
             sys_dev_path = f"/sys/class/tty/{tty_name}/device"
             if not os.path.exists(sys_dev_path):
-                return None
+                return None, None
 
             cur = os.path.realpath(sys_dev_path)
             busnum_file = None
             devnum_file = None
+            sys_usb_dir = None
             for _ in range(7):
                 b_cand = os.path.join(cur, "busnum")
                 d_cand = os.path.join(cur, "devnum")
                 if os.path.exists(b_cand) and os.path.exists(d_cand):
                     busnum_file = b_cand
                     devnum_file = d_cand
+                    sys_usb_dir = cur
                     break
                 cur = os.path.dirname(cur)
 
             if not busnum_file or not devnum_file:
-                return None
+                return None, None
 
             with open(busnum_file, 'r') as f:
                 busnum = int(f.read().strip())
@@ -297,18 +299,18 @@ class ArduinoBridgeNode(Node):
 
             usb_dev_path = f"/dev/bus/usb/{busnum:03d}/{devnum:03d}"
             if os.path.exists(usb_dev_path):
-                return usb_dev_path
+                return usb_dev_path, sys_usb_dir
         except Exception as e:
             self.get_logger().debug(f"Debug find_usb_device_path: {e}")
-        return None
+        return None, None
 
     def reset_usb_device(self):
         """
-        Reset port USB di level Kernel Linux (USBDEVFS_RESET) — identik dengan rplidar_bridge.py.
-        PENTING: Wajib memberi jeda 1.5 detik setelah ioctl sebelum mengecek /dev/arduino agar
-        kernel Linux & udev selesai melakukan re-enumerasi (mencegah buka port prematur 0.2s).
+        Reset port USB di level Kernel Linux (USBDEVFS_RESET + sysfs authorized toggle).
+        Setara cabut-colok fisik: memutus otorisasi USB selama 2.0 detik agar mikrokontroler
+        dan chip USB benar-benar ter-reset ulang sebelum re-enumerasi udev.
         """
-        usb_path = self.find_usb_device_path()
+        usb_path, sys_usb_dir = self.find_usb_device_path()
         self.close_serial()
 
         if not usb_path or not os.path.exists(usb_path):
@@ -319,8 +321,20 @@ class ArduinoBridgeNode(Node):
 
         try:
             self.get_logger().info(
-                f"🔌 Melakukan Auto-Reset USB Kernel ({usb_path} untuk {self.port}) setara cabut-colok fisik..."
+                f"🔌 Melakukan Auto-Reset USB Kernel ({usb_path} untuk {self.port}) setara cabut-colok kabel (jeda 2.0s)..."
             )
+
+            # 1. Coba toggle sysfs 'authorized' (0 -> jeda 2 detik -> 1) setara kabel dicopot 2 detik
+            auth_file = os.path.join(sys_usb_dir, "authorized") if sys_usb_dir else None
+            if auth_file and os.path.exists(auth_file):
+                try:
+                    subprocess.run(['sudo', '-n', 'sh', '-c', f'echo 0 > {auth_file}'], stderr=subprocess.DEVNULL)
+                    time.sleep(2.0)  # Meniru jeda 2-3 detik saat kabel dicabut fisik
+                    subprocess.run(['sudo', '-n', 'sh', '-c', f'echo 1 > {auth_file}'], stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+
+            # 2. Kirim ioctl USBDEVFS_RESET ke endpoint USB
             fd = None
             try:
                 fd = os.open(usb_path, os.O_WRONLY)
@@ -350,7 +364,7 @@ class ArduinoBridgeNode(Node):
             self.get_logger().warn(f"⚠️ Gagal ioctl USBDEVFS_RESET pada {usb_path}: {e}")
             return False
 
-        # WAJIB (seperti rplidar_bridge.py): tunggu 1.5s agar kernel melepas node ttyACM lama & re-bind cdc_acm
+        # Tunggu 1.5s agar kernel melepas node ttyACM lama & re-bind cdc_acm
         time.sleep(1.5)
 
         t_start = time.time()

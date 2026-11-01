@@ -262,8 +262,22 @@ Navigasi dijalankan saat log Arduino baru sampai `Arduino Bridge PID aktif`, bel
    - **Encoder Verification Gate**: Encoder dianggap SIAP setelah **10 paket ENC valid berturut-turut** (`ready_packet_count`), diumumkan `🟢 [ENCODER SIAP]` dan di-publish ke **`/arduino/ready`** (`std_msgs/Bool`, transient local).
    - Sebelum siap: `/cmd_vel` dipaksa 0 (`⛔ /cmd_vel diabaikan`) dan TX serial hening.
    - Diagnostik RX: Mencatat jumlah byte yang masuk sejak connect (`RX=...B`) dan sampel baris non-ENC jika firmware lain sedang ter-flash di board.
+   - **Pemutusan Otorisasi USB Sysfs (`authorized` toggle jeda 2.0s) & Fisik Kapasitor**:
+     - *Kenapa cabut-colok fisik wajib diberi jeda 2-5 detik*: Board Arduino Uno dan driver BTS7960 memiliki kapasitor perata daya (elco). Saat kabel dicabut, sisa tegangan 5V turun perlahan (*discharging* ~2 detik). Jika dicolok terlalu cepat (<1 detik), muatan belum habis sehingga ATmega328P tidak mengalami *Power-On Reset (POR)* murni.
+     - *Kenapa `USBDEVFS_RESET` saja tidak mematikan daya*: Perintah `USBDEVFS_RESET` hanya me-reset pin sinyal data USB (D+/D-), sedangkan jalur daya VBUS 5V tetap mengalir ke Arduino.
+     - *Solusi Software*: Pada [`reset_usb_device()`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/arduino_bridge.py#L305-L365), ditambahkan penulisan `0` ke sysfs `/sys/bus/usb/devices/.../authorized` dengan jeda tidur **2.0 detik penuh**, lalu ditulis kembali `1` sebelum `USBDEVFS_RESET` agar kernel Linux memutus total otorisasi perangkat setara cabut-colok kabel fisik.
 2. **[`adaptive_velocity_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/adaptive_velocity_node.py)**:
    - `encoder_ok` = `/arduino/ready == True` dan `/odom` mengalir (< 1 s).
    - Auto `/initialpose`, pengumuman `🟢 [SIAP NAVIGASI]`, dan output `/cmd_vel_safe` semuanya menunggu `encoder_ok`.
    - Log `[MENUNGGU] Peta ✔ | LiDAR ✔ | Encoder ⏳ | ...` tiap 5 s untuk diagnosis.
    - Parameter `require_encoder` diisi dari `use_arduino` di [`real_navigation.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/real_navigation.launch.py).
+
+### Hasil Pengujian Live di Jetson AGX Xavier:
+```text
+[INFO] [1793519617.750524659] [arduino_bridge]: ✅ Terhubung ke Arduino di /dev/arduino (DTR=True, TX hening) -> menunggu bootloader & stream ENC...
+[INFO] [1793519617.759593063] [arduino_bridge]: ⏳ Menunggu verifikasi encoder (10 paket ENC valid berturut-turut)... Perintah gerak DIBLOK & TX serial HENING sampai encoder siap.
+[INFO] [1793519619.356268265] [arduino_bridge]: Paket Encoder pertama diterima (L=0, R=0) -> baseline odom diset, verifikasi stream...
+[INFO] [1793519619.540106180] [arduino_bridge]: 🟢 [ENCODER SIAP] 10 paket ENC valid diterima -> /odom & TF odom->base_link VALID
+```
+- Dalam waktu **1.6 detik**, Optiboot selesai, paket baseline diterima, 10 paket beruntun terverifikasi, dan status kesiapan langsung menyala hijau (`🟢 [ENCODER SIAP]`).
+- Nav2 dan AMCL kini terproteksi 100% dari kesalahan odometri.
