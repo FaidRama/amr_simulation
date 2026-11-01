@@ -589,3 +589,43 @@ Kedua skrip berikut sempat terhapus saat *merge* Git terdahulu dan kini telah di
    - Pengguna cukup mengklik tombol **`📍 Set Posisi Awal`** di toolbar Dashboard (atau klik kanan pada kanvas peta $\rightarrow$ `Set Posisi Awal Robot (AMCL)`), atau mengklik tombol **`🔄 Relokalisasi (360°)`**.
    - Begitu tombol ini diklik, status `AMCL ⏳` dan `Costmap ⏳` langsung berubah menjadi **`✔`**, dan log terminal berganti hijau:  
      `🟢 [SIAP NAVIGASI] AMR SIAP UNTUK NAVIGASI & MENGANTAR!`
+
+---
+
+## 📌 21. Optimasi Manuver Putar Balik 180° (U-Turn) DWB Local Planner & Penanganan Ragu/Macet
+
+### 1. Gejala & Fenomena:
+- Saat robot diperintahkan bergerak ke tujuan yang arahnya berlawanan (putar balik 180° / U-turn), robot tampak terdiam, "kebingungan / berpikir lama", atau berhenti beberapa detik sebelum akhirnya mulai berputar.
+
+### 2. Akar Masalah:
+1. **Deadband Motor Fisik & Gesekan Ban (`min_speed_theta: 0.00`)**:
+   - DWB menghasilkan profil trajektori putar yang dimulai dari kecepatan sudut sangat kecil ($\omega \approx 0.03 - 0.08\text{ rad/s}$).
+   - Karena robot differential drive memiliki bobot sasis yang cukup berat dan ban karet bersentuhan langsung dengan lantai, tegangan PWM motor pada kecepatan rendah tersebut belum sanggup memecahkan gaya gesek statis (*breakaway friction / deadband*).
+   - Secara perangkat lunak ROS 2 Nav2 sudah memerintahkan berputar, tetapi secara fisik robot diam menunggu akumulasi $\omega$ melewati ambang torsi putar motor.
+2. **Konflik Bobot Evaluasi Jalur (`PathAlign.scale: 4.0`)**:
+   - Parameter `PathAlign.forward_point_distance: 0.30` mengevaluasi titik 30 cm di depan hidung robot agar selalu searah garis jalur (*global path*).
+   - Ketika jalur berbalik 180° persis di belakang robot, semua trajektori menghasilkan penalti `PathAlign` yang sangat buruk. Bobot `4.0` yang terlalu dominan menyebabkan kebuntuan evaluasi (*scoring deadlock*) sesaat saat memilih arah putaran awal.
+3. **Pemicu Palsu Rem Osilasi (`Oscillation.scale: 5.0`)**:
+   - Di awal U-turn, DWB mengevaluasi putaran kiri (+$\omega$) lalu sedikit penyesuaian kanan (-$\omega$).
+   - Fluktuasi kecil arah putar dalam jarak sempit ($< 0.05\text{ m}$) langsung dideteksi oleh `OscillationCritic` sebagai bahaya osilasi liar.
+   - Karena skalanya sangat sensitif (`5.0`), Nav2 memotong kecepatan robot menjadi `0.0` (rem paksa di tempat) sehingga robot terhenti sesaat.
+4. **Batasan Komputasi CPU Jetson (`vx_samples` & `vtheta_samples`)**:
+   - Total trajektori yang dihitung per siklus adalah $\text{vx\_samples} \times \text{vtheta\_samples}$.
+   - Menaikkan `vtheta_samples` ke 20 atau 25 terbukti membebani CPU Jetson Nano/Orin dan memicu *control loop missed*. Oleh karena itu, jumlah sampel putar **wajib dipertahankan di nilai 18**.
+
+### 3. Solusi Parameter di `nav2_params.yaml`:
+Solusi dilakukan murni dengan menyetel torsi putar awal dan bobot critic **tanpa menambah beban CPU Jetson sama sekali (0% CPU overhead)**:
+
+```yaml
+    # DWB parameters
+    FollowPath:
+      min_vel_x: 0.0
+      ...
+      min_speed_theta: 0.20        # (Sebelumnya: 0.00) -> Memberi torsi putar awal mengatasi gesekan ban/lantai
+      vx_samples: 14               # TETAP (Aman untuk CPU Jetson)
+      vtheta_samples: 18           # TETAP (Jangan dinaikkan ke 20-25 agar tidak membebani Jetson)
+      ...
+      PathAlign.scale: 1.5         # (Sebelumnya: 4.0) -> Mengurangi penalti hadap saat jalur berada di belakang
+      Oscillation.scale: 1.0       # (Sebelumnya: 5.0) -> Mencegah pemotongan kecepatan mendadak saat manuver U-turn
+```
+
