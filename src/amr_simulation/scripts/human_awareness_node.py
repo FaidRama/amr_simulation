@@ -850,29 +850,15 @@ def main():
             corridor_x2 = int((width / 2.0) + corridor_half)
 
             corridor_persons = []
-
             for person in persons:
-                # Hitung lebar bounding box yang beririsan
-                # dengan koridor tengah.
-                overlap_left = max(
-                    person["x1"], corridor_x1
-                )
-                overlap_right = min(
-                    person["x2"], corridor_x2
-                )
+                # Hitung titik tengah horizontal tubuh manusia
+                person_center_x = (person["x1"] + person["x2"]) / 2.0
 
-                overlap_width = max(
-                    0.0, overlap_right - overlap_left
-                )
-
-                # Proporsi bbox yang berada di dalam koridor.
-                person["corridor_overlap"] = (
-                    overlap_width / max(person["w"], 1.0)
-                )
-
-                # Minimal 60% bbox harus berada di koridor.
+                # Orang dianggap di koridor jika TITIK TENGAHNYA berada di dalam rentang koridor
+                # ATAU jika bounding box-nya mencakup seluruh koridor
                 person["in_corridor"] = (
-                    person["corridor_overlap"] >= 0.60
+                    (corridor_x1 <= person_center_x <= corridor_x2) or
+                    (person["x1"] <= corridor_x1 and person["x2"] >= corridor_x2)
                 )
 
                 if person["in_corridor"]:
