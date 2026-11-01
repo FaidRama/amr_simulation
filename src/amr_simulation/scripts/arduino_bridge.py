@@ -90,12 +90,13 @@ class ArduinoBridgeNode(Node):
 
         self.meters_per_tick = (math.pi * self.wheel_diameter) / self.ticks_per_rev
 
-        # --- VERIFIKASI ENCODER (mirip cek LiDAR) ---
+        # --- VERIFIKASI ENCODER (mirip cek LiDAR di rplidar_bridge.py) ---
         # Encoder dianggap SIAP hanya setelah N paket ENC valid berturut-turut diterima
-        # dengan interval wajar. Sebelum siap: perintah gerak diblok (motor dipaksa 0).
-        self.declare_parameter('ready_packet_count', 10)       # 10 paket @20Hz ~ 0.5 detik stabil
+        # dengan interval wajar. Sebelum siap: perintah gerak diblok & TX serial 100% HENING
+        # agar bootloader Optiboot (115200 baud, WDT 1.0s) tidak terjebak oleh trafik serial!
+        self.declare_parameter('ready_packet_count', 10)       # 10 paket @50Hz ~ 0.2-0.5 detik stabil
         self.declare_parameter('enc_stream_timeout', 0.5)      # >0.5s tanpa ENC -> stream hilang
-        self.declare_parameter('enc_startup_timeout', 10.0)    # >10s tanpa ENC (setelah bootloader) -> Auto-Reset USB
+        self.declare_parameter('enc_startup_timeout', 5.0)     # >5.0s tanpa ENC -> Staged Auto-Recovery
         self.declare_parameter('max_ticks_per_packet', 500)    # lompatan tick tak wajar -> resync baseline
         self.ready_packet_count = int(self.get_parameter('ready_packet_count').value)
         self.enc_stream_timeout = float(self.get_parameter('enc_stream_timeout').value)
@@ -110,6 +111,8 @@ class ArduinoBridgeNode(Node):
         self.last_warn_wall = 0.0
         self.last_ready_pub_wall = 0.0
         self.restart_count = 0
+        self.rx_bytes_since_connect = 0
+        self.last_other_line = ""
 
         # --- STATE ODOMETRY ---
         self.x = 0.0
@@ -125,8 +128,8 @@ class ArduinoBridgeNode(Node):
         # --- STATE TARGET KECEPATAN (v: m/s, w: rad/s) ---
         self.target_v = 0.0
         self.target_w = 0.0
-        self.last_sent_v = None
-        self.last_sent_w = None
+        self.last_sent_v = 0.0
+        self.last_sent_w = 0.0
         self.last_cmd_vel_time = self.get_clock().now()
         self.last_tx_time = self.get_clock().now()
         self.last_reconnect_time = self.get_clock().now()
@@ -138,10 +141,6 @@ class ArduinoBridgeNode(Node):
             reliability=ReliabilityPolicy.RELIABLE
         )
         self.ready_pub = self.create_publisher(Bool, '/arduino/ready', ready_qos)
-
-        # --- INISIALISASI SERIAL ARDUINO ---
-        self.ser = None
-        self.connect_serial(force_usb_reset=self.auto_usb_reset_on_start)
 
         # --- ROS 2 PUB / SUB / TF ---
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
@@ -160,6 +159,11 @@ class ArduinoBridgeNode(Node):
 
         self.publish_ready(False, force=True)
 
+        # --- INISIALISASI SERIAL ARDUINO (pola bertahap seperti rplidar_bridge.py) ---
+        self.ser = None
+        self.get_logger().info(f"🔍 Memeriksa perangkat Arduino di {self.port} ({self.baud} baud)...")
+        self.connect_serial(force_usb_reset=self.auto_usb_reset_on_start, do_dtr_reset=False)
+
         # Timer 50 Hz (tiap 20ms) untuk pembacaan serial, TF broadcast & heartbeat
         self.timer = self.create_timer(0.02, self.update_loop)
         self.get_logger().info(
@@ -169,7 +173,7 @@ class ArduinoBridgeNode(Node):
         )
         self.get_logger().info(
             f"⏳ Menunggu verifikasi encoder ({self.ready_packet_count} paket ENC valid berturut-turut)... "
-            f"Perintah gerak DIBLOK sampai encoder siap."
+            f"Perintah gerak DIBLOK & TX serial HENING sampai encoder siap."
         )
 
     def publish_ready(self, value: bool, force: bool = False):
@@ -191,9 +195,17 @@ class ArduinoBridgeNode(Node):
             )
             self.get_logger().info("============================================================")
         else:
+            # Kirim 1x perintah stop darurat sebelum memblokir TX
+            if self.ser is not None and self.ser.is_open:
+                try:
+                    self.ser.write(b"V,0.000,0.000\n")
+                except Exception:
+                    pass
             # Hentikan robot & reset baseline agar tidak ada lompatan odom saat stream kembali
             self.target_v = 0.0
             self.target_w = 0.0
+            self.last_sent_v = 0.0
+            self.last_sent_w = 0.0
             self.vx = 0.0
             self.wz = 0.0
             self.valid_enc_count = 0
@@ -208,6 +220,51 @@ class ArduinoBridgeNode(Node):
         rpm_l = (v_l / (math.pi * self.wheel_diameter)) * 60.0
         rpm_r = (v_r / (math.pi * self.wheel_diameter)) * 60.0
         return rpm_l, rpm_r
+
+    def check_hardware_port(self) -> bool:
+        """
+        Pastikan port serial Arduino tersedia dan memiliki izin baca-tulis (mirip rplidar_bridge.py).
+        Jika symlink /dev/arduino belum ada, cari kandidat /dev/ttyACM* atau /dev/ttyUSB* (selain rplidar).
+        """
+        rplidar_real = os.path.realpath('/dev/rplidar') if os.path.exists('/dev/rplidar') else None
+
+        if not os.path.exists(self.port):
+            candidates = ['/dev/arduino', '/dev/ttyACM0', '/dev/ttyACM1', '/dev/ttyUSB0', '/dev/ttyUSB1']
+            found = None
+            for cand in candidates:
+                if os.path.exists(cand):
+                    real_cand = os.path.realpath(cand)
+                    if rplidar_real and real_cand == rplidar_real:
+                        continue
+                    found = cand
+                    break
+            if found:
+                self.get_logger().warn(f"⚠️ Port {self.port} tidak ditemukan, beralih ke port aktif: {found}")
+                self.port = found
+            else:
+                self.get_logger().warn(
+                    f"⚠️ Port {self.port} tidak ditemukan! Pastikan kabel USB Arduino terhubung ke Jetson."
+                )
+                return False
+
+        if not os.access(self.port, os.R_OK | os.W_OK):
+            self.get_logger().warn(f"🔒 Izin akses {self.port} terkunci. Mencoba membuka izin port otomatis...")
+            try:
+                real_port = os.path.realpath(self.port)
+                subprocess.run(['sudo', '-n', 'chmod', '666', real_port], check=False)
+            except Exception as e:
+                self.get_logger().error(f"Gagal mengubah permission {self.port}: {e}")
+
+        if os.access(self.port, os.R_OK | os.W_OK):
+            real_port = os.path.realpath(self.port)
+            self.get_logger().info(f"✅ Port serial {self.port} (-> {real_port}) terdeteksi dan izin akses OK.")
+            return True
+
+        self.get_logger().error(
+            f"❌ Port {self.port} masih tidak bisa diakses (Permission denied). "
+            f"Jalankan: sudo chmod 666 {os.path.realpath(self.port)}"
+        )
+        return False
 
     def find_usb_device_path(self):
         """Cari path perangkat USB (/dev/bus/usb/BBB/DDD) dari port serial (misal /dev/arduino)."""
@@ -247,8 +304,9 @@ class ArduinoBridgeNode(Node):
 
     def reset_usb_device(self):
         """
-        Reset port USB di level Kernel Linux (USBDEVFS_RESET).
-        Setara cabut-colok kabel fisik Arduino tanpa perlu menyentuh kabel secara manual.
+        Reset port USB di level Kernel Linux (USBDEVFS_RESET) — identik dengan rplidar_bridge.py.
+        PENTING: Wajib memberi jeda 1.5 detik setelah ioctl sebelum mengecek /dev/arduino agar
+        kernel Linux & udev selesai melakukan re-enumerasi (mencegah buka port prematur 0.2s).
         """
         usb_path = self.find_usb_device_path()
         self.close_serial()
@@ -263,7 +321,6 @@ class ArduinoBridgeNode(Node):
             self.get_logger().info(
                 f"🔌 Melakukan Auto-Reset USB Kernel ({usb_path} untuk {self.port}) setara cabut-colok fisik..."
             )
-            # Coba buka device USB. Jika Permission denied, coba izinkan via sudo -n
             fd = None
             try:
                 fd = os.open(usb_path, os.O_WRONLY)
@@ -288,26 +345,54 @@ class ArduinoBridgeNode(Node):
             finally:
                 if fd is not None:
                     os.close(fd)
-            self.get_logger().info("✅ Sinyal USB Reset terkirim ke hardware. Menunggu re-enumerasi udev...")
+            self.get_logger().info("✅ Sinyal USB Reset terkirim ke hardware. Menunggu re-enumerasi udev (1.5s)...")
         except Exception as e:
             self.get_logger().warn(f"⚠️ Gagal ioctl USBDEVFS_RESET pada {usb_path}: {e}")
             return False
 
-        # Tunggu port serial terdaftar kembali oleh udev (~1.0 - 3.5 detik)
+        # WAJIB (seperti rplidar_bridge.py): tunggu 1.5s agar kernel melepas node ttyACM lama & re-bind cdc_acm
+        time.sleep(1.5)
+
         t_start = time.time()
-        while time.time() - t_start < 4.0:
+        while time.time() - t_start < 5.0:
             if os.path.exists(self.port) and os.access(self.port, os.R_OK | os.W_OK):
-                elapsed = time.time() - t_start
-                self.get_logger().info(f"✅ Port {self.port} kembali terdeteksi setelah USB reset ({elapsed:.2f}s).")
-                time.sleep(0.5)  # Beri jeda kecil agar driver serial stabil
+                elapsed = time.time() - t_start + 1.5
+                self.get_logger().info(f"✅ Port {self.port} kembali aktif setelah USB reset ({elapsed:.2f}s).")
+                time.sleep(0.5)  # Beri waktu chip ATmega16U2 stabil sebelum port dibuka
                 return True
             time.sleep(0.2)
 
-        self.get_logger().warn(f"⚠️ Port {self.port} belum muncul kembali setelah 4.0s pasca USB reset.")
+        self.get_logger().warn(f"⚠️ Port {self.port} belum muncul kembali setelah USB reset.")
         return False
 
+    def hardware_reset_arduino(self, force_usb_reset: bool = False):
+        """
+        Prosedur recovery bertahap (mirip hardware_reset_rplidar di rplidar_bridge.py):
+        1. Jika force_usb_reset=True (saat gagal berulang >=2x), lakukan ioctl USBDEVFS_RESET dulu.
+        2. Buka port serial sementara, tarik DTR=False & RTS=False selama 250ms untuk mengosongkan
+           kapasitor RESET 100nF pada Arduino Uno, lalu tutup dan beri jeda 250ms sebelum dibuka kembali.
+        """
+        self.close_serial()
+        if force_usb_reset:
+            self.reset_usb_device()
+
+        if not self.check_hardware_port():
+            return
+
+        try:
+            self.get_logger().info(f"🔄 Mengirim pulsa Hardware Reset (DTR/RTS Low->High) ke MCU Arduino ({self.port})...")
+            with serial.Serial(self.port, self.baud, timeout=0.1, write_timeout=0.2) as s:
+                s.dtr = False
+                s.rts = False
+                time.sleep(0.25)
+                s.reset_input_buffer()
+                s.reset_output_buffer()
+            time.sleep(0.25)
+        except Exception as e:
+            self.get_logger().warn(f"⚠️ Gagal mengirim pulsa DTR reset ke Arduino: {e}")
+
     def reset_encoder_session(self):
-        """Dipanggil tiap (re)connect: Arduino ter-reset (totalPulsa kembali 0), jadi baseline tick
+        """Dipanggil tiap (re)connect: Arduino mungkin ter-reset (totalPulsa kembali 0), jadi baseline tick
         WAJIB dibuang agar tidak terjadi lompatan odom raksasa. Pose x,y,yaw dipertahankan."""
         if self.encoder_ready:
             self.set_encoder_ready(False, "Koneksi serial di-reset")
@@ -320,6 +405,10 @@ class ArduinoBridgeNode(Node):
         self.wz = 0.0
         self.rx_buffer = ""
         self.last_enc_wall = 0.0
+        self.rx_bytes_since_connect = 0
+        self.last_other_line = ""
+        self.last_sent_v = 0.0
+        self.last_sent_w = 0.0
         self.publish_ready(False, force=True)
 
     def close_serial(self):
@@ -330,35 +419,51 @@ class ArduinoBridgeNode(Node):
             pass
         self.ser = None
 
-    def connect_serial(self, force_usb_reset=False):
-        if force_usb_reset:
-            self.reset_usb_device()
+    def connect_serial(self, force_usb_reset: bool = False, do_dtr_reset: bool = False):
+        """
+        Buka koneksi serial ke Arduino secara bersih.
+        KRUSIAL: JANGAN mengirim byte apapun (termasuk 'V,0.0,0.0') saat connect!
+        Bootloader Optiboot Arduino Uno berjalan di 115200 baud dengan Watchdog 1.0 detik;
+        jika Jetson mengirim byte serial saat bootloader aktif, WDT Optiboot ter-reset terus
+        dan Arduino terjebak di bootloader selamanya (tidak pernah masuk ke loop() ENC:).
+        """
+        if force_usb_reset or do_dtr_reset:
+            self.hardware_reset_arduino(force_usb_reset=force_usb_reset)
+        else:
+            self.close_serial()
+            if not self.check_hardware_port():
+                self.connect_wall = time.time()
+                self.last_reconnect_time = self.get_clock().now()
+                return
+
         self.reset_encoder_session()
         try:
-            self.ser = serial.Serial(self.port, self.baud, timeout=0)
-            # 1. Hardware auto-reset via DTR/RTS pulse (persis seperti saat kabel dicopot-pasang)
-            self.ser.dtr = False
-            self.ser.rts = False
-            time.sleep(0.1)
-            # WAJIB: DTR dan RTS dibiarkan True (asserted) agar chip USB (16U2/CH340) tahu host siap membaca stream data
+            self.ser = serial.Serial(
+                self.port,
+                self.baud,
+                timeout=0,
+                write_timeout=0.2,
+                xonxoff=False,
+                rtscts=False,
+                dsrdtr=False
+            )
+            # Pastikan DTR=True & RTS=True agar chip USB-to-Serial (ATmega16U2) meneruskan TX dari ATmega328P ke host.
+            # Jika baru dibuka, transisi DTR akan me-reset ATmega328P -> biarkan hening 100% selama ~1.5s agar
+            # Optiboot selesai dan sketch amr_firmware.ino langsung menyemburkan ENC:0,0 tiap 20ms.
             self.ser.dtr = True
             self.ser.rts = True
-            # 2. Beri waktu bootloader Optiboot Arduino Uno selesai (~1.8 detik)
-            time.sleep(1.8)
-            # 3. Bersihkan buffer sisa bootloader & kirim heartbeat nol
-            self.ser.reset_input_buffer()
-            self.ser.reset_output_buffer()
-            self.ser.write(b"V,0.0,0.0\n")
             self.connect_wall = time.time()
             self.last_reconnect_time = self.get_clock().now()
-            self.get_logger().info(f"✅ Berhasil terhubung ke Arduino di {self.port} (DTR=True aktif) -> menunggu stream ENC...")
+            self.get_logger().info(
+                f"✅ Terhubung ke Arduino di {self.port} (DTR=True, TX hening) -> menunggu bootloader & stream ENC..."
+            )
         except Exception as e:
             self.get_logger().warn(f"⚠️ Menunggu koneksi port Arduino {self.port} ({e})")
             self.ser = None
 
     def send_cmd(self, v: float, w: float, now):
-        """Kirim perintah kecepatan 'V,<v>,<w>\n' ke Arduino."""
-        if self.ser is None or not self.ser.is_open:
+        """Kirim perintah kecepatan 'V,<v>,<w>\n' ke Arduino (HANYA jika encoder sudah siap)."""
+        if self.ser is None or not self.ser.is_open or not self.encoder_ready:
             return
         try:
             cmd_str = f"V,{v:.3f},{w:.3f}\n"
@@ -375,7 +480,7 @@ class ArduinoBridgeNode(Node):
         w = msg.angular.z
         now = self.get_clock().now()
 
-        # Gate: selama encoder belum terverifikasi, perintah gerak dipaksa nol.
+        # Gate: selama encoder belum terverifikasi, perintah gerak dipaksa nol & tidak dikirim ke serial.
         # Tanpa encoder, odom diam padahal roda berputar -> AMCL & Nav2 salah total.
         if not self.encoder_ready:
             if (abs(v) > 1e-3 or abs(w) > 1e-3):
@@ -383,8 +488,11 @@ class ArduinoBridgeNode(Node):
                 if wall - self.last_warn_wall >= 2.0:
                     self.last_warn_wall = wall
                     self.get_logger().warn("⛔ /cmd_vel diabaikan: encoder Arduino belum SIAP (odom belum valid).")
-            v = 0.0
-            w = 0.0
+            self.target_v = 0.0
+            self.target_w = 0.0
+            self.setpoint_rpm_l = 0.0
+            self.setpoint_rpm_r = 0.0
+            return
 
         self.last_cmd_vel_time = now
         self.target_v = v
@@ -396,20 +504,32 @@ class ArduinoBridgeNode(Node):
             self.send_cmd(self.target_v, self.target_w, now)
 
     def check_encoder_health(self):
-        """Watchdog stream ENC: deteksi startup gagal & stream hilang di tengah jalan."""
+        """
+        Watchdog stream ENC dengan eskalasi bertahap (persis seperti rplidar_bridge.py):
+        - Percobaan 1 (restart_count == 1): Pulsa Hardware Reset DTR/RTS tanpa USB reset kernel.
+        - Percobaan >=2 (restart_count >= 2): Auto-Reset USB Kernel (USBDEVFS_RESET + jeda 1.5s) + DTR reset.
+        """
         wall = time.time()
         if self.last_enc_wall == 0.0:
             # Belum pernah menerima ENC sejak connect
             since_connect = wall - self.connect_wall
             if since_connect > self.enc_startup_timeout:
                 self.restart_count += 1
-                self.get_logger().warn(
-                    f"🔌 Tidak ada paket ENC selama {since_connect:.1f}s setelah connect "
-                    f"-> Melakukan Auto-Reset USB Kernel ({self.port}) setara cabut-colok fisik..."
-                )
-                self.close_serial()
-                self.reset_usb_device()
-                self.connect_serial()
+                use_usb_reset = (self.restart_count >= 2)
+                rx_info = f"RX={self.rx_bytes_since_connect}B"
+                if self.last_other_line:
+                    rx_info += f", sampel='{self.last_other_line[:40]}'"
+                if use_usb_reset:
+                    self.get_logger().warn(
+                        f"⚠️ Belum ada paket ENC setelah {since_connect:.1f}s ({rx_info}, percobaan #{self.restart_count}) "
+                        f"-> Eskalasi Auto-Reset USB Kernel + Hardware Reset ({self.port})..."
+                    )
+                else:
+                    self.get_logger().warn(
+                        f"⚠️ Belum ada paket ENC setelah {since_connect:.1f}s ({rx_info}, percobaan #{self.restart_count}) "
+                        f"-> Mengirim pulsa Hardware Reset DTR/RTS ({self.port})..."
+                    )
+                self.connect_serial(force_usb_reset=use_usb_reset, do_dtr_reset=True)
             return
 
         gap = wall - self.last_enc_wall
@@ -417,12 +537,12 @@ class ArduinoBridgeNode(Node):
             self.set_encoder_ready(False, f"Stream ENC terputus {gap:.2f}s")
         if gap > self.enc_startup_timeout:
             self.restart_count += 1
+            use_usb_reset = (self.restart_count >= 2)
             self.get_logger().warn(
-                f"🔌 Stream ENC hilang {gap:.1f}s -> Melakukan Auto-Reset USB Kernel ({self.port}) setara cabut-colok fisik..."
+                f"🔌 Stream ENC hilang {gap:.1f}s (percobaan #{self.restart_count}) "
+                f"-> Auto-recovery Arduino ({'USB Kernel + DTR Reset' if use_usb_reset else 'DTR Reset'})..."
             )
-            self.close_serial()
-            self.reset_usb_device()
-            self.connect_serial()
+            self.connect_serial(force_usb_reset=use_usb_reset, do_dtr_reset=True)
 
     def update_loop(self):
         now = self.get_clock().now()
@@ -432,37 +552,14 @@ class ArduinoBridgeNode(Node):
             dt_reconnect = (now - self.last_reconnect_time).nanoseconds / 1e9
             if dt_reconnect >= 2.0:
                 self.last_reconnect_time = now
-                self.connect_serial(force_usb_reset=True)
+                self.restart_count += 1
+                self.connect_serial(force_usb_reset=(self.restart_count >= 2), do_dtr_reset=True)
             # Tetap broadcast TF saat disconnected agar TF tree tidak broken
             self.publish_ready(False)
             self.broadcast_tf_and_odom(now)
             return
 
-        # Paksa target nol bila encoder belum siap (mis. stream hilang di tengah navigasi)
-        if not self.encoder_ready:
-            self.target_v = 0.0
-            self.target_w = 0.0
-
-        # 1. Timeout /cmd_vel: jika > cmd_vel_timeout tidak ada perintah baru, otomatis kirim stop
-        dt_cmd = (now - self.last_cmd_vel_time).nanoseconds / 1e9
-        dt_tx = (now - self.last_tx_time).nanoseconds / 1e9
-
-        if dt_cmd > self.cmd_vel_timeout or not self.encoder_ready:
-            if self.last_sent_v != 0.0 or self.last_sent_w != 0.0:
-                self.target_v = 0.0
-                self.target_w = 0.0
-                self.setpoint_rpm_l = 0.0
-                self.setpoint_rpm_r = 0.0
-                self.send_cmd(0.0, 0.0, now)
-            elif dt_tx >= 0.2:
-                # Kirim heartbeat stop secara berkala tiap 200ms agar Arduino selalu yakin kecepatan = 0
-                self.send_cmd(0.0, 0.0, now)
-
-        # 2. Heartbeat: selama robot bergerak, kirim ulang perintah kecepatan tiap 50ms (20 Hz)
-        elif (self.target_v != 0.0 or self.target_w != 0.0) and dt_tx >= 0.05:
-            self.send_cmd(self.target_v, self.target_w, now)
-
-        # 3. Baca serial non-blocking dari Arduino
+        # 1. Baca serial non-blocking dari Arduino TERLEBIH DAHULU
         try:
             waiting = self.ser.in_waiting
             raw_bytes = self.ser.read(waiting) if waiting > 0 else b""
@@ -473,6 +570,7 @@ class ArduinoBridgeNode(Node):
             return
 
         if raw_bytes:
+            self.rx_bytes_since_connect += len(raw_bytes)
             self.rx_buffer += raw_bytes.decode('ascii', errors='ignore')
             if len(self.rx_buffer) > 4096:
                 # Buffer tanpa newline terlalu panjang -> sampah, buang
@@ -481,16 +579,43 @@ class ArduinoBridgeNode(Node):
             while '\n' in self.rx_buffer:
                 line, self.rx_buffer = self.rx_buffer.split('\n', 1)
                 line = line.strip()
+                if not line:
+                    continue
                 if line.startswith("ENC:"):
                     self.handle_enc_line(line, now)
                 elif line.startswith("LOG:"):
                     self.handle_log_line(line)
+                else:
+                    self.last_other_line = line
 
-        # 4. Watchdog kesehatan stream encoder
+        # 2. Kirim perintah kecepatan & heartbeat HANYA JIKA ENCODER SUDAH SIAP!
+        #    (Menjaga 100% keheningan TX selama masa startup/bootloader agar Optiboot tidak terjebak)
+        if self.encoder_ready:
+            dt_cmd = (now - self.last_cmd_vel_time).nanoseconds / 1e9
+            dt_tx = (now - self.last_tx_time).nanoseconds / 1e9
+
+            if dt_cmd > self.cmd_vel_timeout:
+                if self.last_sent_v != 0.0 or self.last_sent_w != 0.0:
+                    self.target_v = 0.0
+                    self.target_w = 0.0
+                    self.setpoint_rpm_l = 0.0
+                    self.setpoint_rpm_r = 0.0
+                    self.send_cmd(0.0, 0.0, now)
+                elif dt_tx >= 0.2:
+                    # Kirim heartbeat stop secara berkala tiap 200ms agar watchdog Arduino tenang
+                    self.send_cmd(0.0, 0.0, now)
+            elif (self.target_v != 0.0 or self.target_w != 0.0) and dt_tx >= 0.05:
+                # Heartbeat 20Hz saat robot bergerak aktif
+                self.send_cmd(self.target_v, self.target_w, now)
+        else:
+            self.target_v = 0.0
+            self.target_w = 0.0
+
+        # 3. Watchdog kesehatan stream encoder
         self.check_encoder_health()
         self.publish_ready(self.encoder_ready)
 
-        # 5. Kontinu broadcast TF & Odometry pada 50Hz (mencegah SLAM/RViz drop message)
+        # 4. Kontinu broadcast TF & Odometry pada 50Hz (mencegah SLAM/RViz drop message)
         self.broadcast_tf_and_odom(now)
 
     def handle_enc_line(self, line: str, now):
