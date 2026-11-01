@@ -28,7 +28,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from rclpy.duration import Duration
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from sensor_msgs.msg import Image, CompressedImage
-from std_msgs.msg import String
+from std_msgs.msg import String, Bool
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 import numpy as np
 
@@ -337,6 +337,9 @@ class DashboardNode(Node):
         self.latest_frame = None  # JPEG bytes terakhir dari kamera
         self.cmd_vel_current = {'linear': 0.0, 'angular': 0.0}
         self.odom_speed = {'linear': 0.0, 'angular': 0.0}
+        self.arduino_ready = False
+        self.last_arduino_ready_time = 0.0
+        self.last_odom_time = 0.0
         self.last_status_time = 0.0  # Waktu terakhir status diterima
         self._history_saved_ids = set()  # Track misi yang sudah disimpan ke history
         self.nav_path = []  # List titik jalur navigasi global dari /plan Nav2
@@ -351,6 +354,15 @@ class DashboardNode(Node):
             self.tf_pose_timer = self.create_timer(0.1, self.update_tf_pose)
         
         # === SUBSCRIBERS ===
+        # Status kesiapan hardware Arduino Bridge (/arduino/ready latched)
+        ready_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL
+        )
+        self.arduino_ready_sub = self.create_subscription(
+            Bool, '/arduino/ready', self.on_arduino_ready, ready_qos)
+
         # Nav2 Global Planned Path (/plan)
         self.plan_sub = self.create_subscription(
             Path, '/plan', self.on_plan, 10)
@@ -520,6 +532,12 @@ class DashboardNode(Node):
                 'yaw': yaw - oyaw
             }
 
+    def on_arduino_ready(self, msg):
+        """Callback status kesiapan Arduino Bridge (/arduino/ready)."""
+        with self.lock:
+            self.arduino_ready = bool(msg.data)
+            self.last_arduino_ready_time = time.time()
+
     def on_cmd_vel_listen(self, msg):
         """Callback monitor kecepatan perintah robot."""
         with self.lock:
@@ -537,6 +555,7 @@ class DashboardNode(Node):
         yaw = math.atan2(siny, cosy)
         now = time.time()
         with self.lock:
+            self.last_odom_time = now
             lin = math.hypot(msg.twist.twist.linear.x, msg.twist.twist.linear.y)
             ang = msg.twist.twist.angular.z
             self.odom_speed = {
@@ -1014,10 +1033,13 @@ HUMAN_NODE_LOCK = threading.Lock()
 RUNTIME_CACHE = {
     'slam_active': False,
     'arduino_active': False,
+    'arduino_ready': False,
     'nav_active': False,
     'nav_ready': False,
     'camera_active': False,
+    'camera_ready': False,
     'human_node_active': False,
+    'human_node_ready': False,
     'last_updated': 0
 }
 
@@ -1105,12 +1127,41 @@ def _update_process_states_loop():
                 except Exception:
                     pass
 
+            # Hitung kesiapan aktual (ready)
+            ard_rdy = False
+            if ard_act and ros_node is not None:
+                with ros_node.lock:
+                    if ros_node.arduino_ready and (time.time() - ros_node.last_arduino_ready_time < 3.0):
+                        ard_rdy = True
+                    elif (time.time() - getattr(ros_node, 'last_odom_time', 0.0)) < 1.5:
+                        ard_rdy = True
+
+            cam_rdy = False
+            if cam_act and ros_node is not None:
+                with ros_node.lock:
+                    if (time.time() - getattr(ros_node, 'last_cam_time', 0.0) < 3.0) and (ros_node.latest_frame is not None):
+                        cam_rdy = True
+
+            human_rdy = False
+            if human_act and ros_node is not None:
+                with ros_node.lock:
+                    last_h = max(
+                        getattr(ros_node, 'last_human_status_time', 0.0),
+                        getattr(ros_node, 'last_human_state_time', 0.0),
+                        getattr(ros_node, 'last_human_info_time', 0.0)
+                    )
+                    if (time.time() - last_h) < 4.0:
+                        human_rdy = True
+
             RUNTIME_CACHE['slam_active'] = slam_act
             RUNTIME_CACHE['arduino_active'] = ard_act
+            RUNTIME_CACHE['arduino_ready'] = ard_rdy
             RUNTIME_CACHE['nav_active'] = nav_act
             RUNTIME_CACHE['nav_ready'] = nav_rdy
             RUNTIME_CACHE['camera_active'] = cam_act
+            RUNTIME_CACHE['camera_ready'] = cam_rdy
             RUNTIME_CACHE['human_node_active'] = human_act
+            RUNTIME_CACHE['human_node_ready'] = human_rdy
             RUNTIME_CACHE['last_updated'] = time.time()
         except Exception:
             pass
@@ -1163,6 +1214,19 @@ def is_arduino_active():
         if ARDUINO_PROC is not None and ARDUINO_PROC.poll() is None:
             return True
     return bool(RUNTIME_CACHE.get('arduino_active', False))
+
+
+def is_arduino_ready():
+    """Cek apakah Arduino Bridge aktif dan hardware encoder/serial sudah diverifikasi siap."""
+    if not is_arduino_active():
+        return False
+    if ros_node is not None:
+        with ros_node.lock:
+            if ros_node.arduino_ready and (time.time() - ros_node.last_arduino_ready_time < 3.0):
+                return True
+            if (time.time() - getattr(ros_node, 'last_odom_time', 0.0)) < 1.5:
+                return True
+    return bool(RUNTIME_CACHE.get('arduino_ready', False))
 
 
 def stop_arduino_process():
@@ -1268,6 +1332,16 @@ def is_camera_active():
     return bool(RUNTIME_CACHE.get('camera_active', False))
 
 
+def is_camera_ready():
+    """Cek apakah Camera Publisher aktif dan sudah mempublikasikan frame gambar secara stabil."""
+    if not is_camera_active():
+        return False
+    if ros_node is not None:
+        with ros_node.lock:
+            return (time.time() - getattr(ros_node, 'last_cam_time', 0.0) < 3.0) and (ros_node.latest_frame is not None)
+    return bool(RUNTIME_CACHE.get('camera_ready', False))
+
+
 def stop_camera_process():
     """Hentikan proses camera_publisher.py."""
     global CAMERA_PROC
@@ -1301,6 +1375,21 @@ def is_human_node_active():
         if HUMAN_NODE_PROC is not None and HUMAN_NODE_PROC.poll() is None:
             return True
     return bool(RUNTIME_CACHE.get('human_node_active', False))
+
+
+def is_human_node_ready():
+    """Cek apakah Human Awareness AI aktif dan model YOLO sudah selesai di-load serta mengirim deteksi."""
+    if not is_human_node_active():
+        return False
+    if ros_node is not None:
+        with ros_node.lock:
+            last_any = max(
+                getattr(ros_node, 'last_human_status_time', 0.0),
+                getattr(ros_node, 'last_human_state_time', 0.0),
+                getattr(ros_node, 'last_human_info_time', 0.0)
+            )
+            return (time.time() - last_any) < 4.0
+    return bool(RUNTIME_CACHE.get('human_node_ready', False))
 
 
 def stop_human_node_process():
@@ -1538,7 +1627,8 @@ def api_mapping_stop():
 def api_arduino_status():
     """Status proses Arduino Bridge."""
     return jsonify({
-        'active': is_arduino_active()
+        'active': is_arduino_active(),
+        'ready': is_arduino_ready()
     })
 
 
@@ -1550,6 +1640,7 @@ def api_arduino_start():
         return jsonify({
             'success': True,
             'active': True,
+            'ready': is_arduino_ready(),
             'message': 'Arduino Bridge sudah aktif!'
         })
 
@@ -1582,7 +1673,8 @@ def api_arduino_start():
         return jsonify({
             'success': True,
             'active': True,
-            'message': 'Arduino Bridge berhasil dinyalakan!'
+            'ready': is_arduino_ready(),
+            'message': 'Arduino Bridge berhasil dinyalakan! Menunggu verifikasi encoder...'
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -1851,10 +1943,13 @@ def api_status():
             'nav_path': getattr(ros_node, 'nav_path', []),
             'nav_logs': list(NAVIGATION_LOGS[-50:]),
             'arduino_active': is_arduino_active(),
+            'arduino_ready': is_arduino_ready(),
             'nav_active': is_navigation_active(),
             'nav_ready': is_navigation_ready(),
             'camera_active': is_camera_active(),
+            'camera_ready': is_camera_ready(),
             'human_node_active': is_human_node_active(),
+            'human_node_ready': is_human_node_ready(),
             'connected': True,
             'timestamp': time.time()
         })
@@ -2591,7 +2686,8 @@ def get_placeholder_frame():
 def api_camera_status():
     """Status real-time proses Camera Publisher."""
     return jsonify({
-        'active': is_camera_active()
+        'active': is_camera_active(),
+        'ready': is_camera_ready()
     })
 
 
@@ -2603,6 +2699,7 @@ def api_camera_start():
         return jsonify({
             'success': True,
             'active': True,
+            'ready': is_camera_ready(),
             'message': 'Kamera sudah aktif!'
         })
 
@@ -2635,7 +2732,8 @@ def api_camera_start():
         return jsonify({
             'success': True,
             'active': True,
-            'message': 'Kamera USB berhasil dinyalakan!'
+            'ready': is_camera_ready(),
+            'message': 'Kamera USB berhasil dinyalakan! Menyiapkan stream video...'
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -2661,6 +2759,7 @@ def api_human_status():
             info = ros_node.human_info
     return jsonify({
         'active': is_human_node_active(),
+        'ready': is_human_node_ready(),
         'info': info
     })
 
@@ -2673,6 +2772,7 @@ def api_human_start():
         return jsonify({
             'success': True,
             'active': True,
+            'ready': is_human_node_ready(),
             'message': 'Human Awareness AI sudah aktif!'
         })
 
@@ -2711,7 +2811,8 @@ def api_human_start():
         return jsonify({
             'success': True,
             'active': True,
-            'message': 'Human Awareness AI (YOLO) berhasil dijalankan! Kamera siap mendeteksi orang.'
+            'ready': is_human_node_ready(),
+            'message': 'Human Awareness AI (YOLO) dijalankan! Menunggu model memuat ke GPU Jetson...'
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500

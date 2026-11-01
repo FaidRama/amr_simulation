@@ -301,3 +301,95 @@ Navigasi dijalankan saat log Arduino baru sampai `Arduino Bridge PID aktif`, bel
      - Jetson: [`src/amr_simulation/config/cyclonedds_jetson.xml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/cyclonedds_jetson.xml) (Peers: Laptop Faid `100.127.135.67`, siap ditambahkan IP teman).
      - Laptop: [`src/amr_simulation/config/cyclonedds_laptop.xml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/cyclonedds_laptop.xml) (Peers: Jetson `100.84.182.79`).
    - Mengunci interface jaringan ke `tailscale0` (`<AllowMulticast>false</AllowMulticast>`) sehingga paket ROS 2 mengalir 100% privat, anti-tabrakan dengan mahasiswa lain, dan bebas pemblokiran firewall.
+
+---
+
+## 13. Batasan Hardware Fisik: Jetson Hanya 1 Port USB & Solusi ATmega16U2 Hang
+
+### Batasan Arsitektur Robot:
+- **Port USB Jetson Hanya 1 Buah**: Carrier board Jetson AGX Xavier milik robot hanya memiliki **1 port USB fisik**.
+- Oleh karena itu, seluruh perangkat eksternal (**Arduino Uno, RPLiDAR, dan Kamera**) **WAJIB menggunakan USB Hub bercabang** (topologi USB: `1-4.4.x`).
+- **Tipe USB Hub**: USB Hub standar (*dumb hub*), tidak memiliki saklar transistor VBUS per-port (`uhubctl` tidak didukung).
+
+### Akar Masalah:
+- Arduino Uno R3 menggunakan mikrokontroler **ATmega16U2** untuk konversi USB-ke-Serial (bukan chip ASIC hardware murni seperti CP2102 pada RPLiDAR).
+- Ketika Jetson mati mendadak (misal akibat drop baterai) lalu dihidupkan lagi dalam kondisi kabel tertancap:
+  - VBUS 5V pada dumb hub tidak pernah turun ke 0V secara tuntas akibat muatan kapasitor dan tegangan parasit dari rangkaian motor driver BTS7960.
+  - Chip ATmega16U2 masuk ke kondisi *USB Bus Suspended / UART buffer deadlock*.
+  - Menekan tombol RESET fisik merah di Arduino **hanya me-reset ATmega328P, tidak me-reset ATmega16U2**.
+  - Software reset Linux (`USBDEVFS_RESET` / unbind-bind) tidak mematikan daya fisik VBUS.
+
+### Opsi Solusi Permanen Tanpa Perlu Cabut-Colok Manual:
+1. **Solusi Terbaik & Paling Rekomended: Bypass USB Menggunakan Hardware UART GPIO Jetson (Header 40-Pin J41)**:
+   - Hubungkan pin UART Arduino Uno (Pin 0 RX & Pin 1 TX) langsung ke pin UART Hardware Jetson:
+     - Pin 8 Jetson (`UART1_TX`) -> Pin 0 Arduino (`RX`) melalui voltage divider (karena Jetson 3.3V, Arduino 5V).
+     - Pin 10 Jetson (`UART1_RX`) <- Pin 1 Arduino (`TX`).
+     - Pin 9 Jetson (`GND`) <-> GND Arduino.
+   - **Keuntungan**:
+     - Membuka port USB Jetson (beban USB Hub berkurang).
+     - Chip ATmega16U2 dilewati total (*bypass*), tidak ada potensi USB deadlock sama sekali.
+     - Driver kernel Tegra (`/dev/ttyTHS0` / `/dev/ttyTHS1`) sangat stabil saat boot dan reboot.
+2. **Solusi Modul USB-to-UART CP2102 / FT232RL Eksternal (Rp 15.000 - Rp 25.000)**:
+   - Gunakan modul USB-UART CP2102 dongle kecil yang dicolok ke USB Hub, lalu sambungkan kabel jumper ke pin 0 (RX) & 1 (TX) Arduino Uno.
+   - Chip CP2102 adalah chip ASIC hardware murni (sama persis dengan chip RPLiDAR yang terbukti **selalu aman dan tidak pernah macet** saat Jetson mati-hidup).
+3. **Solusi Tombol Saklar Pemutus Daya USB (Toggle Switch)**:
+   - Pasang saklar toggle kecil / tombol push-to-break pada kabel VBUS (kabel merah 5V) jalur USB Arduino di bodi robot.
+   - Jika Jetson sempat mati mendadak, cukup jentikkan saklar 2 detik tanpa perlu merogoh dan mencopot konektor USB fisik.
+
+---
+
+## 14. Arsitektur 3-State Node Readiness UI/UX pada AMR Web Dashboard
+
+### Masalah:
+Sebelumnya, ketika pengguna menekan tombol aktivasi fitur di Web Dashboard (**Camera USB, Human Awareness AI / YOLO, Arduino Bridge, dan Navigasi / Dispatch**), status indikator dan tombol langsung berubah seketika menjadi "ONLINE / RUNNING" hijau. Padahal:
+- **Arduino Bridge** masih membutuhkan waktu untuk *handshake* serial baud 115200 dan verifikasi stream hardware encoder (10 paket ENC beruntun).
+- **Kamera USB** membutuhkan waktu 1–2 detik bagi driver Linux V4L2 & OpenCV untuk mengunci `/dev/video0` dan mempublikasikan frame pertama.
+- **Human Awareness AI** membutuhkan waktu 5–10 detik untuk mengalokasikan memori VRAM GPU Jetson Xavier dan memuat bobot neural network YOLO (`best.pt` / `yolov8n.pt`).
+- **Nav2 Navigation** membutuhkan 6–10 detik untuk menginisialisasi map server, AMCL, global/local costmaps, controller server, dan BT navigator.
+
+Hal ini membingungkan operator karena status UI sudah "Online", namun perintah joystick belum merespon atau misi navigasi gagal dieksekusi.
+
+### Solusi & Implementasi:
+Sistem dirombak menggunakan arsitektur **3-State Process Lifecycle (`OFFLINE` -> `STARTING / LOADING` -> `ONLINE / READY`)** yang terintegrasi dari ROS 2 node, Flask backend, hingga frontend Javascript:
+
+```
+[ OFFLINE ]
+   │  (User klik "Start / Jalankan")
+   ▼
+[ STARTING / VERIFYING ] ──> Indikator Kuning Berkedip (pulse-dot)
+   │                         Tombol Kuning "⏳ Menyiapkan..."
+   │                         Background ROS 2 memverifikasi sensor/topik
+   │  (Kriteria Kesiapan Terpenuhi)
+   ▼
+[ ONLINE / READY ]       ──> Indikator Hijau Solid "🟢 ONLINE (READY)"
+                             Tombol Merah "🛑 Stop ..."
+```
+
+#### 1. Kriteria Kesiapan (Readiness Checks) di Backend ([`app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py)):
+- **Arduino Bridge (`is_arduino_ready`)**:
+  - Node aktif (`is_arduino_active()`) **DAN**
+  - Menerima latched boolean `/arduino/ready == True` (age < 3.0s) ATAU stream `/odom` 50Hz aktif (age < 1.5s).
+- **Kamera USB (`is_camera_ready`)**:
+  - Node aktif (`is_camera_active()`) **DAN**
+  - Frame JPEG telah diterima dan ter-cache (`time.time() - last_cam_time < 3.0s` & `latest_frame is not None`).
+- **Human Awareness AI (`is_human_node_ready`)**:
+  - Node aktif (`is_human_node_active()`) **DAN**
+  - Pipeline YOLO telah memproses frame dan mempublikasikan telemetri deteksi ke `/human_info`, `/human_status`, atau `/human_state` (`now - last_human_time < 4.0s`).
+- **Navigasi Nav2 (`is_navigation_ready`)**:
+  - Node aktif (`is_navigation_active()`) **DAN**
+  - Lifecycle manager telah mengaktifkan seluruh managed nodes (`[SIAP NAVIGASI]` atau `Managed nodes are active`).
+
+#### 2. REST API & Telemetri Real-Time ([`app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py)):
+- Endpoint `/api/status`, `/api/arduino/status`, `/api/camera/status`, `/api/human/status`, dan `/api/navigation/status` kini mengembalikan pasangan status:
+  - `'active'`: Boolean (apakah proses OS sedang berjalan).
+  - `'ready'`: Boolean (apakah sensor/algoritma sudah diverifikasi siap melayani request).
+- `RUNTIME_CACHE` di-update secara asinkron tanpa membebani latensi teleop `/cmd_vel`.
+
+#### 3. Frontend Responsive UI/UX ([`app.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/app.js)):
+- **Visual State**:
+  - **Offline**: Indikator abu-abu/merah, tombol warna hijau/biru `⚡ Start ...`.
+  - **Starting / Menyiapkan**: Indikator kuning berkedip (*pulsing yellow dot*), teks `⏳ MENYIAPKAN...`, tombol kuning `btn-warning` bertuliskan `⏳ Menyiapkan...` (atau `⏳ Memuat YOLO...` / `⏳ Menyiapkan Nav2...`).
+  - **Online / Ready**: Indikator hijau solid, teks `🟢 ONLINE (READY)`, tombol merah `🛑 Stop ...`.
+- **Proteksi Tombol Dispatch**: Tombol *"Mulai Eksekusi Misi"* di halaman Dispatch otomatis di-disable dan diredupkan (opacity 0.5) selama Nav2 masih dalam status `⏳ MENYIAPKAN NAV2...`, dan baru terbuka penuh saat status berubah menjadi `🟢 AMR SIAP MENGANTAR (READY)`.
+- **Notifikasi Toast**: Memberi notifikasi hijau saat hardware/sensor benar-benar siap (misal: `"🟢 Arduino Bridge siap! Hardware encoder & serial terverifikasi"` atau `"🟢 Human Awareness AI siap! Model YOLO aktif mendeteksi"`).
+
