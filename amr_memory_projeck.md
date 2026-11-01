@@ -466,5 +466,37 @@ Karena `amr_dashboard.service` berjalan terus-menerus di memori OS:
   - Mengecek status: `tailscale funnel status`
   - Mematikan / Reset: `sudo tailscale funnel reset`
 
+---
+
+## 📌 17. Solusi Deadlock Threading Python (`app.py`), Instant Render Frontend (`app.js`) & Reset Daemon DDS
+
+### 1. Akar Masalah Deadlock Kunci Python (`threading.Lock` vs `threading.RLock`) di [`app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py):
+- **Kronologi Masalah**:
+  - Endpoint `/api/status` mengambil kunci data thread-safe: `with ros_node.lock:`.
+  - Di dalam blok tersebut, kode mengevaluasi data kesiapan dengan memanggil `is_arduino_ready()`, `is_camera_ready()`, dan `is_human_node_ready()`.
+  - Di dalam ketiga fungsi tersebut, terdapat baris `with ros_node.lock:` lagi.
+  - Karena sebelumnya didefinisikan sebagai `self.lock = threading.Lock()` standar (non-reentrant):
+    - Thread Flask yang sedang memegang lock mencoba mengakuisisi kembali lock yang sama.
+    - Terjadi **recursive deadlock seketika**: thread membeku selamanya menunggu dirinya sendiri melepaskan lock.
+    - Seluruh worker thread Flask yang melayani polling `/api/status` ikut mengantre dan membeku.
+    - Browser mengalami request timeout sehingga menampilkan status **`🔴 OFFLINE`**, tombol kamera & teleop tidak merespons, dan thread `rclpy.spin(ros_node)` ikut beku.
+- **Solusi Permanen**:
+  - Ganti `self.lock = threading.Lock()` menjadi **`self.lock = threading.RLock()`** (*Reentrant Lock*). Reentrant lock mengizinkan thread yang sama untuk mengakuisisi lock secara berlapis (*nested*) tanpa menimbulkan deadlock.
+  - Bungkus endpoint `/api/status` dengan fail-safe `try ... except` agar selalu merespons JSON status 200 OK ke browser.
+
+### 2. Solusi Layar Blank Saat Pertama Buka / Refresh di [`app.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/app.js):
+- **Masalah**: Saat halaman dashboard pertama kali dibuka atau di-refresh, area utama `#app-content` hitam/kosong (blank) dan baru muncul setelah pengguna mengklik tombol menu "Overview" di sidebar.
+- **Penyebab**: Di fungsi `init()`, perintah `navigateTo('home')` diletakkan di baris paling akhir setelah menunggu 3 pemanggilan asinkron `await` (`fetchModeState`, `saved_points`, `settings`). Jika server lambat atau sempat error 503, pemanggilan terhenti dan navigasi tidak pernah terpanggil.
+- **Solusi Permanen**:
+  - Pindahkan pemanggilan `navigateTo('home')` ke **baris paling awal** di dalam `init()`.
+  - Begitu event `DOMContentLoaded` selesai, UI Mission Overview langsung dirender secara instan (*instant zero-delay render*), sementara request data dijalankan di latar belakang dengan pembungkus `try/catch`.
+
+### 3. Pembersihan Cache Daemon ROS 2 Multi-Machine (`ros2 daemon stop`):
+- Background daemon ROS 2 (`_ros2_daemon`) meng-cache tabel discovery CycloneDDS.
+- Setiap kali mengubah file konfigurasi peers XML (`cyclonedds_laptop.xml` atau `cyclonedds_jetson.xml`), IP Tailscale, atau `ROS_DOMAIN_ID`:
+  - **Wajib menjalankan `ros2 daemon stop`** di terminal laptop dan Jetson.
+  - Jika tidak di-stop, perintah `ros2 node list` di terminal akan terus membaca cache lama dan gagal mendeteksi node dari perangkat lain.
+
+
 
 
