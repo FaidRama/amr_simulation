@@ -127,10 +127,13 @@ const APP = {
     hasLiveMap: false,
     mappingActive: false,
     arduinoActive: false,
+    arduinoReady: false,
     navActive: false,
     navReady: false,
     cameraActive: false,
+    cameraReady: false,
     humanNodeActive: false,
+    humanNodeReady: false,
     showBbox: (localStorage.getItem('amr_show_bbox') !== 'false'),
     humanInfo: null,
     poseSource: 'NONE',
@@ -549,18 +552,18 @@ function renderDelivery() {
                     <!-- NAV2 NAVIGATION RUNTIME CONTROLLER -->
                     <div class="nav-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:12px; gap:12px;">
                         <div style="display:flex; align-items:center; gap:10px;">
-                            <span id="nav-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.navActive ? (APP.navReady ? 'var(--success)' : 'var(--warning)') : 'var(--danger)'}; box-shadow:${APP.navActive ? (APP.navReady ? '0 0 8px var(--success)' : '0 0 8px var(--warning)') : 'none'}; display:inline-block;"></span>
+                            <span id="nav-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.navActive ? (APP.navReady ? 'var(--success)' : 'var(--warning)') : 'var(--danger)'}; box-shadow:${APP.navActive ? (APP.navReady ? '0 0 8px var(--success)' : '0 0 10px var(--warning)') : 'none'}; display:inline-block; ${APP.navActive && !APP.navReady ? 'animation: pulse-dot 1s infinite;' : ''}"></span>
                             <div>
                                 <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="nav-status-text">
                                     NAV2 NAVIGATION: ${APP.navActive ? (APP.navReady ? '<span style="color:var(--success)">🟢 AMR SIAP NAVIGASI &amp; MENGANTAR!</span>' : '<span style="color:var(--warning)">⏳ MENYIAPKAN SENSOR, AMCL &amp; NAV2...</span>') : '<span style="color:var(--danger)">OFFLINE</span>'}
                                 </div>
                                 <div style="font-size:0.68rem; color:var(--text-muted);" id="nav-sub-text">
-                                    ${APP.navActive ? (APP.navReady ? '✅ Peta, LiDAR, AMCL & Nav2 Action Server aktif — siap menerima perintah pengantaran' : 'Mohon tunggu hingga muncul notifikasi AMR Siap Mengantar') : 'Nyalakan Nav2 sebelum memulai misi pengantaran'}
+                                    ${APP.navActive ? (APP.navReady ? '✅ Peta, LiDAR, AMCL & Nav2 Action Server aktif — siap menerima perintah pengantaran' : 'Mohon tunggu hingga sensor & Nav2 selesai diinisialisasi...') : 'Nyalakan Nav2 sebelum memulai misi pengantaran'}
                                 </div>
                             </div>
                         </div>
-                        <button type="button" id="nav-toggle-btn" class="btn btn-sm ${APP.navActive ? 'btn-danger' : 'btn-success'}" onclick="toggleNavigation()" style="min-width:130px; font-weight:600; border-radius:6px;">
-                            ${APP.navActive ? '🛑 Stop Navigasi' : '🚀 Jalankan Navigasi'}
+                        <button type="button" id="nav-toggle-btn" class="btn btn-sm ${APP.navActive ? (APP.navReady ? 'btn-danger' : 'btn-warning') : 'btn-success'}" onclick="toggleNavigation()" style="min-width:130px; font-weight:600; border-radius:6px;">
+                            ${APP.navActive ? (APP.navReady ? '🛑 Stop Navigasi' : '⏳ Menyiapkan Nav2...') : '🚀 Jalankan Navigasi'}
                         </button>
                     </div>
 
@@ -876,31 +879,37 @@ function updateNavigationUI(active, ready = APP.navReady) {
         if (ready) {
             ind.style.background = 'var(--success)';
             ind.style.boxShadow = '0 0 8px var(--success)';
+            ind.style.animation = 'none';
             text.innerHTML = 'NAV2 NAVIGATION: <span style="color:var(--success)">🟢 AMR SIAP NAVIGASI &amp; MENGANTAR!</span>';
             if (sub) sub.textContent = '✅ Peta, LiDAR, AMCL & Nav2 Action Server aktif — siap menerima perintah pengantaran';
             if (navStatusEl) {
                 navStatusEl.textContent = '🟢 AMR SIAP MENGANTAR (READY)';
                 navStatusEl.style.color = 'var(--success)';
             }
+            btn.className = 'btn btn-sm btn-danger';
+            btn.innerHTML = '🛑 Stop Navigasi';
         } else {
             ind.style.background = 'var(--warning)';
-            ind.style.boxShadow = '0 0 8px var(--warning)';
+            ind.style.boxShadow = '0 0 10px var(--warning)';
+            ind.style.animation = 'pulse-dot 1s infinite';
             text.innerHTML = 'NAV2 NAVIGATION: <span style="color:var(--warning)">⏳ MENYIAPKAN SENSOR, AMCL &amp; NAV2...</span>';
-            if (sub) sub.textContent = 'Mohon tunggu hingga muncul notifikasi AMR Siap Mengantar';
+            if (sub) sub.textContent = 'Mohon tunggu hingga sensor & Nav2 selesai diinisialisasi...';
             if (navStatusEl) {
                 navStatusEl.textContent = '⏳ MENYIAPKAN NAV2...';
                 navStatusEl.style.color = 'var(--warning)';
             }
+            btn.className = 'btn btn-sm btn-warning';
+            btn.innerHTML = '⏳ Menyiapkan Nav2...';
         }
-        btn.className = 'btn btn-sm btn-danger';
-        btn.innerHTML = '🛑 Stop Navigasi';
         if (startDelBtn) {
             startDelBtn.title = ready ? 'Mulai Eksekusi Misi' : 'Menunggu Nav2 siap sepenuhnya...';
-            startDelBtn.style.opacity = ready ? '1' : '0.75';
+            startDelBtn.style.opacity = ready ? '1' : '0.5';
+            startDelBtn.disabled = !ready;
         }
     } else {
         ind.style.background = 'var(--danger)';
         ind.style.boxShadow = 'none';
+        ind.style.animation = 'none';
         text.innerHTML = 'NAV2 NAVIGATION: <span style="color:var(--danger)">OFFLINE</span>';
         if (sub) sub.textContent = 'Nyalakan Nav2 sebelum memulai misi pengantaran';
         btn.className = 'btn btn-sm btn-success';
@@ -911,6 +920,8 @@ function updateNavigationUI(active, ready = APP.navReady) {
         }
         if (startDelBtn) {
             startDelBtn.title = 'Nyalakan navigasi terlebih dahulu';
+            startDelBtn.style.opacity = '0.5';
+            startDelBtn.disabled = true;
         }
     }
 }
@@ -1764,31 +1775,31 @@ function renderCamera() {
                 <!-- CAMERA CONTROL BAR -->
                 <div class="camera-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:10px; gap:12px;">
                     <div style="display:flex; align-items:center; gap:10px;">
-                        <span id="cam-page-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.cameraActive ? 'var(--success)' : 'var(--text-muted)'}; box-shadow:${APP.cameraActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
+                        <span id="cam-page-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.cameraActive ? (APP.cameraReady ? 'var(--success)' : 'var(--warning)') : 'var(--text-muted)'}; box-shadow:${APP.cameraActive ? (APP.cameraReady ? '0 0 8px var(--success)' : '0 0 10px var(--warning)') : 'none'}; display:inline-block; ${APP.cameraActive && !APP.cameraReady ? 'animation: pulse-dot 1s infinite;' : ''}"></span>
                         <div>
                             <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="cam-page-status-text">
-                                USB CAMERA: ${APP.cameraActive ? '<span style="color:var(--success)">ONLINE</span>' : '<span style="color:var(--text-muted)">OFFLINE</span>'}
+                                USB CAMERA: ${APP.cameraActive ? (APP.cameraReady ? '<span style="color:var(--success)">🟢 ONLINE (STREAMING)</span>' : '<span style="color:var(--warning)">⏳ MEMBUKA STREAM...</span>') : '<span style="color:var(--text-muted)">OFFLINE</span>'}
                             </div>
                             <div style="font-size:0.68rem; color:var(--text-muted);" id="cam-page-sub-text">
-                                ${APP.cameraActive ? 'Hardware kamera & publisher terhubung' : 'Hardware kamera standby'}
+                                ${APP.cameraActive ? (APP.cameraReady ? 'Hardware kamera & publisher terhubung' : 'Menghubungkan device /dev/video0 & inisialisasi stream...') : 'Hardware kamera standby'}
                             </div>
                         </div>
                     </div>
-                    <button type="button" id="cam-page-toggle-btn" class="btn btn-sm ${APP.cameraActive ? 'btn-danger' : 'btn-success'}" onclick="toggleCamera()" style="min-width:120px; font-weight:600; border-radius:6px;">
-                        ${APP.cameraActive ? '🛑 Stop Kamera' : '📷 Start Kamera'}
+                    <button type="button" id="cam-page-toggle-btn" class="btn btn-sm ${APP.cameraActive ? (APP.cameraReady ? 'btn-danger' : 'btn-warning') : 'btn-success'}" onclick="toggleCamera()" style="min-width:120px; font-weight:600; border-radius:6px;">
+                        ${APP.cameraActive ? (APP.cameraReady ? '🛑 Stop Kamera' : '⏳ Menyiapkan...') : '📷 Start Kamera'}
                     </button>
                 </div>
 
                 <!-- HUMAN AWARENESS AI CONTROL BAR -->
                 <div class="human-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:12px; gap:12px; flex-wrap:wrap;">
                     <div style="display:flex; align-items:center; gap:10px;">
-                        <span id="human-node-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.humanNodeActive ? 'var(--success)' : 'var(--text-muted)'}; box-shadow:${APP.humanNodeActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
+                        <span id="human-node-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.humanNodeActive ? (APP.humanNodeReady ? 'var(--success)' : 'var(--warning)') : 'var(--text-muted)'}; box-shadow:${APP.humanNodeActive ? (APP.humanNodeReady ? '0 0 8px var(--success)' : '0 0 10px var(--warning)') : 'none'}; display:inline-block; ${APP.humanNodeActive && !APP.humanNodeReady ? 'animation: pulse-dot 1s infinite;' : ''}"></span>
                         <div>
                             <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="human-node-status-text">
-                                HUMAN AI NODE: ${APP.humanNodeActive ? '<span style="color:var(--success)">RUNNING</span>' : '<span style="color:var(--text-muted)">STOPPED</span>'}
+                                HUMAN AI NODE: ${APP.humanNodeActive ? (APP.humanNodeReady ? '<span style="color:var(--success)">🟢 ACTIVE &amp; DETECTING</span>' : '<span style="color:var(--warning)">⏳ MEMUAT MODEL AI (YOLO)...</span>') : '<span style="color:var(--text-muted)">STOPPED</span>'}
                             </div>
                             <div style="font-size:0.68rem; color:var(--text-muted);" id="human-node-sub-text">
-                                ${APP.humanNodeActive ? 'Deteksi YOLO & estimasi jarak aktif (/human_info)' : 'Tes deteksi manusia mandiri tanpa perlu navigasi'}
+                                ${APP.humanNodeActive ? (APP.humanNodeReady ? 'Deteksi YOLO & estimasi jarak aktif (/human_info)' : 'Inisialisasi neural network ke GPU Jetson (~5-10 dtk)...') : 'Tes deteksi manusia mandiri tanpa perlu navigasi'}
                             </div>
                         </div>
                     </div>
@@ -1796,8 +1807,8 @@ function renderCamera() {
                         <button type="button" id="bbox-toggle-btn" class="btn btn-sm ${APP.showBbox ? 'btn-accent' : 'btn-outline'}" onclick="toggleBboxOverlay()" style="font-weight:600; border-radius:6px;">
                             ${APP.showBbox ? '👁️ Bbox HUD: ON' : '👁️ Bbox HUD: OFF'}
                         </button>
-                        <button type="button" id="human-node-toggle-btn" class="btn btn-sm ${APP.humanNodeActive ? 'btn-danger' : 'btn-primary'}" onclick="toggleHumanAwareness()" style="min-width:130px; font-weight:600; border-radius:6px;">
-                            ${APP.humanNodeActive ? '🛑 Stop Human AI' : '🚀 Start Human AI'}
+                        <button type="button" id="human-node-toggle-btn" class="btn btn-sm ${APP.humanNodeActive ? (APP.humanNodeReady ? 'btn-danger' : 'btn-warning') : 'btn-primary'}" onclick="toggleHumanAwareness()" style="min-width:130px; font-weight:600; border-radius:6px;">
+                            ${APP.humanNodeActive ? (APP.humanNodeReady ? '🛑 Stop Human AI' : '⏳ Memuat YOLO...') : '🚀 Start Human AI'}
                         </button>
                     </div>
                 </div>
@@ -1894,11 +1905,13 @@ function startCameraPolling() {
             }
             if (data.hasOwnProperty('human_node_active')) {
                 APP.humanNodeActive = !!data.human_node_active;
-                updateHumanAwarenessUI(APP.humanNodeActive);
+                APP.humanNodeReady = APP.humanNodeActive && !!data.human_node_ready;
+                updateHumanAwarenessUI(APP.humanNodeActive, APP.humanNodeReady);
             }
             if (data.hasOwnProperty('camera_active')) {
                 APP.cameraActive = !!data.camera_active;
-                updateCameraUI(APP.cameraActive);
+                APP.cameraReady = APP.cameraActive && !!data.camera_ready;
+                updateCameraUI(APP.cameraActive, APP.cameraReady);
             }
             if (data.human_info) {
                 APP.humanInfo = data.human_info;
@@ -2517,19 +2530,19 @@ function renderJoystick() {
             <div class="page-section">
                 <div class="section-title">
                     <span>01 // FORWARD OPTICAL STREAM</span>
-                    <span id="teleop-cam-status-label">${APP.cameraActive ? 'LIVE TELEOP VIEW' : 'CAMERA OFFLINE'}</span>
+                    <span id="teleop-cam-status-label">${APP.cameraActive ? (APP.cameraReady ? 'LIVE TELEOP VIEW' : 'OPENING CAMERA...') : 'CAMERA OFFLINE'}</span>
                 </div>
 
                 <!-- CAMERA HARDWARE CONTROLLER BAR -->
                 <div class="camera-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:14px; gap:12px; flex-wrap:wrap;">
                     <div style="display:flex; align-items:center; gap:10px;">
-                        <span id="camera-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.cameraActive ? 'var(--success)' : 'var(--text-muted)'}; box-shadow:${APP.cameraActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
+                        <span id="camera-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.cameraActive ? (APP.cameraReady ? 'var(--success)' : 'var(--warning)') : 'var(--text-muted)'}; box-shadow:${APP.cameraActive ? (APP.cameraReady ? '0 0 8px var(--success)' : '0 0 10px var(--warning)') : 'none'}; display:inline-block; ${APP.cameraActive && !APP.cameraReady ? 'animation: pulse-dot 1s infinite;' : ''}"></span>
                         <div>
                             <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="camera-status-text">
-                                USB CAMERA: ${APP.cameraActive ? '<span style="color:var(--success)">ONLINE</span>' : '<span style="color:var(--text-muted)">OFFLINE</span>'}
+                                USB CAMERA: ${APP.cameraActive ? (APP.cameraReady ? '<span style="color:var(--success)">🟢 ONLINE (STREAMING)</span>' : '<span style="color:var(--warning)">⏳ MEMBUKA STREAM...</span>') : '<span style="color:var(--text-muted)">OFFLINE</span>'}
                             </div>
                             <div style="font-size:0.68rem; color:var(--text-muted);" id="camera-sub-text">
-                                ${APP.cameraActive ? 'Stream /camera/image_raw/compressed aktif' : 'Nyalakan kamera untuk melihat video real-time'}
+                                ${APP.cameraActive ? (APP.cameraReady ? 'Stream /camera/image_raw/compressed aktif' : 'Menghubungkan /dev/video0 & inisialisasi stream...') : 'Nyalakan kamera untuk melihat video real-time'}
                             </div>
                         </div>
                     </div>
@@ -2537,8 +2550,8 @@ function renderJoystick() {
                         <button type="button" id="teleop-bbox-toggle-btn" class="btn btn-sm ${APP.showBbox ? 'btn-accent' : 'btn-outline'}" onclick="toggleBboxOverlay()" style="font-weight:600; border-radius:6px;">
                             ${APP.showBbox ? '👁️ Bbox HUD: ON' : '👁️ Bbox HUD: OFF'}
                         </button>
-                        <button type="button" id="camera-toggle-btn" class="btn btn-sm ${APP.cameraActive ? 'btn-danger' : 'btn-success'}" onclick="toggleCamera()" style="min-width:120px; font-weight:600; border-radius:6px;">
-                            ${APP.cameraActive ? '🛑 Stop Kamera' : '📷 Start Kamera'}
+                        <button type="button" id="camera-toggle-btn" class="btn btn-sm ${APP.cameraActive ? (APP.cameraReady ? 'btn-danger' : 'btn-warning') : 'btn-success'}" onclick="toggleCamera()" style="min-width:120px; font-weight:600; border-radius:6px;">
+                            ${APP.cameraActive ? (APP.cameraReady ? '🛑 Stop Kamera' : '⏳ Menyiapkan...') : '📷 Start Kamera'}
                         </button>
                     </div>
                 </div>
@@ -2565,18 +2578,18 @@ function renderJoystick() {
                     <!-- ARDUINO HARDWARE BRIDGE CONTROLLER -->
                     <div class="arduino-ctrl-bar flex-between" style="padding:10px 14px; background:var(--bg-tertiary, rgba(255,255,255,0.03)); border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:8px; margin-bottom:14px; gap:12px;">
                         <div style="display:flex; align-items:center; gap:10px;">
-                            <span id="arduino-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.arduinoActive ? 'var(--success)' : 'var(--text-muted)'}; box-shadow:${APP.arduinoActive ? '0 0 8px var(--success)' : 'none'}; display:inline-block;"></span>
+                            <span id="arduino-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.arduinoActive ? (APP.arduinoReady ? 'var(--success)' : 'var(--warning)') : 'var(--text-muted)'}; box-shadow:${APP.arduinoActive ? (APP.arduinoReady ? '0 0 8px var(--success)' : '0 0 10px var(--warning)') : 'none'}; display:inline-block; ${APP.arduinoActive && !APP.arduinoReady ? 'animation: pulse-dot 1s infinite;' : ''}"></span>
                             <div>
                                 <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="arduino-status-text">
-                                    ARDUINO BRIDGE: ${APP.arduinoActive ? '<span style="color:var(--success)">ONLINE</span>' : '<span style="color:var(--text-muted)">OFFLINE</span>'}
+                                    ARDUINO BRIDGE: ${APP.arduinoActive ? (APP.arduinoReady ? '<span style="color:var(--success)">🟢 ONLINE (READY)</span>' : '<span style="color:var(--warning)">⏳ MENYIAPKAN...</span>') : '<span style="color:var(--text-muted)">OFFLINE</span>'}
                                 </div>
                                 <div style="font-size:0.68rem; color:var(--text-muted);" id="arduino-sub-text">
-                                    ${APP.arduinoActive ? 'Hardware motor & odometri aktif' : 'Nyalakan agar robot merespon /cmd_vel'}
+                                    ${APP.arduinoActive ? (APP.arduinoReady ? 'Hardware motor & odometri aktif (50Hz)' : 'Menghubungkan serial & verifikasi encoder...') : 'Nyalakan agar robot merespon /cmd_vel'}
                                 </div>
                             </div>
                         </div>
-                        <button type="button" id="arduino-toggle-btn" class="btn btn-sm ${APP.arduinoActive ? 'btn-danger' : 'btn-success'}" onclick="toggleArduinoBridge()" style="min-width:120px; font-weight:600; border-radius:6px;">
-                            ${APP.arduinoActive ? '🛑 Stop Bridge' : '⚡ Start Bridge'}
+                        <button type="button" id="arduino-toggle-btn" class="btn btn-sm ${APP.arduinoActive ? (APP.arduinoReady ? 'btn-danger' : 'btn-warning') : 'btn-success'}" onclick="toggleArduinoBridge()" style="min-width:120px; font-weight:600; border-radius:6px;">
+                            ${APP.arduinoActive ? (APP.arduinoReady ? '🛑 Stop Bridge' : '⏳ Menyiapkan...') : '⚡ Start Bridge'}
                         </button>
                     </div>
 
@@ -2623,18 +2636,20 @@ async function toggleArduinoBridge() {
             const res = await apiPost('/api/arduino/stop', {});
             if (res && res.success) {
                 APP.arduinoActive = false;
-                updateArduinoBridgeUI(false);
+                APP.arduinoReady = false;
+                updateArduinoBridgeUI(false, false);
                 showToast('Arduino Bridge berhasil dihentikan.', 'warning');
             } else {
                 showToast(res ? (res.error || res.message) : 'Gagal menghentikan Arduino Bridge', 'error');
             }
         } else {
-            showToast('Menyalakan Arduino Bridge...', 'info');
+            showToast('Menyalakan Arduino Bridge... Menghubungkan serial & verifikasi encoder...', 'info');
             const res = await apiPost('/api/arduino/start', {});
             if (res && res.success) {
                 APP.arduinoActive = true;
-                updateArduinoBridgeUI(true);
-                showToast('Arduino Bridge berhasil dinyalakan!', 'success');
+                APP.arduinoReady = !!res.ready;
+                updateArduinoBridgeUI(true, APP.arduinoReady);
+                showToast(APP.arduinoReady ? 'Arduino Bridge aktif dan siap!' : 'Arduino Bridge menyala! Menunggu verifikasi encoder serial hardware...', 'info');
             } else {
                 showToast(res ? (res.error || res.message) : 'Gagal menyalakan Arduino Bridge', 'error');
             }
@@ -2649,7 +2664,7 @@ async function toggleArduinoBridge() {
     }
 }
 
-function updateArduinoBridgeUI(active) {
+function updateArduinoBridgeUI(active, ready = APP.arduinoReady) {
     const ind = document.getElementById('arduino-status-indicator');
     const text = document.getElementById('arduino-status-text');
     const sub = document.getElementById('arduino-sub-text');
@@ -2657,15 +2672,27 @@ function updateArduinoBridgeUI(active) {
     if (!ind || !text || !btn) return;
 
     if (active) {
-        ind.style.background = 'var(--success)';
-        ind.style.boxShadow = '0 0 8px var(--success)';
-        text.innerHTML = 'ARDUINO BRIDGE: <span style="color:var(--success)">ONLINE</span>';
-        if (sub) sub.textContent = 'Hardware motor & odometri aktif';
-        btn.className = 'btn btn-sm btn-danger';
-        btn.innerHTML = '🛑 Stop Bridge';
+        if (ready) {
+            ind.style.background = 'var(--success)';
+            ind.style.boxShadow = '0 0 8px var(--success)';
+            ind.style.animation = 'none';
+            text.innerHTML = 'ARDUINO BRIDGE: <span style="color:var(--success)">🟢 ONLINE (READY)</span>';
+            if (sub) sub.textContent = 'Hardware motor, encoder & odometri aktif (50Hz)';
+            btn.className = 'btn btn-sm btn-danger';
+            btn.innerHTML = '🛑 Stop Bridge';
+        } else {
+            ind.style.background = 'var(--warning)';
+            ind.style.boxShadow = '0 0 10px var(--warning)';
+            ind.style.animation = 'pulse-dot 1s infinite';
+            text.innerHTML = 'ARDUINO BRIDGE: <span style="color:var(--warning)">⏳ MENYIAPKAN &amp; VERIFIKASI ENCODER...</span>';
+            if (sub) sub.textContent = 'Menghubungkan serial & verifikasi stream encoder hardware...';
+            btn.className = 'btn btn-sm btn-warning';
+            btn.innerHTML = '⏳ Menyiapkan...';
+        }
     } else {
         ind.style.background = 'var(--text-muted)';
         ind.style.boxShadow = 'none';
+        ind.style.animation = 'none';
         text.innerHTML = 'ARDUINO BRIDGE: <span style="color:var(--text-muted)">OFFLINE</span>';
         if (sub) sub.textContent = 'Nyalakan agar robot merespon /cmd_vel';
         btn.className = 'btn btn-sm btn-success';
@@ -2690,18 +2717,20 @@ async function toggleCamera() {
             const res = await apiPost('/api/camera/stop', {});
             if (res && res.success) {
                 APP.cameraActive = false;
-                updateCameraUI(false);
+                APP.cameraReady = false;
+                updateCameraUI(false, false);
                 showToast('Kamera berhasil dihentikan.', 'warning');
             } else {
                 showToast(res ? (res.error || res.message) : 'Gagal menghentikan kamera', 'error');
             }
         } else {
-            showToast('Menyalakan kamera USB...', 'info');
+            showToast('Menyalakan kamera USB... Menghubungkan video stream...', 'info');
             const res = await apiPost('/api/camera/start', {});
             if (res && res.success) {
                 APP.cameraActive = true;
-                updateCameraUI(true);
-                showToast('Kamera berhasil dinyalakan!', 'success');
+                APP.cameraReady = !!res.ready;
+                updateCameraUI(true, APP.cameraReady);
+                showToast(APP.cameraReady ? 'Kamera siap streaming!' : 'Kamera dinyalakan! Menunggu inisialisasi hardware V4L2...', 'info');
                 // Beri jeda 1 detik agar proses kamera bind hardware V4L2 lalu refresh src stream
                 setTimeout(() => {
                     const ts = Date.now();
@@ -2727,7 +2756,7 @@ async function toggleCamera() {
     }
 }
 
-function updateCameraUI(active) {
+function updateCameraUI(active, ready = APP.cameraReady) {
     // 1. Update Joystick / Teleop page controls
     const ind = document.getElementById('camera-status-indicator');
     const text = document.getElementById('camera-status-text');
@@ -2737,16 +2766,29 @@ function updateCameraUI(active) {
 
     if (ind && text && btn) {
         if (active) {
-            ind.style.background = 'var(--success)';
-            ind.style.boxShadow = '0 0 8px var(--success)';
-            text.innerHTML = 'USB CAMERA: <span style="color:var(--success)">ONLINE</span>';
-            if (sub) sub.textContent = 'Stream /camera/image_raw/compressed aktif';
-            btn.className = 'btn btn-sm btn-danger';
-            btn.innerHTML = '🛑 Stop Kamera';
-            if (lbl) lbl.textContent = 'LIVE TELEOP VIEW';
+            if (ready) {
+                ind.style.background = 'var(--success)';
+                ind.style.boxShadow = '0 0 8px var(--success)';
+                ind.style.animation = 'none';
+                text.innerHTML = 'USB CAMERA: <span style="color:var(--success)">🟢 ONLINE (STREAMING)</span>';
+                if (sub) sub.textContent = 'Stream /camera/image_raw/compressed aktif';
+                btn.className = 'btn btn-sm btn-danger';
+                btn.innerHTML = '🛑 Stop Kamera';
+                if (lbl) lbl.textContent = 'LIVE TELEOP VIEW';
+            } else {
+                ind.style.background = 'var(--warning)';
+                ind.style.boxShadow = '0 0 10px var(--warning)';
+                ind.style.animation = 'pulse-dot 1s infinite';
+                text.innerHTML = 'USB CAMERA: <span style="color:var(--warning)">⏳ MEMBUKA STREAM...</span>';
+                if (sub) sub.textContent = 'Menghubungkan device /dev/video0 & inisialisasi stream...';
+                btn.className = 'btn btn-sm btn-warning';
+                btn.innerHTML = '⏳ Menyiapkan...';
+                if (lbl) lbl.textContent = 'OPENING CAMERA...';
+            }
         } else {
             ind.style.background = 'var(--text-muted)';
             ind.style.boxShadow = 'none';
+            ind.style.animation = 'none';
             text.innerHTML = 'USB CAMERA: <span style="color:var(--text-muted)">OFFLINE</span>';
             if (sub) sub.textContent = 'Nyalakan kamera untuk melihat video real-time';
             btn.className = 'btn btn-sm btn-success';
@@ -2762,15 +2804,27 @@ function updateCameraUI(active) {
     const pageBtn = document.getElementById('cam-page-toggle-btn');
     if (pageInd && pageText && pageBtn) {
         if (active) {
-            pageInd.style.background = 'var(--success)';
-            pageInd.style.boxShadow = '0 0 8px var(--success)';
-            pageText.innerHTML = 'USB CAMERA: <span style="color:var(--success)">ONLINE</span>';
-            if (pageSub) pageSub.textContent = 'Hardware kamera & publisher terhubung';
-            pageBtn.className = 'btn btn-sm btn-danger';
-            pageBtn.innerHTML = '🛑 Stop Kamera';
+            if (ready) {
+                pageInd.style.background = 'var(--success)';
+                pageInd.style.boxShadow = '0 0 8px var(--success)';
+                pageInd.style.animation = 'none';
+                pageText.innerHTML = 'USB CAMERA: <span style="color:var(--success)">🟢 ONLINE (STREAMING)</span>';
+                if (pageSub) pageSub.textContent = 'Hardware kamera & publisher terhubung';
+                pageBtn.className = 'btn btn-sm btn-danger';
+                pageBtn.innerHTML = '🛑 Stop Kamera';
+            } else {
+                pageInd.style.background = 'var(--warning)';
+                pageInd.style.boxShadow = '0 0 10px var(--warning)';
+                pageInd.style.animation = 'pulse-dot 1s infinite';
+                pageText.innerHTML = 'USB CAMERA: <span style="color:var(--warning)">⏳ MEMBUKA STREAM...</span>';
+                if (pageSub) pageSub.textContent = 'Menghubungkan device /dev/video0 & inisialisasi stream...';
+                pageBtn.className = 'btn btn-sm btn-warning';
+                pageBtn.innerHTML = '⏳ Menyiapkan...';
+            }
         } else {
             pageInd.style.background = 'var(--text-muted)';
             pageInd.style.boxShadow = 'none';
+            pageInd.style.animation = 'none';
             pageText.innerHTML = 'USB CAMERA: <span style="color:var(--text-muted)">OFFLINE</span>';
             if (pageSub) pageSub.textContent = 'Hardware kamera standby';
             pageBtn.className = 'btn btn-sm btn-success';
@@ -2825,7 +2879,8 @@ async function toggleHumanAwareness() {
             const res = await apiPost('/api/human/stop', {});
             if (res && res.success) {
                 APP.humanNodeActive = false;
-                updateHumanAwarenessUI(false);
+                APP.humanNodeReady = false;
+                updateHumanAwarenessUI(false, false);
                 ['camera-feed-canvas', 'teleop-cam-canvas', 'cockpit-cam-canvas'].forEach(id => {
                     const c = document.getElementById(id);
                     if (c) {
@@ -2838,14 +2893,15 @@ async function toggleHumanAwareness() {
                 showToast(res ? (res.error || res.message) : 'Gagal menghentikan Human AI', 'error');
             }
         } else {
-            showToast('Menjalankan Human Awareness AI...', 'info');
+            showToast('Menjalankan Human Awareness AI... Memuat model YOLO ke GPU (~5-10 detik)...', 'info');
             const res = await apiPost('/api/human/start', {});
             if (res && res.success) {
                 APP.humanNodeActive = true;
+                APP.humanNodeReady = !!res.ready;
                 APP.cameraActive = true;
-                updateCameraUI(true);
-                updateHumanAwarenessUI(true);
-                showToast('Human Awareness AI aktif! Kamera & YOLO berjalan.', 'success');
+                updateCameraUI(true, APP.cameraReady);
+                updateHumanAwarenessUI(true, APP.humanNodeReady);
+                showToast(APP.humanNodeReady ? 'Human Awareness AI aktif & mendeteksi!' : 'Human AI diluncurkan! Menunggu proses load model neural network ke Jetson GPU...', 'info');
             } else {
                 showToast(res ? (res.error || res.message) : 'Gagal menjalankan Human AI', 'error');
             }
@@ -2860,7 +2916,7 @@ async function toggleHumanAwareness() {
     }
 }
 
-function updateHumanAwarenessUI(active) {
+function updateHumanAwarenessUI(active, ready = APP.humanNodeReady) {
     const ind = document.getElementById('human-node-status-indicator');
     const text = document.getElementById('human-node-status-text');
     const sub = document.getElementById('human-node-sub-text');
@@ -2868,15 +2924,27 @@ function updateHumanAwarenessUI(active) {
 
     if (ind && text && btn) {
         if (active) {
-            ind.style.background = 'var(--success)';
-            ind.style.boxShadow = '0 0 8px var(--success)';
-            text.innerHTML = 'HUMAN AI NODE: <span style="color:var(--success)">RUNNING</span>';
-            if (sub) sub.textContent = 'Deteksi YOLO & estimasi jarak aktif (/human_info)';
-            btn.className = 'btn btn-sm btn-danger';
-            btn.innerHTML = '🛑 Stop Human AI';
+            if (ready) {
+                ind.style.background = 'var(--success)';
+                ind.style.boxShadow = '0 0 8px var(--success)';
+                ind.style.animation = 'none';
+                text.innerHTML = 'HUMAN AI NODE: <span style="color:var(--success)">🟢 ACTIVE &amp; DETECTING</span>';
+                if (sub) sub.textContent = 'Deteksi YOLO & estimasi jarak aktif (/human_info)';
+                btn.className = 'btn btn-sm btn-danger';
+                btn.innerHTML = '🛑 Stop Human AI';
+            } else {
+                ind.style.background = 'var(--warning)';
+                ind.style.boxShadow = '0 0 10px var(--warning)';
+                ind.style.animation = 'pulse-dot 1s infinite';
+                text.innerHTML = 'HUMAN AI NODE: <span style="color:var(--warning)">⏳ MEMUAT MODEL AI (YOLO)...</span>';
+                if (sub) sub.textContent = 'Inisialisasi model neural network ke GPU Jetson (~5-10 detik)...';
+                btn.className = 'btn btn-sm btn-warning';
+                btn.innerHTML = '⏳ Memuat YOLO...';
+            }
         } else {
             ind.style.background = 'var(--text-muted)';
             ind.style.boxShadow = 'none';
+            ind.style.animation = 'none';
             text.innerHTML = 'HUMAN AI NODE: <span style="color:var(--text-muted)">STOPPED</span>';
             if (sub) sub.textContent = 'Tes deteksi manusia mandiri tanpa perlu navigasi';
             btn.className = 'btn btn-sm btn-primary';
@@ -4090,8 +4158,13 @@ async function globalStatusPoll() {
         }
 
         if (data.hasOwnProperty('arduino_active')) {
+            const wasReady = APP.arduinoReady;
             APP.arduinoActive = !!data.arduino_active;
-            updateArduinoBridgeUI(APP.arduinoActive);
+            APP.arduinoReady = APP.arduinoActive && !!data.arduino_ready;
+            updateArduinoBridgeUI(APP.arduinoActive, APP.arduinoReady);
+            if (!wasReady && APP.arduinoReady) {
+                showToast('🟢 Arduino Bridge siap! Hardware encoder & serial terverifikasi.', 'success');
+            }
         }
 
         if (data.hasOwnProperty('nav_active')) {
@@ -4105,13 +4178,31 @@ async function globalStatusPoll() {
         }
 
         if (data.hasOwnProperty('camera_active')) {
+            const wasReady = APP.cameraReady;
             APP.cameraActive = !!data.camera_active;
-            updateCameraUI(APP.cameraActive);
+            APP.cameraReady = APP.cameraActive && !!data.camera_ready;
+            updateCameraUI(APP.cameraActive, APP.cameraReady);
+            if (!wasReady && APP.cameraReady) {
+                showToast('🟢 Kamera USB siap! Stream video aktif.', 'success');
+                const ts = Date.now();
+                ['teleop-cam-img', 'camera-feed', 'cockpit-cam-img', 'split-cam-img'].forEach(id => {
+                    const img = document.getElementById(id);
+                    if (img) {
+                        img.src = '/api/camera/stream?t=' + ts;
+                        img.style.display = 'block';
+                    }
+                });
+            }
         }
 
         if (data.hasOwnProperty('human_node_active')) {
+            const wasReady = APP.humanNodeReady;
             APP.humanNodeActive = !!data.human_node_active;
-            updateHumanAwarenessUI(APP.humanNodeActive);
+            APP.humanNodeReady = APP.humanNodeActive && !!data.human_node_ready;
+            updateHumanAwarenessUI(APP.humanNodeActive, APP.humanNodeReady);
+            if (!wasReady && APP.humanNodeReady) {
+                showToast('🟢 Human Awareness AI siap! Model YOLO aktif mendeteksi.', 'success');
+            }
         }
 
         if (data.human_info) {
@@ -4579,26 +4670,40 @@ async function init() {
     startLiveClock();
     applyTheme(getTheme(), true);
 
-    await fetchModeState();
-
-    const pointsData = await apiGet('/api/saved_points');
-    if (pointsData) {
-        APP.savedPoints = pointsData.points || APP.savedPoints;
-        APP.homePosition = pointsData.home || APP.homePosition;
-        if (pointsData.mode) APP.mode = pointsData.mode;
-        if (pointsData.map_file) APP.mapFile = pointsData.map_file;
-        updateTopbarModeButton();
-    }
-
-    const settingsData = await apiGet('/api/settings');
-    if (settingsData) {
-        APP.settings = settingsData;
-        if (!localStorage.getItem('amr_theme') && settingsData.theme) {
-            applyTheme(settingsData.theme, true);
-        }
-    }
-
+    // 1. Langsung render halaman Overview seketika agar tidak blank saat pertama buka / refresh
     navigateTo('home');
+
+    // 2. Muat konfigurasi awal di background
+    try {
+        await fetchModeState();
+    } catch (e) {
+        console.warn('fetchModeState error:', e);
+    }
+
+    try {
+        const pointsData = await apiGet('/api/saved_points');
+        if (pointsData) {
+            APP.savedPoints = pointsData.points || APP.savedPoints;
+            APP.homePosition = pointsData.home || APP.homePosition;
+            if (pointsData.mode) APP.mode = pointsData.mode;
+            if (pointsData.map_file) APP.mapFile = pointsData.map_file;
+            updateTopbarModeButton();
+        }
+    } catch (e) {
+        console.warn('saved_points error:', e);
+    }
+
+    try {
+        const settingsData = await apiGet('/api/settings');
+        if (settingsData) {
+            APP.settings = settingsData;
+            if (!localStorage.getItem('amr_theme') && settingsData.theme) {
+                applyTheme(settingsData.theme, true);
+            }
+        }
+    } catch (e) {
+        console.warn('settings error:', e);
+    }
 
     globalStatusPoll();
     APP._lastPollTime = 0;

@@ -8,3 +8,6 @@ simulation/
 Dokumen_C3_Metode_Perancangan_Template_Rev11(3).md
 .env
 *.env
+__pycache__/
+*.py[cod]
+*$py.class
