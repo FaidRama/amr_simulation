@@ -4670,26 +4670,40 @@ async function init() {
     startLiveClock();
     applyTheme(getTheme(), true);
 
-    await fetchModeState();
-
-    const pointsData = await apiGet('/api/saved_points');
-    if (pointsData) {
-        APP.savedPoints = pointsData.points || APP.savedPoints;
-        APP.homePosition = pointsData.home || APP.homePosition;
-        if (pointsData.mode) APP.mode = pointsData.mode;
-        if (pointsData.map_file) APP.mapFile = pointsData.map_file;
-        updateTopbarModeButton();
-    }
-
-    const settingsData = await apiGet('/api/settings');
-    if (settingsData) {
-        APP.settings = settingsData;
-        if (!localStorage.getItem('amr_theme') && settingsData.theme) {
-            applyTheme(settingsData.theme, true);
-        }
-    }
-
+    // 1. Langsung render halaman Overview seketika agar tidak blank saat pertama buka / refresh
     navigateTo('home');
+
+    // 2. Muat konfigurasi awal di background
+    try {
+        await fetchModeState();
+    } catch (e) {
+        console.warn('fetchModeState error:', e);
+    }
+
+    try {
+        const pointsData = await apiGet('/api/saved_points');
+        if (pointsData) {
+            APP.savedPoints = pointsData.points || APP.savedPoints;
+            APP.homePosition = pointsData.home || APP.homePosition;
+            if (pointsData.mode) APP.mode = pointsData.mode;
+            if (pointsData.map_file) APP.mapFile = pointsData.map_file;
+            updateTopbarModeButton();
+        }
+    } catch (e) {
+        console.warn('saved_points error:', e);
+    }
+
+    try {
+        const settingsData = await apiGet('/api/settings');
+        if (settingsData) {
+            APP.settings = settingsData;
+            if (!localStorage.getItem('amr_theme') && settingsData.theme) {
+                applyTheme(settingsData.theme, true);
+            }
+        }
+    } catch (e) {
+        console.warn('settings error:', e);
+    }
 
     globalStatusPoll();
     APP._lastPollTime = 0;
