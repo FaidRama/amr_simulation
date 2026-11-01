@@ -69,6 +69,10 @@ class MapGeometricEvaluator:
             self.metadata = yaml.safe_load(f) or {}
 
         self.resolution = float(self.metadata.get('resolution', 0.05))
+        self.origin = self.metadata.get('origin', [0.0, 0.0, 0.0])
+        self.origin_x = float(self.origin[0])
+        self.origin_y = float(self.origin[1])
+
         img_filename = self.metadata.get('image', '')
         self.image_path = os.path.join(self.map_dir, img_filename)
         if not os.path.exists(self.image_path):
@@ -82,6 +86,12 @@ class MapGeometricEvaluator:
         pil_img = Image.open(self.image_path)
         self.map_img = np.array(pil_img)
         self.img_h, self.img_w = self.map_img.shape[:2]
+
+    def pixel_to_map_coords(self, px, py):
+        """Konversi koordinat piksel gambar ke koordinat ROS 2 map frame (meter)."""
+        x_m = self.origin_x + px * self.resolution
+        y_m = self.origin_y + (self.img_h - 1 - py) * self.resolution
+        return x_m, y_m
 
     def run(self):
         """Menjalankan interface interaktif Matplotlib."""
@@ -97,6 +107,13 @@ class MapGeometricEvaluator:
         )
         self.ax.set_xlabel("Piksel X")
         self.ax.set_ylabel("Piksel Y")
+
+        # Format koordinat kursor di toolbar status bar Matplotlib
+        self.ax.format_coord = lambda px, py: (
+            f"Piksel: ({px:.1f}, {py:.1f}) | "
+            f"Map Frame: X={self.origin_x + px * self.resolution:+.3f}m, "
+            f"Y={self.origin_y + (self.img_h - 1 - py) * self.resolution:+.3f}m"
+        )
 
         # Hubungkan event mouse & keyboard
         self.cid_click = self.fig.canvas.mpl_connect('button_press_event', self.on_click)
@@ -121,7 +138,8 @@ class MapGeometricEvaluator:
             pt = self.ax.plot(x, y, 'ro', markersize=6)[0]
             self.temp_artist.append(pt)
             self.fig.canvas.draw_idle()
-            print(f"\n[*] Titik 1 terpilih pada piksel ({x:.1f}, {y:.1f}). Sekarang KLIK TITIK 2...")
+            x_m, y_m = self.pixel_to_map_coords(x, y)
+            print(f"\n[*] Titik 1 terpilih: Piksel ({x:.1f}, {y:.1f}) | Map Frame: (X={x_m:+.3f}m, Y={y_m:+.3f}m). Sekarang KLIK TITIK 2...")
 
         # Titik kedua -> Hitung jarak & konfirmasi terminal
         elif len(self.current_points) == 2:
@@ -149,10 +167,14 @@ class MapGeometricEvaluator:
             self.temp_artist.extend([line, pt, txt])
             self.fig.canvas.draw_idle()
 
+            x1_m, y1_m = self.pixel_to_map_coords(pt1[0], pt1[1])
+            x2_m, y2_m = self.pixel_to_map_coords(pt2[0], pt2[1])
+
             print("-" * 75)
             print(f"[🎯 LANDMARK #{idx} TERPILIH]:")
-            print(f"  • Koordinat Piksel : ({pt1[0]:.1f}, {pt1[1]:.1f}) -> ({pt2[0]:.1f}, {pt2[1]:.1f})")
-            print(f"  • Panjang di Peta  : {dist_px:.2f} px  x  {self.resolution:.4f} m/px = {dist_m:.4f} meter ({dist_m*100:.2f} cm)")
+            print(f"  • Koordinat Piksel    : ({pt1[0]:.1f}, {pt1[1]:.1f}) -> ({pt2[0]:.1f}, {pt2[1]:.1f})")
+            print(f"  • Koordinat Map Frame : (X={x1_m:+.3f}m, Y={y1_m:+.3f}m) -> (X={x2_m:+.3f}m, Y={y2_m:+.3f}m)")
+            print(f"  • Panjang di Peta     : {dist_px:.2f} px  x  {self.resolution:.4f} m/px = {dist_m:.4f} meter ({dist_m*100:.2f} cm)")
             print("-" * 75)
 
             # Input interaktif di terminal
