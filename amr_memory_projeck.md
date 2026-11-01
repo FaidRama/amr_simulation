@@ -497,6 +497,41 @@ Karena `amr_dashboard.service` berjalan terus-menerus di memori OS:
   - **Wajib menjalankan `ros2 daemon stop`** di terminal laptop dan Jetson.
   - Jika tidak di-stop, perintah `ros2 node list` di terminal akan terus membaca cache lama dan gagal mendeteksi node dari perangkat lain.
 
+---
 
+## 📌 18. Alat Evaluasi Skripsi Bab 4: Pengukuran Peta 2D & Uji AMCL
 
+Kedua skrip berikut sempat terhapus saat *merge* Git terdahulu dan kini telah dipulihkan secara penuh di folder `src/amr_simulation/scripts/`:
 
+### 1. Tool Pengukuran Akurasi Geometris Peta 2D (`ukur_peta_skripsi.py`)
+- **Lokasi File**: [`src/amr_simulation/scripts/ukur_peta_skripsi.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/ukur_peta_skripsi.py)
+- **Tujuan (Skenario 1)**: Menguji akurasi geometris rekonstruksi peta SLAM Toolbox terhadap *ground truth* fisik yang diukur manual menggunakan meteran pita baja.
+- **Metrik Kelulusan**:
+  - $RMSE \le 0.05\text{ m}$ ($5\text{ cm}$)
+  - $\text{Galat Skala (Scale Error)} \le 2.0\%$
+- **Fitur Interaktif (Matplotlib GUI)**:
+  - Zoom & Pan menggunakan toolbar visual.
+  - Klik kiri 2 kali pada peta: Titik A (awal landmark) dan Titik B (akhir landmark).
+  - Terminal interaktif: masukkan Nama Landmark dan Ukuran Nyata Meteran ($D_{\text{nyata}}$).
+  - Keyboard shortcut: `'U'` untuk Undo landmark terakhir jika salah klik, `'S'` atau klik tombol untuk simpan hasil.
+  - Output otomatis: Tabel hasil CSV (siap ke Word/Excel) dan gambar peta beranotasi PNG disimpan di `~/benchmark_skripsi_results/evaluasi_peta/`.
+- **Cara Menjalankan**:
+  ```bash
+  # Mengukur peta default atau peta terbaru peta_l1_dc:
+  python3 src/amr_simulation/scripts/ukur_peta_skripsi.py --map src/amr_simulation/maps/peta_l1_dc.yaml
+  ```
+
+### 2. Tool Evaluasi Pelacakan Posisi Partikel AMCL (`uji_amcl_skripsi.py`)
+- **Lokasi File**: [`src/amr_simulation/scripts/uji_amcl_skripsi.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/uji_amcl_skripsi.py)
+- **Tujuan (Skenario 2)**: Mengevaluasi keandalan filter partikel Nav2 AMCL dalam menentukan pose absolut robot $(x, y, \theta)$ di atas peta tersimpan.
+- **Metrik Kelulusan**:
+  - 5 kali pengulangan pada 5 titik datum (Total 25 kali pengujian).
+  - Waktu Konvergensi: $t_{\text{conv}} \le 10.0\text{ s}$ ($\sigma_x \le 0.05\text{ m}$, $\sigma_y \le 0.05\text{ m}$, $\sigma_\theta \le 0.05\text{ rad}$).
+  - Rata-rata Galat Posisi: $e_{\text{pos}} \le 0.05\text{ m}$ ($5\text{ cm}$).
+  - Rata-rata Galat Orientasi: $e_\theta \le 3.0^\circ$.
+- **Output**:
+  - Disimpan otomatis ke CSV di `~/hasil_pengujian_skripsi/skenario2_evaluasi_amcl.csv`.
+- **Cara Menjalankan**:
+  ```bash
+  python3 src/amr_simulation/scripts/uji_amcl_skripsi.py
+  ```
