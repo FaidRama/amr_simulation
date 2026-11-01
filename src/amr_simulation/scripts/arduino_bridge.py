@@ -95,7 +95,7 @@ class ArduinoBridgeNode(Node):
         # dengan interval wajar. Sebelum siap: perintah gerak diblok (motor dipaksa 0).
         self.declare_parameter('ready_packet_count', 10)       # 10 paket @20Hz ~ 0.5 detik stabil
         self.declare_parameter('enc_stream_timeout', 0.5)      # >0.5s tanpa ENC -> stream hilang
-        self.declare_parameter('enc_startup_timeout', 3.5)     # >3.5s tanpa ENC -> Auto-Reset USB (cabut-colok)
+        self.declare_parameter('enc_startup_timeout', 10.0)    # >10s tanpa ENC (setelah bootloader) -> Auto-Reset USB
         self.declare_parameter('max_ticks_per_packet', 500)    # lompatan tick tak wajar -> resync baseline
         self.ready_packet_count = int(self.get_parameter('ready_packet_count').value)
         self.enc_stream_timeout = float(self.get_parameter('enc_stream_timeout').value)
@@ -263,11 +263,31 @@ class ArduinoBridgeNode(Node):
             self.get_logger().info(
                 f"🔌 Melakukan Auto-Reset USB Kernel ({usb_path} untuk {self.port}) setara cabut-colok fisik..."
             )
-            fd = os.open(usb_path, os.O_WRONLY)
+            # Coba buka device USB. Jika Permission denied, coba izinkan via sudo -n
+            fd = None
+            try:
+                fd = os.open(usb_path, os.O_WRONLY)
+            except PermissionError:
+                try:
+                    subprocess.run(
+                        ['sudo', '-n', 'chmod', '666', usb_path],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                    fd = os.open(usb_path, os.O_WRONLY)
+                except Exception:
+                    self.get_logger().warn(
+                        f"⚠️ Izin akses USB ke {usb_path} dibatasi Linux. "
+                        f"Agar auto-reset USB aktif tanpa password, jalankan sekali di terminal Jetson:\n"
+                        f"   echo 'SUBSYSTEM==\"usb\", ATTRS{{idVendor}}==\"2341\", MODE=\"0666\"' | sudo tee /etc/udev/rules.d/99-arduino-usb.rules && sudo udevadm control --reload-rules && sudo udevadm trigger"
+                    )
+                    return False
+
             try:
                 fcntl.ioctl(fd, USBDEVFS_RESET, 0)
             finally:
-                os.close(fd)
+                if fd is not None:
+                    os.close(fd)
             self.get_logger().info("✅ Sinyal USB Reset terkirim ke hardware. Menunggu re-enumerasi udev...")
         except Exception as e:
             self.get_logger().warn(f"⚠️ Gagal ioctl USBDEVFS_RESET pada {usb_path}: {e}")
@@ -319,21 +339,19 @@ class ArduinoBridgeNode(Node):
             # 1. Hardware auto-reset via DTR/RTS pulse (persis seperti saat kabel dicopot-pasang)
             self.ser.dtr = False
             self.ser.rts = False
-            time.sleep(0.05)
+            time.sleep(0.1)
+            # WAJIB: DTR dan RTS dibiarkan True (asserted) agar chip USB (16U2/CH340) tahu host siap membaca stream data
             self.ser.dtr = True
             self.ser.rts = True
-            time.sleep(0.05)
-            self.ser.dtr = False
-            self.ser.rts = False
-            # 2. Beri waktu bootloader Optiboot Arduino Uno selesai (~1.6 detik)
-            time.sleep(1.6)
+            # 2. Beri waktu bootloader Optiboot Arduino Uno selesai (~1.8 detik)
+            time.sleep(1.8)
             # 3. Bersihkan buffer sisa bootloader & kirim heartbeat nol
             self.ser.reset_input_buffer()
             self.ser.reset_output_buffer()
             self.ser.write(b"V,0.0,0.0\n")
             self.connect_wall = time.time()
             self.last_reconnect_time = self.get_clock().now()
-            self.get_logger().info(f"✅ Berhasil terhubung ke Arduino di {self.port} (DTR reset OK) -> menunggu stream ENC...")
+            self.get_logger().info(f"✅ Berhasil terhubung ke Arduino di {self.port} (DTR=True aktif) -> menunggu stream ENC...")
         except Exception as e:
             self.get_logger().warn(f"⚠️ Menunggu koneksi port Arduino {self.port} ({e})")
             self.ser = None

@@ -245,14 +245,24 @@ Navigasi dijalankan saat log Arduino baru sampai `Arduino Bridge PID aktif`, bel
 
 ### Solusi:
 1. **[`arduino_bridge.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/arduino_bridge.py)**:
-   - **Auto-Reset USB Kernel (`USBDEVFS_RESET` = 21780)**: Mengadopsi mekanisme yang sama persis seperti pada [`rplidar_bridge.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/rplidar_bridge.py). Jika port serial / endpoint USB Arduino macet (tidak ada data ENC masuk dalam 3.5 detik), node secara otomatis memicu `ioctl(fd, USBDEVFS_RESET, 0)` ke `/dev/bus/usb/BBB/DDD`. Ini setara **cabut-colok kabel fisik secara hardware** via kernel Linux tanpa perlu menyentuh kabel secara manual!
+   - **Auto-Reset USB Kernel (`USBDEVFS_RESET` = 21780)**: Mengadopsi mekanisme yang sama seperti pada [`rplidar_bridge.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/rplidar_bridge.py). Jika endpoint USB macet, node memicu ioctl reset ke `/dev/bus/usb/BBB/DDD`.
+     > **PENTING (Izin Linux `/dev/bus/usb`)**: Agar auto-reset USB dapat diakses user biasa (`jetson`) tanpa sandi sudo, pasang udev rule di Jetson:
+     > ```bash
+     > echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="2341", MODE="0666"' | sudo tee /etc/udev/rules.d/99-arduino-usb.rules && sudo udevadm control --reload-rules && sudo udevadm trigger
+     > ```
    - **Pembersihan Proses Yatim (`kill_other_instances`)**: Memastikan tidak ada proses `arduino_bridge.py` hantu yang menahan file descriptor `/dev/arduino`.
-   - **Perbaikan DTR/RTS Pulse**: DTR dinonaktifkan (`dtr=False`) setelah pulsa reset agar tidak menahan sinyal kontrol aliran (flow control) atau pin reset ATmega328P.
+   - **DTR/RTS Pulse Wajib Asserted (`dtr=True`, `rts=True`)**:
+     - Di Arduino Uno resmi (ATmega16U2 CDC-ACM), DTR adalah penanda koneksi terminal.
+     - Jika DTR di-set `False`, firmware 16U2 menganggap host tidak membaca dan **TIDAK MENGIRIMKAN stream data CDC ke Linux**!
+     - DTR hanya diturunkan sesaat (`dtr=False; sleep 0.1`) lalu **WAJIB dibiarkan `True`** (`dtr=True`, `rts=True`).
+   - **Tenggat Inisialisasi Bootloader (`enc_startup_timeout: 10.0s`)**:
+     - Bootloader Optiboot pada ATmega328P membutuhkan waktu ~1.8 detik saat baru dinyalakan/reset sebelum program utama Arduino mulai mengirim paket `ENC:`.
+     - Timeout watchdog startup diatur ke 10.0 detik agar tidak terjadi false-positive reset berulang (*infinite reboot loop*).
    - **Encoder Verification Gate**: Encoder dianggap SIAP setelah **10 paket ENC valid berturut-turut** (`ready_packet_count`), diumumkan `🟢 [ENCODER SIAP]` dan di-publish ke **`/arduino/ready`** (`std_msgs/Bool`, transient local).
    - Sebelum siap: `/cmd_vel` dipaksa 0 (`⛔ /cmd_vel diabaikan`).
    - Baris rusak hanya dihitung (`bad_line_count`), tidak memicu reconnect.
    - Baseline tick di-reset setiap (re)connect; lompatan > `max_ticks_per_packet` (500) -> resync, paket diabaikan.
-   - Watchdog: tidak ada ENC > 0.5 s -> tidak siap + motor stop; tidak ada ENC > 3.5 s (atau sejak connect) -> Auto-Reset USB kernel (`USBDEVFS_RESET`) + connect ulang.
+   - Watchdog: tidak ada ENC > 0.5 s -> tidak siap + motor stop; tidak ada ENC > 10.0 s saat startup (atau > 5.0 s saat running) -> reconnect.
 2. **[`adaptive_velocity_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/adaptive_velocity_node.py)**:
    - `encoder_ok` = `/arduino/ready == True` dan `/odom` mengalir (< 1 s).
    - Auto `/initialpose`, pengumuman `🟢 [SIAP NAVIGASI]`, dan output `/cmd_vel_safe` semuanya menunggu `encoder_ok`.
