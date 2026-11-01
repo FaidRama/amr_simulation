@@ -185,8 +185,6 @@ class UnifiedBenchmarkNode(Node):
 
         try:
             loop_count = 0
-        try:
-            loop_count = 0
             while (time.time() - start_time) < duration_sec:
                 t_now = time.time() - start_time
                 self.send_cmd(v_target, 0.0)
