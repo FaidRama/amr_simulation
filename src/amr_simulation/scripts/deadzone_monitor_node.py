@@ -27,9 +27,10 @@ class DeadzoneMonitorNode(Node):
     def __init__(self):
         super().__init__('deadzone_monitor_node')
 
+        default_output = os.path.join(os.getcwd(), 'data_deadzone')
         self.declare_parameter('port', '/dev/ttyACM0')
         self.declare_parameter('baudrate', 115200)
-        self.declare_parameter('output_dir', os.path.expanduser('~/Documents/amr_ws/data_deadzone'))
+        self.declare_parameter('output_dir', default_output)
 
         self.port = self.get_parameter('port').value
         self.baud = self.get_parameter('baudrate').value
@@ -174,7 +175,7 @@ class DeadzoneMonitorNode(Node):
                     # Menampilkan pesan teks / log info dari Arduino
                     if line.startswith('#'):
                         print(f"\033[96m{line}\033[0m")
-                        if "SELESAI" in line or "STOP" in line:
+                        if "PENGUJIAN SELESAI" in line or "# [STOP]" in line:
                             self.close_csv()
                         continue
 

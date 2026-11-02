@@ -24,15 +24,24 @@ def get_latest_csv(folder):
 
 
 def main():
-    default_dir = os.path.expanduser('~/Documents/amr_ws/data_deadzone')
+    candidate_dirs = [
+        os.path.join(os.getcwd(), 'data_deadzone'),
+        os.path.expanduser('~/deliver_amr/data_deadzone'),
+        os.path.expanduser('~/Documents/amr_ws/data_deadzone')
+    ]
 
+    csv_path = None
     if len(sys.argv) > 1:
         csv_path = sys.argv[1]
     else:
-        csv_path = get_latest_csv(default_dir)
+        for folder in candidate_dirs:
+            if os.path.exists(folder):
+                csv_path = get_latest_csv(folder)
+                if csv_path:
+                    break
 
     if not csv_path or not os.path.exists(csv_path):
-        print(f"❌ File CSV tidak ditemukan di {default_dir}!")
+        print("❌ File CSV tidak ditemukan di direktori data_deadzone!")
         print("Jalankan pengujian terlebih dahulu dengan deadzone_monitor_node.py.")
         return
 
