@@ -143,6 +143,37 @@ class EvaluasiAMCLNode(Node):
 
         self.get_logger().info("✅ Node Evaluasi AMCL Skripsi Siap (Mode Default: POSE TRACKING).")
 
+    def amcl_callback(self, msg: PoseWithCovarianceStamped):
+        p = msg.pose.pose.position
+        q = msg.pose.pose.orientation
+        yaw = euler_from_quaternion(q)
+
+        cov = msg.pose.covariance
+        # Indeks matriks kovariansi 6x6:
+        # [0] = var(x), [7] = var(y), [35] = var(yaw)
+        var_x = max(0.0, float(cov[0]))
+        var_y = max(0.0, float(cov[7]))
+        var_yaw = max(0.0, float(cov[35]))
+
+        self.current_pose = {'x': float(p.x), 'y': float(p.y), 'yaw': yaw}
+        self.covariance = cov
+        self.sigma_x = math.sqrt(var_x)
+        self.sigma_y = math.sqrt(var_y)
+        self.sigma_yaw = math.sqrt(var_yaw)
+        self.last_amcl_time = time.time()
+        self.has_amcl_data = True
+
+    def send_cmd(self, linear_x: float, angular_z: float):
+        cmd = Twist()
+        cmd.linear.x = float(linear_x)
+        cmd.angular.z = float(angular_z)
+        self.cmd_pub.publish(cmd)
+
+    def stop_robot(self):
+        for _ in range(5):
+            self.send_cmd(0.0, 0.0)
+            time.sleep(0.02)
+
     def send_initial_pose(self, x: float, y: float, yaw_rad: float, cov_xy: float = 0.09, cov_yaw: float = 0.068):
         """
         Kirim perkiraan pose awal ke AMCL untuk inisialisasi partikel lokal (Pose Tracking).
