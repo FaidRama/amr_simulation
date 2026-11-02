@@ -56,7 +56,10 @@ Pohon koordinat TF robot telah **dikunci mati** mengikuti standar ROS REP 105:
 
 ---
 
-## 📌 3. Driver RPLiDAR A1 & Anti-Macet USB/Serial
+## 📌 3. Driver RPLiDAR A1 & Anti-Macet USB/Serial (DIKUNCI PERMANEN - JANGAN DIUBAH LAGI)
+
+> [!CAUTION]
+> **STATUS DIKUNCI MATI (FROZEN)**: `rplidar_bridge.py` telah teruji 100% stabil, sehat, dan handal di Jetson. **DILARANG KERAS** mengutak-atik, mengubah alur serial, membalik polaritas DTR, atau menambah logika coba-coba pada file ini lagi! (Lihat detail lengkap di Bagian 25).
 
 ### Masalah:
 - LiDAR sering macet di awal, me-restart setiap 6 detik, atau harus cabut-colok kabel USB fisik agar mau membaca port `/dev/rplidar` lagi (`OPERATION_TIMEOUT`).
@@ -789,3 +792,7 @@ Setelah itu, status AMCL tertahan di `AMCL ⏳` selamanya, dan percobaan auto-in
    - Jika stderr mencetak `RESULT_OPERATION_TIMEOUT` atau `Cannot start scan`, flag `self.driver_fatal_error = True` langsung memicu recovery pada detik berikutnya tanpa menunggu watchdog 15 detik.
 3. **Siklus Daya USB via `sysfs authorized` + `USBDEVFS_RESET`**:
    - Saat melakukan auto-reset USB kernel, `reset_usb_device()` terlebih dahulu mengubah `/sys/bus/usb/devices/.../authorized` ke `0` selama $2.0\text{ detik}$ lalu kembali ke `1` sebelum memanggil `ioctl(USBDEVFS_RESET)`.
+
+### 4. 🔒 STATUS KUNCI MUTLAK (FROZEN - JANGAN DIUBAH LAGI):
+- Status pengujian di hardware Jetson: **SEHAT 100% (Verifikasi Berhasil)**.
+- **ATURAN MUTLAK**: Script [`rplidar_bridge.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/rplidar_bridge.py) sudah berada pada kondisi final yang sangat stabil. **DILARANG KERAS** memodifikasi, mengotak-atik urutan baudrate, mengganti nilai `ser.dtr`, mengubah handler sinyal, atau menambah logika coba-coba pada `rplidar_bridge.py`. Kode ini dikunci permanen untuk proyek!
