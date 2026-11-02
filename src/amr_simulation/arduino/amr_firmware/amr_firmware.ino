@@ -42,11 +42,11 @@ const bool INVERT_ENC_R = true;
 // ====================== 3. PARAMETER FISIK ROBOT =========================
 const float WHEEL_DIAMETER = 0.127; // meter (5 inci = 0.127 meter)
 const float WHEEL_BASE_B = 0.458;   // meter (45.8 cm)
-const float CPR_WHEEL = 350.7;      // Ticks per revolusi PG36 (7 PPR * 50.1 gearbox)
+const float CPR_WHEEL = 350.7; // Ticks per revolusi PG36 (7 PPR * 50.1 gearbox)
 
 // ====================== 4. PARAMETER KENDALI PI TRIAL & ERROR ============
-const float KP_L = 0.9531, KI_L = 21.0829, KD_L = 0.0000;
-const float KP_R = 0.7861, KI_R = 23.2146, KD_R = 0.0000;
+const float KP_L = 2.0228, KI_L = 12.4980, KD_L = 0.0000;
+const float KP_R = 2.0475, KI_R = 12.1442, KD_R = 0.0000;
 
 const unsigned long SAMPLING_MS = 20;
 const float DT = SAMPLING_MS / 1000.0; // 0.02 s (50 Hz)
