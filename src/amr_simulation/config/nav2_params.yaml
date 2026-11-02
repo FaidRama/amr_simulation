@@ -145,16 +145,18 @@ controller_server:
           "Oscillation",
           "BaseObstacle",
           "PathAlign",
+          "GoalAlign",
           "PathDist",
           "GoalDist",
-        ]
+        ] 
 
-      BaseObstacle.scale: 3.0
-      PathAlign.scale: 1.5
+      BaseObstacle.scale: 0.05
+      GoalAlign.scale: 24.0
+      PathAlign.scale: 16.0
       PathAlign.forward_point_distance: 0.30
-      PathDist.scale: 6.0
-      GoalDist.scale: 12.0
-      RotateToGoal.scale: 10.0
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
       RotateToGoal.slowing_factor: 3.0
       RotateToGoal.lookahead_time: -1.0
       Oscillation.scale: 1.0
