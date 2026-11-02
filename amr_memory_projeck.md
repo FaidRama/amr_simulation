@@ -533,13 +533,21 @@ Kedua skrip berikut sempat terhapus saat *merge* Git terdahulu dan kini telah di
 ### 2. Tool Evaluasi Pelacakan Posisi Partikel AMCL (`uji_amcl_skripsi.py`)
 - **Lokasi File**: [`src/amr_simulation/scripts/uji_amcl_skripsi.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/uji_amcl_skripsi.py)
 - **Tujuan (Skenario 2)**: Mengevaluasi keandalan filter partikel Nav2 AMCL dalam menentukan pose absolut robot $(x, y, \theta)$ di atas peta tersimpan.
+- **Mode Pengujian Ganda (Baru)**:
+  1. **Mode 1: POSE TRACKING (Default / Rekomendasi Skripsi)**:
+     - Mengirim perkiraan pose awal `/initialpose` di sekitar titik datum fisik dengan sebaran partikel lokal Gaussian ($\sigma \approx 30\text{ cm}$, $\sigma_\theta \approx 15^\circ$).
+     - AMCL tidak menyebarkan partikel acak buta ke seberang ruangan/meja, sehingga bebas dari *perceptual aliasing* simetri ruangan dan mengunci posisi secara cepat & presisi saat robot berputar.
+  2. **Mode 2: GLOBAL LOCALIZATION (Kidnapped Robot)**:
+     - Menyebarkan 2000 partikel acak buta ke seluruh penjuru peta via `/reinitialize_global_localization`.
+- **Fitur Salin Pose Live AMCL (`'C'`)**:
+  - Pada menu `[4] Ubah Koordinat Ground Truth`, status pose AMCL real-time ditampilkan langsung di layar, dan pengguna cukup menekan `'C'` untuk menyalin koordinat aktual robot ke Datum 1-5 tanpa perlu mengetik angka manual.
 - **Metrik Kelulusan**:
   - 5 kali pengulangan pada 5 titik datum (Total 25 kali pengujian).
   - Waktu Konvergensi: $t_{\text{conv}} \le 10.0\text{ s}$ ($\sigma_x \le 0.05\text{ m}$, $\sigma_y \le 0.05\text{ m}$, $\sigma_\theta \le 0.05\text{ rad}$).
   - Rata-rata Galat Posisi: $e_{\text{pos}} \le 0.05\text{ m}$ ($5\text{ cm}$).
   - Rata-rata Galat Orientasi: $e_\theta \le 3.0^\circ$.
 - **Output**:
-  - Disimpan otomatis ke CSV di `~/hasil_pengujian_skripsi/skenario2_evaluasi_amcl.csv`.
+  - Disimpan otomatis ke CSV di `~/hasil_pengujian_skripsi/skenario2_evaluasi_amcl.csv` lengkap dengan kolom `Mode_Uji`.
 - **Cara Menjalankan**:
   ```bash
   python3 src/amr_simulation/scripts/uji_amcl_skripsi.py

@@ -9,19 +9,24 @@ Penulis : Divala Zahra Oktavia (Teknik Komputer UNNES 2026)
 Deskripsi:
   Mengevaluasi keandalan filter partikel AMCL dalam menentukan pose absolut robot
   (x, y, theta) di atas peta tersimpan (saved map):
-  1. Uji Waktu Konvergensi (Time-to-Converge, t_conv):
-     Menyebarkan partikel global (2000 partikel), robot berputar di tempat (w = 0.35 rad/s),
-     waktu dihitung hingga matriks kovariansi pada /amcl_pose menyusut di bawah ambang batas:
+  1. Mode Pengujian:
+     - Mode 1 (Utama Skripsi): POSE TRACKING
+       Menginisialisasi partikel lokal di sekitar datum via /initialpose (sebaran ±30 cm),
+       lalu mengukur waktu konvergensi dan galat saat robot berputar/melacak posisi.
+     - Mode 2: GLOBAL LOCALIZATION (Kidnapped Robot)
+       Menyebarkan 2000 partikel acak ke seluruh peta via /reinitialize_global_localization.
+  2. Uji Waktu Konvergensi (Time-to-Converge, t_conv):
+     Waktu dihitung hingga matriks kovariansi pada /amcl_pose menyusut di bawah ambang batas:
      sigma_x <= 0.05m, sigma_y <= 0.05m, sigma_theta <= 0.05 rad (~2.86°).
-  2. Uji Galat Posisi (e_pos) dan Orientasi (e_theta):
+  3. Uji Galat Posisi (e_pos) dan Orientasi (e_theta):
      e_pos   = sqrt((x_amcl - x_gt)^2 + (y_amcl - y_gt)^2)
      e_theta = |theta_amcl - theta_gt| (normalisasi [-pi, pi])
-  3. Kriteria Kelulusan:
+  4. Kriteria Kelulusan:
      - 5 kali pengulangan pada 5 titik datum (Total 25 kali pengujian)
      - t_conv <= 10.0 s
      - Rata-rata e_pos <= 0.05 m (5 cm)
      - Rata-rata e_theta <= 3.0°
-  4. Penyimpanan Hasil:
+  5. Penyimpanan Hasil:
      Tersimpan otomatis ke file CSV di ~/hasil_pengujian_skripsi/skenario2_evaluasi_amcl.csv
 =============================================================================
 """
@@ -94,8 +99,29 @@ class EvaluasiAMCLNode(Node):
             qos_amcl
         )
 
+        # Publisher /initialpose (Dual QoS: TRANSIENT_LOCAL & VOLATILE untuk Foxy)
+        qos_transient = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE
+        )
+        qos_volatile = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.VOLATILE,
+            reliability=ReliabilityPolicy.RELIABLE
+        )
+        self.initial_pose_pub_reliable = self.create_publisher(
+            PoseWithCovarianceStamped, '/initialpose', qos_transient
+        )
+        self.initial_pose_pub_volatile = self.create_publisher(
+            PoseWithCovarianceStamped, '/initialpose', qos_volatile
+        )
+
         # Service Client untuk memicu Global Localization (sebar 2000 partikel acak)
         self.global_loc_client = self.create_client(Empty, '/reinitialize_global_localization')
+
+        # Mode Pengujian: 'tracking' (Pose Tracking lokal) atau 'global' (Global Relocalization)
+        self.test_mode = 'tracking'
 
         # State AMCL Real-time
         self.current_pose = None
@@ -115,38 +141,37 @@ class EvaluasiAMCLNode(Node):
         self.datums = self.load_datum_config()
         self.ensure_csv_header()
 
-        self.get_logger().info("✅ Node Evaluasi AMCL Skripsi Siap.")
+        self.get_logger().info("✅ Node Evaluasi AMCL Skripsi Siap (Mode Default: POSE TRACKING).")
 
-    def amcl_callback(self, msg: PoseWithCovarianceStamped):
-        p = msg.pose.pose.position
-        q = msg.pose.pose.orientation
-        yaw = euler_from_quaternion(q)
+    def send_initial_pose(self, x: float, y: float, yaw_rad: float, cov_xy: float = 0.09, cov_yaw: float = 0.068):
+        """
+        Kirim perkiraan pose awal ke AMCL untuk inisialisasi partikel lokal (Pose Tracking).
+        cov_xy = 0.09 m^2 (sigma ~ 30 cm) -> sebaran partikel lokal di sekitar datum.
+        cov_yaw = 0.068 rad^2 (sigma ~ 15 derajat).
+        """
+        msg = PoseWithCovarianceStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'map'
 
-        cov = msg.pose.covariance
-        # Indeks matriks kovariansi 6x6:
-        # [0] = var(x), [7] = var(y), [35] = var(yaw)
-        var_x = max(0.0, float(cov[0]))
-        var_y = max(0.0, float(cov[7]))
-        var_yaw = max(0.0, float(cov[35]))
+        msg.pose.pose.position.x = float(x)
+        msg.pose.pose.position.y = float(y)
+        msg.pose.pose.position.z = 0.0
 
-        self.current_pose = {'x': float(p.x), 'y': float(p.y), 'yaw': yaw}
-        self.covariance = cov
-        self.sigma_x = math.sqrt(var_x)
-        self.sigma_y = math.sqrt(var_y)
-        self.sigma_yaw = math.sqrt(var_yaw)
-        self.last_amcl_time = time.time()
-        self.has_amcl_data = True
+        # Quaternion dari yaw 2D
+        msg.pose.pose.orientation.x = 0.0
+        msg.pose.pose.orientation.y = 0.0
+        msg.pose.pose.orientation.z = math.sin(yaw_rad / 2.0)
+        msg.pose.pose.orientation.w = math.cos(yaw_rad / 2.0)
 
-    def send_cmd(self, linear_x: float, angular_z: float):
-        cmd = Twist()
-        cmd.linear.x = float(linear_x)
-        cmd.angular.z = float(angular_z)
-        self.cmd_pub.publish(cmd)
+        # Kovariansi awal
+        cov = [0.0] * 36
+        cov[0] = float(cov_xy)    # var(x)
+        cov[7] = float(cov_xy)    # var(y)
+        cov[35] = float(cov_yaw)  # var(yaw)
+        msg.pose.covariance = cov
 
-    def stop_robot(self):
-        for _ in range(5):
-            self.send_cmd(0.0, 0.0)
-            time.sleep(0.02)
+        self.initial_pose_pub_reliable.publish(msg)
+        self.initial_pose_pub_volatile.publish(msg)
 
     def trigger_global_localization(self) -> bool:
         """Panggil service /reinitialize_global_localization untuk menyebarkan 2000 partikel."""
@@ -188,6 +213,7 @@ class EvaluasiAMCLNode(Node):
                     "No",
                     "Datum_ID",
                     "Nama_Datum",
+                    "Mode_Uji",
                     "Run_Ke",
                     "GT_X_m",
                     "GT_Y_m",
@@ -229,24 +255,36 @@ class EvaluasiAMCLNode(Node):
         gt_yaw_deg = datum['yaw_deg']
         gt_yaw_rad = math.radians(gt_yaw_deg)
 
-        print("\n" + "=" * 75)
+        mode_desc = (
+            "POSE TRACKING (Inisialisasi Partikel Lokal ±30 cm - Rekomendasi Skripsi)"
+            if self.test_mode == 'tracking'
+            else "GLOBAL LOCALIZATION (Kidnapped Robot 2000 Partikel Acak)"
+        )
+
+        print("\n" + "=" * 78)
         print(f"🚀 MEMULAI PENGUJIAN: {datum['name']} | RUN KE-{run_idx} DARI 5")
-        print("=" * 75)
+        print(f"⚙️ Mode Pengujian     : {mode_desc}")
+        print("=" * 78)
         print(f"📍 Ground Truth Fisik : X = {gt_x:.3f} m, Y = {gt_y:.3f} m, Heading = {gt_yaw_deg:.1f}°")
         print(f"🎯 Target Ambang Batas: Sigma XY <= {THRESHOLD_SIGMA_XY*100:.1f} cm | Sigma Yaw <= {math.degrees(THRESHOLD_SIGMA_YAW):.1f}°")
         print(f"⏳ Maksimum Timeout   : 25.0 detik")
-        print("-" * 75)
+        print("-" * 78)
         print("👉 Pastikan robot sudah diletakkan tepat di atas tanda titik datum fisik.")
-        input("Tekan [ENTER] di keyboard untuk menyebarkan partikel & memulai pengujian...")
+        input("Tekan [ENTER] di keyboard untuk menginisialisasi partikel & memulai rotasi...")
 
-        # 1. Pemicu Global Localization
-        print("\n[1/3] 💥 Memicu /reinitialize_global_localization (2000 partikel disebar acak)...")
-        if self.trigger_global_localization():
-            print("      ✅ Partikel AMCL berhasil disebarkan ke seluruh area peta!")
+        # 1. Inisialisasi Partikel
+        if self.test_mode == 'tracking':
+            print("\n[1/3] 📍 Mengirim /initialpose di sekitar Datum (sebaran partikel lokal ±30 cm)...")
+            self.send_initial_pose(gt_x, gt_y, gt_yaw_rad, cov_xy=0.09, cov_yaw=0.068)
+            print("      ✅ Pose awal AMCL berhasil diset! Partikel terpusat pada titik datum.")
         else:
-            print("      ⚠️ Service tidak merespon, melanjutkan dengan rotasi paksa...")
+            print("\n[1/3] 💥 Memicu /reinitialize_global_localization (2000 partikel disebar acak)...")
+            if self.trigger_global_localization():
+                print("      ✅ Partikel AMCL berhasil disebarkan ke seluruh area peta!")
+            else:
+                print("      ⚠️ Service tidak merespon, melanjutkan dengan rotasi paksa...")
 
-        time.sleep(0.5)
+        time.sleep(0.6)
 
         # 2. Mulai Rotasi Robot & Pengukuran Waktu Konvergensi
         print("[2/3] 🔄 Robot mulai berputar di tempat (w = 0.35 rad/s) untuk pemindaian...")
@@ -257,7 +295,7 @@ class EvaluasiAMCLNode(Node):
         rot_speed = 0.35  # rad/s
 
         while rclpy.ok():
-            rclpy.spin_once(self, timeout_sec=0.05)
+            time.sleep(0.05)
             now = time.time()
             elapsed = now - t_start
 
@@ -321,20 +359,21 @@ class EvaluasiAMCLNode(Node):
         status_total = "LULUS" if (status_tconv == "LULUS" and status_epos == "LULUS" and status_eyaw == "LULUS") else "TIDAK LULUS"
 
         # Tampilkan Hasil Uji
-        print("=" * 75)
-        print(f"📊 HASIL UJI {datum['name']} - RUN {run_idx}:")
+        print("=" * 78)
+        print(f"📊 HASIL UJI {datum['name']} - RUN {run_idx} ({self.test_mode.upper()}):")
         print(f"  • Waktu Konvergensi (t_conv) : {t_converge:.2f} detik  (Batas: <= {PASS_MAX_TCONV:.1f}s) -> [{status_tconv}]")
         print(f"  • Estimasi Pose AMCL        : X = {amcl_x:.3f} m, Y = {amcl_y:.3f} m, Yaw = {amcl_yaw_deg:.1f}°")
         print(f"  • Galat Posisi (e_pos)       : {e_pos_m:.3f} m ({e_pos_cm:.1f} cm)  (Batas: <= {PASS_AVG_EPOS*100:.1f} cm) -> [{status_epos}]")
         print(f"  • Galat Orientasi (e_theta)  : {e_yaw_deg:.2f}°  (Batas: <= {PASS_AVG_EYAW:.1f}°) -> [{status_eyaw}]")
         print(f"  • KESIMPULAN RUN INI        : [{status_total}]")
-        print("=" * 75)
+        print("=" * 78)
 
         # Simpan ke CSV
         row_data = [
             self.get_total_csv_rows() + 1,
             datum_id,
             datum['name'],
+            self.test_mode.upper(),
             run_idx,
             f"{gt_x:.4f}",
             f"{gt_y:.4f}",
@@ -386,7 +425,7 @@ class EvaluasiAMCLNode(Node):
         print("\n" + "=" * 90)
         print("📋 REKAPITULASI PENGUJIAN SKENARIO 2 (EVALUASI PELACAKAN AMCL - BAB 4)")
         print("=" * 90)
-        print(f"{'Datum':<18} | {'Run':<4} | {'t_conv (s)':<10} | {'e_pos (cm)':<10} | {'e_yaw (°)':<10} | {'Status':<10}")
+        print(f"{'Datum':<16} | {'Mode':<8} | {'Run':<4} | {'t_conv (s)':<10} | {'e_pos (cm)':<10} | {'e_yaw (°)':<10} | {'Status':<10}")
         print("-" * 90)
 
         data_by_datum = {i: [] for i in range(1, 6)}
@@ -402,19 +441,21 @@ class EvaluasiAMCLNode(Node):
                 ep_cm = float(row['Galat_Posisi_cm'])
                 ey_deg = float(row['Galat_Orientasi_deg'])
                 st = row['Status_Keseluruhan']
+                mode_str = row.get('Mode_Uji', 'TRACKING')
 
                 data_by_datum[d_id].append({
                     'run': row['Run_Ke'],
                     't': t,
                     'ep_cm': ep_cm,
                     'ey': ey_deg,
-                    'status': st
+                    'status': st,
+                    'mode': mode_str
                 })
                 all_tconv.append(t)
                 all_epos_cm.append(ep_cm)
                 all_eyaw.append(ey_deg)
 
-                print(f"{row['Nama_Datum'][:18]:<18} | {row['Run_Ke']:<4} | {t:<10.2f} | {ep_cm:<10.1f} | {ey_deg:<10.2f} | {st:<10}")
+                print(f"{row['Nama_Datum'][:16]:<16} | {mode_str[:8]:<8} | {row['Run_Ke']:<4} | {t:<10.2f} | {ep_cm:<10.1f} | {ey_deg:<10.2f} | {st:<10}")
 
         print("-" * 90)
         print("📊 RATA-RATA TIAP TITIK DATUM (5 RUN):")
@@ -447,14 +488,21 @@ class EvaluasiAMCLNode(Node):
     def edit_datum_coordinates(self):
         """Menu interaktif untuk mengubah koordinat Ground Truth 5 titik acuan."""
         while True:
-            print("\n" + "=" * 60)
+            print("\n" + "=" * 65)
             print("🛠️ UBAH KOORDINAT GROUND TRUTH TITIK ACUAN (DATUM)")
-            print("=" * 60)
+            print("=" * 65)
+            if self.current_pose:
+                cur_x = self.current_pose['x']
+                cur_y = self.current_pose['y']
+                cur_yaw = math.degrees(self.current_pose['yaw'])
+                print(f"  📍 Pose Live AMCL Saat Ini : X={cur_x:6.3f}m, Y={cur_y:6.3f}m, Yaw={cur_yaw:5.1f}°")
+                print("-" * 65)
+
             for i in range(1, 6):
                 d = self.datums[i]
                 print(f"  [{i}] {d['name']:<24} -> X={d['x']:6.3f}m, Y={d['y']:6.3f}m, Yaw={d['yaw_deg']:5.1f}°")
             print("  [0] Selesai & Kembali ke Menu Utama")
-            print("-" * 60)
+            print("-" * 65)
 
             choice = input("Pilih nomor datum yang ingin diedit (1-5, atau 0): ").strip()
             if choice == '0':
@@ -463,23 +511,45 @@ class EvaluasiAMCLNode(Node):
                 idx = int(choice)
                 cur = self.datums[idx]
                 print(f"\nMengedit: {cur['name']}")
+                if self.current_pose:
+                    print("💡 Tips: Masukkan 'C' pada nama/koordinat untuk menyalin Pose Live AMCL secara instan.")
+
                 name_in = input(f"Nama Datum [{cur['name']}]: ").strip()
-                x_in = input(f"Koordinat X (meter) [{cur['x']}]: ").strip()
-                y_in = input(f"Koordinat Y (meter) [{cur['y']}]: ").strip()
-                yaw_in = input(f"Sudut Hadap Yaw (derajat) [{cur['yaw_deg']}]: ").strip()
+                if name_in.upper() == 'C' and self.current_pose:
+                    cur['x'] = round(self.current_pose['x'], 3)
+                    cur['y'] = round(self.current_pose['y'], 3)
+                    cur['yaw_deg'] = round(math.degrees(self.current_pose['yaw']), 1)
+                    self.datums[idx] = cur
+                    self.save_datum_config()
+                    print(f"✅ Berhasil menyalin Pose Live AMCL ke {cur['name']}: X={cur['x']}, Y={cur['y']}, Yaw={cur['yaw_deg']}°")
+                    continue
 
                 if name_in:
                     cur['name'] = name_in
-                if x_in:
+
+                x_in = input(f"Koordinat X (meter) [{cur['x']}]: ").strip()
+                if x_in.upper() == 'C' and self.current_pose:
+                    cur['x'] = round(self.current_pose['x'], 3)
+                    cur['y'] = round(self.current_pose['y'], 3)
+                    cur['yaw_deg'] = round(math.degrees(self.current_pose['yaw']), 1)
+                    self.datums[idx] = cur
+                    self.save_datum_config()
+                    print(f"✅ Berhasil menyalin Pose Live AMCL: X={cur['x']}, Y={cur['y']}, Yaw={cur['yaw_deg']}°")
+                    continue
+                elif x_in:
                     try:
                         cur['x'] = float(x_in)
                     except ValueError:
                         print("Nilai X tidak valid, menggunakan nilai lama.")
+
+                y_in = input(f"Koordinat Y (meter) [{cur['y']}]: ").strip()
                 if y_in:
                     try:
                         cur['y'] = float(y_in)
                     except ValueError:
                         print("Nilai Y tidak valid, menggunakan nilai lama.")
+
+                yaw_in = input(f"Sudut Hadap Yaw (derajat) [{cur['yaw_deg']}]: ").strip()
                 if yaw_in:
                     try:
                         cur['yaw_deg'] = float(yaw_in)
@@ -504,21 +574,32 @@ def main(args=None):
 
     try:
         while True:
+            mode_badge = "POSE TRACKING (Inisialisasi Lokal ±30cm)" if node.test_mode == 'tracking' else "GLOBAL LOCALIZATION (Acak 2000 Partikel)"
             print("\n" + "=" * 70)
             print("🤖 BENCHMARK SKRIPSI AMR-01: SKENARIO 2 (EVALUASI PELACAKAN AMCL)")
             print("=" * 70)
-            print(f"  File Log CSV: {node.csv_path}")
+            print(f"  Mode Uji Aktif      : 🎯 {mode_badge}")
+            print(f"  File Log CSV        : {node.csv_path}")
             print(f"  Total Data Tersimpan: {node.get_total_csv_rows()} / 25 kali pengujian")
             print("-" * 70)
             print("  [1] Jalankan Uji Manual Bertahap (Pilih Titik Datum & Run)")
             print("  [2] Jalankan 5 Run Berurutan untuk 1 Titik Datum")
             print("  [3] Tampilkan Rekapitulasi Tabel & Statistik Bab 4")
             print("  [4] Ubah Koordinat Ground Truth 5 Titik Datum")
+            print("  [M] Ganti Mode Pengujian (Pose Tracking <-> Global Localization)")
             print("  [5] Reset / Hapus Seluruh Data CSV")
             print("  [0] Keluar")
             print("=" * 70)
 
-            choice = input("Pilih menu (0-5): ").strip()
+            choice = input("Pilih menu: ").strip()
+
+            if choice.upper() == 'M':
+                if node.test_mode == 'tracking':
+                    node.test_mode = 'global'
+                    print("🔄 Mode dialihkan ke: GLOBAL LOCALIZATION (Kidnapped Robot).")
+                else:
+                    node.test_mode = 'tracking'
+                    print("🔄 Mode dialihkan ke: POSE TRACKING (Inisialisasi Partikel Lokal ±30cm - Rekomendasi Skripsi).")
 
             if choice == '1':
                 print("\nPilih Titik Datum:")
