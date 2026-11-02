@@ -723,3 +723,37 @@ Saat dilakukan penyesuaian lebar koridor lintasan robot (`corridor_width`) menja
    - **`t_med_exit = 0.50`** (kembali ke kecepatan normal saat orang menjauh)
    - **`t_near_enter = 0.85`** (rem darurat total di jarak $\approx 1.0 - 1.3\text{ m}$)
    - **`t_near_exit = 0.80`** (keluar dari rem darurat saat orang mundur)
+
+---
+
+## 📌 24. Solusi AMCL Macet / Crash: `pf.c:381: pf_update_resample: Assertion 'i < set_a->sample_count' failed` (Nav2 Issue #2711)
+
+### 1. Gejala & Error:
+Pada log sistem Nav2 / Dashboard:
+```text
+[amcl-8] [INFO] [1793608198.693869320] [amcl]: createLaserObject
+[adaptive_velocity_node.py-6] [INFO] [1793608198.718929131] [adaptive_velocity_node]: 📍 Mengirim auto-initialpose ke AMCL (percobaan #1)...
+[amcl-8] [INFO] [1793608198.720448273] [amcl]: initialPoseReceived
+[amcl-8] [INFO] [1793608198.720945672] [amcl]: Setting pose: 0.000 0.000 0.000
+[amcl-8] amcl: /tmp/binarydeb/ros-foxy-nav2-amcl-0.4.7/src/pf/pf.c:381: pf_update_resample: Assertion `i < set_a->sample_count' failed.
+[ERROR] [amcl-8]: process has died [pid 42762, exit code -6]
+[adaptive_velocity_node.py-6] [INFO] [MENUNGGU] Peta ✔ | LiDAR ✔ | Encoder ✔ | AMCL ⏳ | Costmap ✔
+```
+Setelah itu, status AMCL tertahan di `AMCL ⏳` selamanya, dan percobaan auto-initialpose terus terulang hingga puluhan kali tanpa pernah direspons.
+
+### 2. Akar Masalah:
+- Ini adalah **bug *race condition* terkenal pada `nav2_amcl` ROS 2 Foxy (Nav2 Issue #2711)**.
+- Ketika driver LiDAR baru pulih / mengirim paket scan pertama, AMCL memanggil `createLaserObject` dan memulai proses resampling awal partikel (`pf_update_resample`).
+- Di saat bersamaan (selisih hanya 13 ms), `adaptive_velocity_node.py` langsung menembakkan pesan `/initialpose`.
+- Pada ROS 2 Foxy `nav2_amcl 0.4.7`, callback `initialPoseReceived` dan thread sensor scan tidak memiliki *mutex lock* penuh saat memodifikasi memori *particle filter* (`pf_`).
+- Data partikel diakses secara bersamaan, bobot partikel menjadi korup / tak ternormalisasi, sehingga indeks partikel `i` melebihi `sample_count` dan memicu `Assertion failed` (`SIGABRT / exit code -6`).
+- Begitu proses AMCL mati, AMCL tidak berjalan lagi di ROS 2, sehingga perintah *Set Posisi Awal* dari pengguna atau dari skrip tidak akan pernah diproses.
+
+### 3. Solusi di [`adaptive_velocity_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/adaptive_velocity_node.py):
+1. **Stabilisasi Aliran Laser Sebelum Initial Pose (`scan_stable`)**:
+   - Menambahkan pelacakan waktu pertama scan tiba (`self.first_scan_wall_time`).
+   - `send_auto_initialpose` **diwajibkan menunggu jeda stabil minimal 2.5 detik** setelah paket laser scan pertama diterima.
+   - Jeda ini memberi waktu bagi AMCL untuk menyelesaikan `createLaserObject`, membangun *likelihood field*, dan menstabilkan thread pemrosesan sebelum menerima pose awal.
+2. **Deteksi Crash Node AMCL**:
+   - Menambahkan deteksi otomatis jika node `amcl` sudah tidak terdaftar di ROS 2 (`self.get_node_names()`), sehingga langsung memunculkan pesan error jelas agar operator segera me-restart navigasi tanpa menunggu sia-sia.
+

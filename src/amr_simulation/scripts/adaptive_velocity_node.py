@@ -47,6 +47,7 @@ class AdaptiveVelocityNode(Node):
         self.nav_ready_announced = False
         self.last_ready_check_time = 0.0
         self.last_scan_wall_time = 0.0
+        self.first_scan_wall_time = 0.0
         self.last_initpose_sent_time = 0.0
         self.initpose_sent_count = 0
         self.last_map_odom_x = 0.0
@@ -97,7 +98,10 @@ class AdaptiveVelocityNode(Node):
             self.get_logger().info("🗺️ Peta (/map) terdeteksi oleh Nav2 Bootstrap.")
 
     def on_scan(self, msg: LaserScan):
-        self.last_scan_wall_time = time.time()
+        now = time.time()
+        if self.first_scan_wall_time == 0.0:
+            self.first_scan_wall_time = now
+        self.last_scan_wall_time = now
 
     def on_arduino_ready(self, msg: Bool):
         self.arduino_ready = bool(msg.data)
@@ -183,6 +187,8 @@ class AdaptiveVelocityNode(Node):
 
         # 1. Bootstrap TF map -> odom sebelum AMCL aktif (agar global_costmap & RViz langsung jalan sekali klik)
         scan_active = (wall_now - self.last_scan_wall_time) < 2.0
+        if not scan_active:
+            self.first_scan_wall_time = 0.0
         enc_ok = self.encoder_ok(wall_now)
         if not self.amcl_initialized:
             self.publish_bootstrap_tf(now_msg)
@@ -198,10 +204,13 @@ class AdaptiveVelocityNode(Node):
         self.encoder_was_ok = enc_ok
 
         # 2. Kirim otomatis /initialpose (0,0,0) saat /map, /scan_filtered & ENCODER sudah siap tapi AMCL belum init.
-        #    Initialpose sebelum odom valid membuat AMCL mengunci pose yang salah.
-        if (not self.amcl_initialized) and self.map_received and scan_active and enc_ok:
-            interval = 2.0 if self.initpose_sent_count < 5 else 4.0
-            if (wall_now - self.start_wall_time > 3.0) and (wall_now - self.last_initpose_sent_time > interval):
+        #    Beri jeda minimal 2.5 detik sejak paket /scan pertama agar AMCL selesai menginisialisasi
+        #    createLaserObject dan likelihood field. Ini mencegah bug race-condition Nav2 pf_update_resample
+        #    assertion failed (Issue #2711) yang mematikan proses AMCL.
+        scan_stable = scan_active and (self.first_scan_wall_time > 0.0) and ((wall_now - self.first_scan_wall_time) >= 2.5)
+        if (not self.amcl_initialized) and self.map_received and scan_stable and enc_ok:
+            interval = 2.5 if self.initpose_sent_count < 5 else 4.0
+            if (wall_now - self.start_wall_time > 4.0) and (wall_now - self.last_initpose_sent_time > interval):
                 self.last_initpose_sent_time = wall_now
                 self.initpose_sent_count += 1
                 self.get_logger().info(f"📍 Mengirim auto-initialpose ke AMCL (percobaan #{self.initpose_sent_count})...")
@@ -244,6 +253,12 @@ class AdaptiveVelocityNode(Node):
                     f"Encoder {mark(enc_ok)} | AMCL {mark(self.amcl_initialized)} | "
                     f"Costmap {mark(self.local_costmap_active and self.global_costmap_active)}"
                 )
+                if not self.amcl_initialized and self.initpose_sent_count >= 3:
+                    node_names = self.get_node_names()
+                    if 'amcl' not in node_names:
+                        self.get_logger().error(
+                            "🔴 [AMCL CRASH] Node 'amcl' terdeteksi mati! Harap matikan (STOP) dan nyalakan (START) ulang Navigasi di Dashboard."
+                        )
 
         dt = (now - self.last_time).nanoseconds / 1e9
         self.last_time = now
