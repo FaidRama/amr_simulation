@@ -46,6 +46,7 @@ install(PROGRAMS
   scripts/plot_deadzone.py
   scripts/step_response_monitor_node.py
   scripts/plot_step_response.py
+  scripts/evaluasi_pid.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
