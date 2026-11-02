@@ -1,17 +1,18 @@
 /* =========================================================================
- * FIRMWARE AMR DIFFERENTIAL DRIVE: ROS 2 + PID VELOCITY CONTROLLER
- * Integrasi Skripsi Divala Zahra Oktavia & ROS 2 Navigation Stack
+ * FIRMWARE AMR DIFFERENTIAL DRIVE: PENGUJIAN STEP RESPON TRIAL & ERROR
+ * PARAMETER : Kiri  (Kp = 2.0000, Ki = 15.0000, Kd = 0.0000)
+ *             Kanan (Kp = 1.8000, Ki = 16.0000, Kd = 0.0000)
+ * SKRIPSI   : DIVALA ZAHRA OKTAVIA (UNNES 2026)
  * =========================================================================
  * Format Input Serial (dari Jetson):
- *   1) "V,<v_linear>,<v_angular>\n"  (Contoh: "V,0.30,0.00\n" dari Nav2/Teleop)
- *   2) "1" s/d "5"                   (Menu Uji Mandiri Skripsi: Lurus, Belok,
- * Persegi) 3) "0"                           (Stop Darurat) 4) "RST\n" (Reset
- * Encoder & Odometri)
+ *   1) "V,<v_linear>,<v_angular>\n"  (Contoh: "V,0.399,0.00\n" untuk 60 RPM)
+ *   2) "1" s/d "5"                   (Menu Uji Mandiri Skripsi)
+ *   3) "0"                           (Stop Darurat)
+ *   4) "RST\n"                       (Reset Encoder & Odometri)
  *
  * Format Output Serial (ke Jetson):
- *   - "ENC:<pulsa_total_L>,<pulsa_total_R>\n" (Untuk ROS 2 /odom - 20 Hz)
- *   - "LOG:<time>,<rpm_L>,<rpm_R>,<pwm_L>,<pwm_R>,<x>,<y>,<theta>\n" (Untuk
- * Skripsi)
+ *   - "ENC:<pulsa_total_L>,<pulsa_total_R>\n"
+ *   - "LOG:<time>,<rpm_L>,<rpm_R>,<pwm_L>,<pwm_R>,<x>,<y>,<theta>\n"
  * ========================================================================= */
 
 #include <Arduino.h>
@@ -33,19 +34,17 @@ const byte PIN_ENCA_R = 3; // Interrupt INT1
 const byte PIN_ENCB_R = A1;
 
 // ====================== 2. OPSI INVERT ARAH ==============================
-// Sesuaikan dengan hasil validasi fisik roda kamu sebelumnya
 const bool INVERT_MOTOR_L = false;
 const bool INVERT_MOTOR_R = true;
 const bool INVERT_ENC_L = true;
 const bool INVERT_ENC_R = true;
 
 // ====================== 3. PARAMETER FISIK ROBOT =========================
-const float WHEEL_DIAMETER =
-    0.127; // meter (5 inci = 0.127 meter sesuai Proposal Skripsi)
-const float WHEEL_BASE_B = 0.458; // meter (45.8 cm sesuai Proposal Skripsi)
-const float CPR_WHEEL = 350.7; // Ticks per revolusi PG36 (7 PPR * 50.1 gearbox)
+const float WHEEL_DIAMETER = 0.127; // meter (5 inci = 0.127 meter)
+const float WHEEL_BASE_B = 0.458;   // meter (45.8 cm)
+const float CPR_WHEEL = 350.7;      // Ticks per revolusi PG36 (7 PPR * 50.1 gearbox)
 
-// ====================== 4. PARAMETER KENDALI PID-PSO =====================
+// ====================== 4. PARAMETER KENDALI PI TRIAL & ERROR ============
 const float KP_L = 2.0000, KI_L = 15.0000, KD_L = 0.0000;
 const float KP_R = 1.8000, KI_R = 16.0000, KD_R = 0.0000;
 
@@ -80,12 +79,9 @@ uint8_t buf_idx = 0;
 
 // ====================== 6. INVERSE KINEMATICS ============================
 void hitungInverseKinematics(float v, float omega) {
-  // v_R = v + (B/2)*w
-  // v_L = v - (B/2)*w
   float v_R = v + (WHEEL_BASE_B / 2.0) * omega; // m/s
   float v_L = v - (WHEEL_BASE_B / 2.0) * omega; // m/s
 
-  // RPM = (v / (PI * D)) * 60
   setpoint_R = (v_R / (PI * WHEEL_DIAMETER)) * 60.0;
   setpoint_L = (v_L / (PI * WHEEL_DIAMETER)) * 60.0;
 }
@@ -145,7 +141,7 @@ void driveMotors(float pwmL, float pwmR) {
 void processCommand(char *cmd) {
   // 1. Perintah Kecepatan dari ROS 2: "V,<linear_v>,<angular_w>"
   if (cmd[0] == 'V' || cmd[0] == 'v') {
-    lastSerialCmdTime = millis(); // Refresh watchdog heartbeat dari Jetson
+    lastSerialCmdTime = millis();
     char *comma1 = strchr(cmd, ',');
     if (comma1 != NULL) {
       float v_lin = atof(comma1 + 1);
@@ -154,7 +150,7 @@ void processCommand(char *cmd) {
       if (comma2 != NULL) {
         v_ang = atof(comma2 + 1);
       }
-      modePengujian = 99; // Mode Navigasi ROS 2
+      modePengujian = 99;
       hitungInverseKinematics(v_lin, v_ang);
     }
     return;
@@ -175,8 +171,7 @@ void processCommand(char *cmd) {
     return;
   }
 
-  // 3. Menu Uji Mandiri Skripsi (Hanya jika input tepat 1 karakter: '0' s/d
-  // '5')
+  // 3. Menu Uji Mandiri Skripsi ('0' s/d '5')
   if (strlen(cmd) == 1) {
     char m = cmd[0];
     if (m == '1') {
@@ -253,7 +248,7 @@ void setup() {
   lastSerialCmdTime = millis();
 }
 
-// ====================== 11. LOOP UTAMA (20 Hz) ==========================
+// ====================== 11. LOOP UTAMA (50 Hz) ==========================
 void loop() {
   // A. BACA SERIAL NON-BLOCKING
   while (Serial.available() > 0) {
@@ -269,7 +264,7 @@ void loop() {
     }
   }
 
-  // B. SAMPLING PID & ODOMETRI (50 ms / 20 Hz)
+  // B. SAMPLING PID & ODOMETRI (20 ms / 50 Hz)
   unsigned long waktuSekarang = millis();
   if (waktuSekarang - waktuSebelumnya >= SAMPLING_MS) {
     waktuSebelumnya = waktuSekarang;
@@ -284,16 +279,15 @@ void loop() {
     long tot_R = totalPulsa_R;
     interrupts();
 
-    // 1. Umpan balik cepat (tetap 0.80) khusus untuk PID agar bebas phase-lag & tidak agresif
+    // Filter EMA sesuai model identifikasi motor (alpha = 0.55)
     static float rpm_ctrl_L = 0.0, rpm_ctrl_R = 0.0;
     float rpm_raw_L = ((float)dC_L / CPR_WHEEL) * (60.0 / DT);
     float rpm_raw_R = ((float)dC_R / CPR_WHEEL) * (60.0 / DT);
-    rpm_ctrl_L = (0.80 * rpm_raw_L) + (0.20 * rpm_ctrl_L);
-    rpm_ctrl_R = (0.80 * rpm_raw_R) + (0.20 * rpm_ctrl_R);
+    rpm_ctrl_L = (0.55 * rpm_raw_L) + (0.45 * rpm_ctrl_L);
+    rpm_ctrl_R = (0.55 * rpm_raw_R) + (0.45 * rpm_ctrl_R);
 
-    // 2. Filter peredam overshoot pembacaan RPM (semakin kecil angka pertama, semakin kecil overshoot)
-    rpm_L = (0.25 * rpm_raw_L) + (0.75 * rpm_L);
-    rpm_R = (0.25 * rpm_raw_R) + (0.75 * rpm_R);
+    rpm_L = rpm_ctrl_L;
+    rpm_R = rpm_ctrl_R;
 
     // Hitung Odometri Lokal
     float ds_L = ((float)dC_L / CPR_WHEEL) * (PI * WHEEL_DIAMETER);
@@ -307,18 +301,18 @@ void loop() {
     odom_y += dx_robot * sin(theta_mid);
 
     // Penghentian Otomatis Mode Uji Skripsi
-    if (modePengujian == 1) { // Lurus
+    if (modePengujian == 1) {
       float dist = sqrt(odom_x * odom_x + odom_y * odom_y);
       if (dist >= targetJarak) {
         hitungInverseKinematics(0, 0);
         modePengujian = 0;
       }
-    } else if (modePengujian >= 2 && modePengujian <= 4) { // Rotasi
+    } else if (modePengujian >= 2 && modePengujian <= 4) {
       if (abs(odom_theta) >= targetSudut) {
         hitungInverseKinematics(0, 0);
         modePengujian = 0;
       }
-    } else if (modePengujian == 5) { // Persegi
+    } else if (modePengujian == 5) {
       static float markX = 0, markY = 0, markTheta = 0;
       if (stepPersegi % 2 == 1) {
         float dSegmen = sqrt(pow(odom_x - markX, 2) + pow(odom_y - markY, 2));
@@ -342,8 +336,7 @@ void loop() {
       }
     }
 
-    // 0. FAILSAFE WATCHDOG: Jika mode Navigasi ROS 2 (99) dan tidak ada
-    // heartbeat > 0.6 detik (Jetson mati/kabel putus)
+    // FAILSAFE WATCHDOG
     if (modePengujian == 99 &&
         (waktuSekarang - lastSerialCmdTime > SERIAL_WATCHDOG_TIMEOUT_MS)) {
       setpoint_L = 0.0;
@@ -357,44 +350,35 @@ void loop() {
       driveMotors(0, 0);
     }
 
-    // Perhitungan Loop PID (Menggunakan umpan balik cepat rpm_ctrl & soft-ramp 180 RPM/s)
-    static float sp_ramp_L = 0.0, sp_ramp_R = 0.0;
-    const float step_ramp = 130.0 * DT; // 2.6 RPM per 20ms (Halus & tidak agresif)
-
-    // Motor Kiri
+    // ---------------------------------------------------------------------
+    // KOMPUTASI KONTROL PI TRIAL & ERROR MURNI (TANPA SP_RAMP PENAHAN)
+    // ---------------------------------------------------------------------
+    // Motor Kiri (Kp = 2.0000, Ki = 15.0000, Kd = 0.0000)
     if (fabs(setpoint_L) < 0.05) {
-      sp_ramp_L = 0.0;
       rpm_ctrl_L = 0.0;
       rpm_L = 0.0;
       pwm_L = 0.0;
       integral_L = 0.0;
       prev_error_L = 0.0;
     } else {
-      if (sp_ramp_L < setpoint_L) sp_ramp_L = min(setpoint_L, sp_ramp_L + step_ramp);
-      else if (sp_ramp_L > setpoint_L) sp_ramp_L = max(setpoint_L, sp_ramp_L - step_ramp);
-
-      error_L = sp_ramp_L - rpm_ctrl_L;
-      integral_L = constrain(integral_L + (KI_L * error_L * DT), -200.0, 200.0);
+      error_L = setpoint_L - rpm_ctrl_L;
+      integral_L = constrain(integral_L + (KI_L * error_L * DT), -255.0, 255.0);
       pwm_L = constrain((KP_L * error_L) + integral_L +
                             (KD_L * (error_L - prev_error_L) / DT),
                         -255.0, 255.0);
       prev_error_L = error_L;
     }
 
-    // Motor Kanan
+    // Motor Kanan (Kp = 1.8000, Ki = 16.0000, Kd = 0.0000)
     if (fabs(setpoint_R) < 0.05) {
-      sp_ramp_R = 0.0;
       rpm_ctrl_R = 0.0;
       rpm_R = 0.0;
       pwm_R = 0.0;
       integral_R = 0.0;
       prev_error_R = 0.0;
     } else {
-      if (sp_ramp_R < setpoint_R) sp_ramp_R = min(setpoint_R, sp_ramp_R + step_ramp);
-      else if (sp_ramp_R > setpoint_R) sp_ramp_R = max(setpoint_R, sp_ramp_R - step_ramp);
-
-      error_R = sp_ramp_R - rpm_ctrl_R;
-      integral_R = constrain(integral_R + (KI_R * error_R * DT), -200.0, 200.0);
+      error_R = setpoint_R - rpm_ctrl_R;
+      integral_R = constrain(integral_R + (KI_R * error_R * DT), -255.0, 255.0);
       pwm_R = constrain((KP_R * error_R) + integral_R +
                             (KD_R * (error_R - prev_error_R) / DT),
                         -255.0, 255.0);
