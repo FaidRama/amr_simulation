@@ -51,6 +51,7 @@ def _cleanup_stale_processes():
         'laser_filter_node.py',
         'static_transform_publisher',
     ]
+    stale_pids = []
     for pat in patterns:
         try:
             res = subprocess.run(['pgrep', '-f', pat], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
@@ -58,14 +59,24 @@ def _cleanup_stale_processes():
                 line = line.strip()
                 if line.isdigit():
                     pid = int(line)
-                    if pid not in protected_pids:
-                        try:
-                            os.kill(pid, signal.SIGKILL)
-                        except Exception:
-                            pass
+                    if pid not in protected_pids and pid not in stale_pids:
+                        stale_pids.append(pid)
         except Exception:
             pass
-    time.sleep(0.3)
+
+    if stale_pids:
+        for pid in stale_pids:
+            try:
+                os.kill(pid, signal.SIGINT)
+            except Exception:
+                pass
+        time.sleep(0.4)
+        for pid in stale_pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+        time.sleep(0.2)
 
 
 def generate_launch_description():
