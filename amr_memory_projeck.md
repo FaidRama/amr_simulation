@@ -792,15 +792,18 @@ Setelah itu, status AMCL tertahan di `AMCL ⏳` selamanya, dan percobaan auto-in
 3. **Proses `rplidar_composition` Tidak Langsung Keluar Saat Timeout**:
    - Saat `rplidar_node` gagal dengan `RESULT_OPERATION_TIMEOUT!`, proses kontainer `rplidar_composition` tetap hidup sebagai proses kosong tanpa mem-publish `/scan`.
 
-### 3. Solusi Permanen di [`rplidar_bridge.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/rplidar_bridge.py):
-1. **Matikan `termios.HUPCL` & Nyalakan Motor Sebelum Serah-Terima Port**:
-   - Menonaktifkan `termios.HUPCL` (`attrs[2] &= ~termios.HUPCL`) pada file descriptor serial agar kernel Linux tidak mematikan motor saat `ser.close()`.
-   - Mengeset `ser.dtr = False` (Motor ON) dan memberi waktu pre-spin $0.8\text{ detik}$ sebelum menyerahkan port ke `rplidar_composition`.
-2. **Deteksi Instan Fatal Error di `_consume_driver_stderr`**:
-   - Jika stderr mencetak `RESULT_OPERATION_TIMEOUT` atau `Cannot start scan`, flag `self.driver_fatal_error = True` langsung memicu recovery pada detik berikutnya tanpa menunggu watchdog 15 detik.
-3. **Siklus Daya USB via `sysfs authorized` + `USBDEVFS_RESET`**:
-   - Saat melakukan auto-reset USB kernel, `reset_usb_device()` terlebih dahulu mengubah `/sys/bus/usb/devices/.../authorized` ke `0` selama $2.0\text{ detik}$ lalu kembali ke `1` sebelum memanggil `ioctl(USBDEVFS_RESET)`.
+### 3. Solusi Permanen di [`rplidar_bridge.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/rplidar_bridge.py) (Teroptimasi untuk USB Hub 7-Port Eksternal 5V Step-Down):
+1. **Topologi Hardware USB Robot**:
+   - Jetson hanya memiliki **1 slot USB utama** yang terhubung ke **USB Hub 7-Port**.
+   - USB Hub 7-Port tersebut mendapat suplai daya eksternal 5V (melalui port Type-C) dari **Step-Down 5V baterai utama**.
+   - Konsekuensi elektrik: Selama baterai utama menyala, jalur daya 5V VBUS di port USB Hub **tidak pernah mati** meskipun software melakukan reset USB kernel.
+2. **Set `ser.dtr = False` (Motor ON) SEGERA Saat Port Dibuka (Sebelum `0xA5 0x40`)**:
+   - Saat `serial.Serial()` dibuka, driver kernel `cp210x` otomatis meng-assert `DTR=True` (`/DTR=0V` = Motor OFF/Rem).
+   - Oleh karena itu, `ser.dtr = False` dan penonaktifan `termios.HUPCL` (`attrs[2] &= ~termios.HUPCL`) wajib dieksekusi **di baris paling awal** sebelum perintah `0xA5 0x25` maupun `0xA5 0x40`, sehingga motor tidak pernah ter-rem selama jeda 2.2 detik *reboot* MCU dan mendapat total waktu *spin-up* 3.5 detik sebelum `rplidar_composition` memanggil `startScan()`.
+3. **Penanganan Khusus `Cannot start scan: '80008000'` (`self.last_err_is_scan_8000`)**:
+   - Error `80008000` di `rplidar_node.cpp` terjadi **setelah** `getRPLIDARDeviceInfo()` dan `checkRPLIDARHealth()` sukses, yang membuktikan komunikasi USB & MCU LiDAR **sudah bangun dan sehat**, hanya putaran motor yang belum mencapai RPM penuh (5.5 Hz).
+   - Jika error terakhir adalah `Cannot start scan: '80008000'`, `rplidar_bridge.py` **tidak boleh** melakukan `reset_usb_device()` dan **tidak boleh** mengirim `0xA5 0x40` lagi (agar tidak membunuh LiDAR yang baru saja bangun), melainkan cukup menahan `ser.dtr = False` (Motor ON) selama 2.0 detik agar RPM stabil lalu meluncurkan `rplidar_composition`.
+4. **Pemisahan `USBDEVFS_RESET` dan `sysfs authorized` + Graceful `SIGINT`**:
+   - `reset_usb_device()` tidak lagi menjalankan `echo 0/1 > authorized` dan `ioctl(USBDEVFS_RESET)` secara beruntun dalam satu fungsi agar tidak terjadi tabrakan re-enumerasi `udev` di USB Hub 7-Port.
+   - `shutdown_driver_only()` serta `_cleanup_stale_processes()` di [`real_navigation.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/real_navigation.launch.py) dan [`real_mapping.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/real_mapping.launch.py) mengirimkan `SIGINT` terlebih dahulu (dan mengirim `0xA5 0x25` STOP saat keluar) agar LiDAR tidak terus membanjiri buffer FIFO chip CP2102 di USB Hub saat berganti sesi.
 
-### 4. 🔒 STATUS KUNCI MUTLAK (FROZEN - JANGAN DIUBAH LAGI):
-- Status pengujian di hardware Jetson: **SEHAT 100% (Verifikasi Berhasil)**.
-- **ATURAN MUTLAK**: Script [`rplidar_bridge.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/rplidar_bridge.py) sudah berada pada kondisi final yang sangat stabil. **DILARANG KERAS** memodifikasi, mengotak-atik urutan baudrate, mengganti nilai `ser.dtr`, mengubah handler sinyal, atau menambah logika coba-coba pada `rplidar_bridge.py`. Kode ini dikunci permanen untuk proyek!

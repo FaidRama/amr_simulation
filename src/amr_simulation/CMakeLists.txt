@@ -42,6 +42,8 @@ install(PROGRAMS
   scripts/rplidar_bridge.py
   scripts/laser_filter_node.py
   scripts/benchmark_skripsi.py
+  scripts/deadzone_monitor_node.py
+  scripts/plot_deadzone.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
