@@ -11,3 +11,5 @@ Dokumen_C3_Metode_Perancangan_Template_Rev11(3).md
 __pycache__/
 *.py[cod]
 *$py.class
+data_step_150 fix data transfer fungsi.csv
+tuning_pid_manual.py

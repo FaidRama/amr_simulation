@@ -43,6 +43,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import Twist, PoseWithCovarianceStamped
+from nav_msgs.msg import Odometry
 from std_srvs.srv import Empty
 
 
@@ -138,10 +139,25 @@ class EvaluasiAMCLNode(Node):
         self.csv_path = os.path.join(self.output_dir, 'skenario2_evaluasi_amcl.csv')
         self.config_path = os.path.join(self.output_dir, 'datum_config.json')
 
+        # Subscriber ke /odom untuk melacak rotasi roda fisik aktual (Ground Truth Heading)
+        self.odom_sub = self.create_subscription(
+            Odometry,
+            '/odom',
+            self.odom_callback,
+            10
+        )
+        self.current_odom_yaw = 0.0
+        self.has_odom_data = False
+
         self.datums = self.load_datum_config()
         self.ensure_csv_header()
 
         self.get_logger().info("✅ Node Evaluasi AMCL Skripsi Siap (Mode Default: POSE TRACKING).")
+
+    def odom_callback(self, msg: Odometry):
+        q = msg.pose.pose.orientation
+        self.current_odom_yaw = euler_from_quaternion(q)
+        self.has_odom_data = True
 
     def amcl_callback(self, msg: PoseWithCovarianceStamped):
         p = msg.pose.pose.position
@@ -319,6 +335,7 @@ class EvaluasiAMCLNode(Node):
 
         # 2. Mulai Rotasi Robot & Pengukuran Waktu Konvergensi
         print("[2/3] 🔄 Robot mulai berputar di tempat (w = 0.35 rad/s) untuk pemindaian...")
+        start_odom_yaw = self.current_odom_yaw if self.has_odom_data else None
         t_start = time.time()
         converged = False
         consecutive_stable = 0
@@ -368,6 +385,8 @@ class EvaluasiAMCLNode(Node):
 
         # 3. Hentikan Robot
         self.stop_robot()
+        time.sleep(0.3)
+        stop_odom_yaw = self.current_odom_yaw if self.has_odom_data else None
         print("\n\n[3/3] 🛑 Robot berhenti. Menghitung galat estimasi vs ground truth...")
 
         # 4. Perhitungan Galat
@@ -376,12 +395,24 @@ class EvaluasiAMCLNode(Node):
         amcl_yaw = final_pose['yaw']
         amcl_yaw_deg = math.degrees(amcl_yaw)
 
+        # Hitung sudut hadap aktual fisik saat robot berhenti:
+        # Sudut Hadap Nyata = Sudut Awal Datum + Delta Putaran Roda (Odometry)
+        if start_odom_yaw is not None and stop_odom_yaw is not None:
+            delta_rot_rad = normalize_angle(stop_odom_yaw - start_odom_yaw)
+            actual_yaw_rad = normalize_angle(gt_yaw_rad + delta_rot_rad)
+        else:
+            delta_rot_rad = rot_speed * t_converge
+            actual_yaw_rad = normalize_angle(gt_yaw_rad + delta_rot_rad)
+
+        actual_yaw_deg = math.degrees(actual_yaw_rad)
+        delta_rot_deg = math.degrees(delta_rot_rad)
+
         dx = amcl_x - gt_x
         dy = amcl_y - gt_y
         e_pos_m = math.sqrt(dx * dx + dy * dy)
         e_pos_cm = e_pos_m * 100.0
 
-        d_yaw_rad = abs(normalize_angle(amcl_yaw - gt_yaw_rad))
+        d_yaw_rad = abs(normalize_angle(amcl_yaw - actual_yaw_rad))
         e_yaw_deg = math.degrees(d_yaw_rad)
 
         status_tconv = "LULUS" if t_converge <= PASS_MAX_TCONV else "GAGAL"
@@ -393,8 +424,10 @@ class EvaluasiAMCLNode(Node):
         print("=" * 78)
         print(f"📊 HASIL UJI {datum['name']} - RUN {run_idx} ({self.test_mode.upper()}):")
         print(f"  • Waktu Konvergensi (t_conv) : {t_converge:.2f} detik  (Batas: <= {PASS_MAX_TCONV:.1f}s) -> [{status_tconv}]")
-        print(f"  • Estimasi Pose AMCL        : X = {amcl_x:.3f} m, Y = {amcl_y:.3f} m, Yaw = {amcl_yaw_deg:.1f}°")
+        print(f"  • Posisi Nyata vs Estimasi  : GT=({gt_x:.3f}, {gt_y:.3f}) | AMCL=({amcl_x:.3f}, {amcl_y:.3f})")
         print(f"  • Galat Posisi (e_pos)       : {e_pos_m:.3f} m ({e_pos_cm:.1f} cm)  (Batas: <= {PASS_AVG_EPOS*100:.1f} cm) -> [{status_epos}]")
+        print(f"  • Sudut Nyata saat Berhenti : {actual_yaw_deg:+.1f}° (Awal {gt_yaw_deg:+.1f}° + Putaran Roda {delta_rot_deg:+.1f}°)")
+        print(f"  • Estimasi Sudut AMCL       : {amcl_yaw_deg:+.1f}°")
         print(f"  • Galat Orientasi (e_theta)  : {e_yaw_deg:.2f}°  (Batas: <= {PASS_AVG_EYAW:.1f}°) -> [{status_eyaw}]")
         print(f"  • KESIMPULAN RUN INI        : [{status_total}]")
         print("=" * 78)
@@ -408,7 +441,7 @@ class EvaluasiAMCLNode(Node):
             run_idx,
             f"{gt_x:.4f}",
             f"{gt_y:.4f}",
-            f"{gt_yaw_deg:.2f}",
+            f"{actual_yaw_deg:.2f}",
             f"{amcl_x:.4f}",
             f"{amcl_y:.4f}",
             f"{amcl_yaw_deg:.2f}",
