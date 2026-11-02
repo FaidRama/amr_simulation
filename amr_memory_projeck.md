@@ -757,3 +757,35 @@ Setelah itu, status AMCL tertahan di `AMCL ⏳` selamanya, dan percobaan auto-in
 2. **Deteksi Crash Node AMCL**:
    - Menambahkan deteksi otomatis jika node `amcl` sudah tidak terdaftar di ROS 2 (`self.get_node_names()`), sehingga langsung memunculkan pesan error jelas agar operator segera me-restart navigasi tanpa menunggu sia-sia.
 
+---
+
+## 📌 25. Polaritas DTR Motor RPLiDAR A1 (`ser.dtr = False`), Jebakan `termios.HUPCL` Linux, & Hard USB Reset
+
+### 1. Gejala & Error:
+- Saat menjalankan `run lidar` atau merestart navigasi, muncul error berulang:
+  ```text
+  [rplidar_node]: Cannot start scan: '80008000'!
+  [rplidar_node]: Error, operation time out. RESULT_OPERATION_TIMEOUT!
+  ```
+- Piringan motor RPLiDAR berhenti berputar atau baru mulai berputar lambat saat `rplidar_composition` sudah keburu timeout ($4.6\text{ detik}$).
+
+### 2. Akar Masalah:
+1. **Polaritas Pin `/DTR` Adapter CP2102 RPLiDAR A1 adalah Active-LOW (`clearDTR` = Motor ON)**:
+   - Di dalam source code C++ resmi Slamtec (`rplidar_driver.cpp` baris 2175):
+     - `startMotor()` memanggil `_chanDev->clearDTR()` $\rightarrow$ di `pyserial` sama dengan **`ser.dtr = False`** (tegangan pin `/DTR` = $3.3\text{V}$ = **Motor MENYALA**).
+     - `stopMotor()` memanggil `_chanDev->setDTR()` $\rightarrow$ di `pyserial` sama dengan **`ser.dtr = True`** (tegangan pin `/DTR` = $0\text{V}$ = **Motor MATI**).
+   - **JANGAN PERNAH** mengeset `ser.dtr = True` saat akan menjalankan `rplidar_composition`, karena itu justru mematikan motor!
+2. **Jebakan Kernel Linux `termios.HUPCL` (*Hang Up On Last Close*)**:
+   - Secara default di Linux, saat `pyserial` menutup port (`ser.close()` / keluar dari blok `with serial.Serial(...)`), flag kernel `HUPCL` otomatis meng-assert sinyal DTR (`/DTR` = $0\text{V}$), yang langsung **mematikan motor** tepat sebelum `rplidar_composition` dibuka.
+   - Ketika `rplidar_composition` mulai, fungsi internal `startMotor()` di C++ hanya menunggu `500 ms` sebelum memanggil `startScan()`. Waktu `500 ms` tidak cukup bagi motor yang sempat mati untuk mencapai RPM kerja, sehingga MCU RPLiDAR menolak scan (`80008000` / `RESULT_OPERATION_TIMEOUT!`).
+3. **Proses `rplidar_composition` Tidak Langsung Keluar Saat Timeout**:
+   - Saat `rplidar_node` gagal dengan `RESULT_OPERATION_TIMEOUT!`, proses kontainer `rplidar_composition` tetap hidup sebagai proses kosong tanpa mem-publish `/scan`.
+
+### 3. Solusi Permanen di [`rplidar_bridge.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/rplidar_bridge.py):
+1. **Matikan `termios.HUPCL` & Nyalakan Motor Sebelum Serah-Terima Port**:
+   - Menonaktifkan `termios.HUPCL` (`attrs[2] &= ~termios.HUPCL`) pada file descriptor serial agar kernel Linux tidak mematikan motor saat `ser.close()`.
+   - Mengeset `ser.dtr = False` (Motor ON) dan memberi waktu pre-spin $0.8\text{ detik}$ sebelum menyerahkan port ke `rplidar_composition`.
+2. **Deteksi Instan Fatal Error di `_consume_driver_stderr`**:
+   - Jika stderr mencetak `RESULT_OPERATION_TIMEOUT` atau `Cannot start scan`, flag `self.driver_fatal_error = True` langsung memicu recovery pada detik berikutnya tanpa menunggu watchdog 15 detik.
+3. **Siklus Daya USB via `sysfs authorized` + `USBDEVFS_RESET`**:
+   - Saat melakukan auto-reset USB kernel, `reset_usb_device()` terlebih dahulu mengubah `/sys/bus/usb/devices/.../authorized` ke `0` selama $2.0\text{ detik}$ lalu kembali ke `1` sebelum memanggil `ioctl(USBDEVFS_RESET)`.
