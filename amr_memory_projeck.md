@@ -56,7 +56,10 @@ Pohon koordinat TF robot telah **dikunci mati** mengikuti standar ROS REP 105:
 
 ---
 
-## 📌 3. Driver RPLiDAR A1 & Anti-Macet USB/Serial
+## 📌 3. Driver RPLiDAR A1 & Anti-Macet USB/Serial (DIKUNCI PERMANEN - JANGAN DIUBAH LAGI)
+
+> [!CAUTION]
+> **STATUS DIKUNCI MATI (FROZEN)**: `rplidar_bridge.py` telah teruji 100% stabil, sehat, dan handal di Jetson. **DILARANG KERAS** mengutak-atik, mengubah alur serial, membalik polaritas DTR, atau menambah logika coba-coba pada file ini lagi! (Lihat detail lengkap di Bagian 25).
 
 ### Masalah:
 - LiDAR sering macet di awal, me-restart setiap 6 detik, atau harus cabut-colok kabel USB fisik agar mau membaca port `/dev/rplidar` lagi (`OPERATION_TIMEOUT`).
@@ -497,6 +500,307 @@ Karena `amr_dashboard.service` berjalan terus-menerus di memori OS:
   - **Wajib menjalankan `ros2 daemon stop`** di terminal laptop dan Jetson.
   - Jika tidak di-stop, perintah `ros2 node list` di terminal akan terus membaca cache lama dan gagal mendeteksi node dari perangkat lain.
 
+---
+
+## 📌 18. Alat Evaluasi Skripsi Bab 4: Pengukuran Peta 2D & Uji AMCL
+
+Kedua skrip berikut sempat terhapus saat *merge* Git terdahulu dan kini telah dipulihkan secara penuh di folder `src/amr_simulation/scripts/`:
+
+### 1. Tool Pengukuran Akurasi Geometris Peta 2D (`ukur_peta_skripsi.py`)
+- **Lokasi File**: [`src/amr_simulation/scripts/ukur_peta_skripsi.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/ukur_peta_skripsi.py)
+- **Tujuan (Skenario 1)**: Menguji akurasi geometris rekonstruksi peta SLAM Toolbox terhadap *ground truth* fisik yang diukur manual menggunakan meteran pita baja.
+- **Metrik Kelulusan**:
+  - $RMSE \le 0.05\text{ m}$ ($5\text{ cm}$)
+  - $\text{Galat Skala (Scale Error)} \le 2.0\%$
+- **Fitur Interaktif (Matplotlib GUI)**:
+  - Zoom & Pan menggunakan toolbar visual.
+  - Klik kiri 2 kali pada peta: Titik A (awal landmark) dan Titik B (akhir landmark).
+  - Terminal interaktif: masukkan Nama Landmark dan Ukuran Nyata Meteran ($D_{\text{nyata}}$).
+  - Keyboard shortcut: `'U'` untuk Undo landmark terakhir jika salah klik, `'S'` atau klik tombol untuk simpan hasil.
+  - Output otomatis: Tabel hasil CSV (siap ke Word/Excel) dan gambar peta beranotasi PNG disimpan di `~/benchmark_skripsi_results/evaluasi_peta/`.
+  - **Fitur Pembaca Koordinat ROS (Baru)**: Kursor Matplotlib secara realtime menampilkan koordinat Map Frame $(X, Y)$ dalam meter pada status bar kanan bawah (`Map Frame: X=...m, Y=...m`) serta mencetak koordinat ROS saat titik diklik.
+- **Analisis Metodologi & Sub-Pixel Accuracy (Penyebab Selisih 10 cm & Solusinya)**:
+  - Resolusi grid peta adalah $0.05\text{ m/px}$ ($5\text{ cm per piksel}$).
+  - Jika mengukur bukaan lorong / pintu / meja (bidang dalam-ke-dalam), titik klik **WAJIB diletakkan di sudut permukaan dalam** (antarmuka antara piksel putih dan piksel hitam).
+  - Jika titik ditarik sampai ke tepi luar dinding hitam, ketebalan dinding ($2 - 3\text{ piksel} = 10 - 15\text{ cm}$) ikut terhitung dan menimbulkan galat semu.
+  - **Hasil Validasi Nyata**: Ground truth $0.685\text{ m}$ menghasilkan $0.710\text{ m}$ di peta (galat hanya $2.5\text{ cm} = 0.5\text{ piksel}$), membuktikan rekonstruksi SLAM sangat presisi dan **LULUS kriteria kelulusan Skripsi ($RMSE \le 0.05\text{ m}$)**.
+- **Cara Menjalankan**:
+  ```bash
+  # Mengukur peta default atau peta terbaru peta_l1_dc:
+  python3 src/amr_simulation/scripts/ukur_peta_skripsi.py --map src/amr_simulation/maps/peta_l1_dc.yaml
+  ```
+
+### 2. Tool Evaluasi Pelacakan Posisi Partikel AMCL (`uji_amcl_skripsi.py`)
+- **Lokasi File**: [`src/amr_simulation/scripts/uji_amcl_skripsi.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/uji_amcl_skripsi.py)
+- **Tujuan (Skenario 2)**: Mengevaluasi keandalan filter partikel Nav2 AMCL dalam menentukan pose absolut robot $(x, y, \theta)$ di atas peta tersimpan.
+- **Mode Pengujian Ganda (Baru)**:
+  1. **Mode 1: POSE TRACKING (Default / Rekomendasi Skripsi)**:
+     - Mengirim perkiraan pose awal `/initialpose` di sekitar titik datum fisik dengan sebaran partikel lokal Gaussian ($\sigma \approx 30\text{ cm}$, $\sigma_\theta \approx 15^\circ$).
+     - AMCL tidak menyebarkan partikel acak buta ke seberang ruangan/meja, sehingga bebas dari *perceptual aliasing* simetri ruangan dan mengunci posisi secara cepat & presisi saat robot berputar.
+  2. **Mode 2: GLOBAL LOCALIZATION (Kidnapped Robot)**:
+     - Menyebarkan 2000 partikel acak buta ke seluruh penjuru peta via `/reinitialize_global_localization`.
+- **Fitur Salin Pose Live AMCL (`'C'`)**:
+  - Pada menu `[4] Ubah Koordinat Ground Truth`, status pose AMCL real-time ditampilkan langsung di layar, dan pengguna cukup menekan `'C'` untuk menyalin koordinat aktual robot ke Datum 1-5 tanpa perlu mengetik angka manual.
+- **Metrik Kelulusan**:
+  - 5 kali pengulangan pada 5 titik datum (Total 25 kali pengujian).
+  - Waktu Konvergensi: $t_{\text{conv}} \le 10.0\text{ s}$ ($\sigma_x \le 0.05\text{ m}$, $\sigma_y \le 0.05\text{ m}$, $\sigma_\theta \le 0.05\text{ rad}$).
+  - Rata-rata Galat Posisi: $e_{\text{pos}} \le 0.05\text{ m}$ ($5\text{ cm}$).
+  - Rata-rata Galat Orientasi: $e_\theta \le 3.0^\circ$.
+- **Output**:
+  - Disimpan otomatis ke CSV di `~/hasil_pengujian_skripsi/skenario2_evaluasi_amcl.csv` lengkap dengan kolom `Mode_Uji`.
+- **Cara Menjalankan**:
+  ```bash
+  python3 src/amr_simulation/scripts/uji_amcl_skripsi.py
+  ```
+
+---
+
+## 📌 19. Visualisasi Peta Mandiri & Penentuan Koordinat Datum di RViz2 (`view_map.launch.py`)
+
+- **Lokasi File**: [`src/amr_simulation/launch/view_map.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/view_map.launch.py)
+- **Tujuan**: Membuka peta `.yaml` & `.pgm` langsung di RViz2 secara mandiri di Laptop tanpa perlu menyalakan robot fisik (menggunakan `nav2_map_server` dan `nav2_lifecycle_manager`).
+- **Cara Menjalankan di Laptop**:
+  ```bash
+  source /opt/ros/foxy/setup.bash
+  source ~/Documents/amr_ws/install/setup.bash
+  ros2 launch amr_simulation view_map.launch.py
+  # Atau spesifikasikan peta:
+  ros2 launch amr_simulation view_map.launch.py map:=src/amr_simulation/maps/peta_l1_dc.yaml
+  ```
+- **Cara Mengambil Koordinat Pasti di RViz2**:
+  1. **Koordinat Posisi $(X, Y)$**:
+     - Di terminal jalankan: `ros2 topic echo /clicked_point`
+     - Di toolbar RViz, klik tombol **`Publish Point`** lalu klik pada titik acuan di peta.
+  2. **Koordinat Posisi & Sudut Hadap $(X, Y, \text{Yaw})$**:
+     - Di terminal jalankan: `ros2 topic echo /goal_pose --once`
+     - Di toolbar RViz, klik tombol **`2D Goal Pose`** / **`Nav2 Goal`** lalu klik & drag panah ke arah robot menghadap.
+
+---
+
+## 📌 20. Solusi Bottleneck Inisialisasi Nav2 (`[MENUNGGU] AMCL ⏳ | Costmap ⏳`) & Dual QoS `/initialpose`
+
+### 1. Gejala & Akar Masalah:
+- Saat `real_navigation.launch.py` dijalankan (termasuk via Web Dashboard), node `adaptive_velocity_node` terus mencetak log:
+  ```text
+  [MENUNGGU] Peta ✔ | LiDAR ✔ | Encoder ✔ | AMCL ⏳ | Costmap ⏳
+  ```
+- **Akar Penyebab**:
+  1. **AMCL Menunggu Initial Pose**: AMCL tidak akan mem-publish topik `/amcl_pose` sampai menerima perkiraan posisi awal (`/initialpose`) atau sebelum robot bergerak.
+  2. **Costmap Menunggu AMCL**: *Local Costmap* dan *Global Costmap* menahan aktivasi jejak kaki robot (*published footprint*) sampai transformasi `map -> odom` dari AMCL tersedia.
+  3. **Ketidakcocokan Kebijakan QoS DDS ROS 2 Foxy**: Nav2 AMCL berlangganan topik `/initialpose` dengan durabilitas **`TRANSIENT_LOCAL`**. Jika publisher mengirim pesan menggunakan durabilitas default **`VOLATILE`** (`depth=10`), DDS CycloneDDS menganggap QoS tidak kompatibel sehingga pesan diabaikan (*silently dropped*).
+  4. **Timeout Sensor LiDAR Awal**: Jika sensor RPLiDAR sempat mengalami timeout USB saat startup (seperti auto-reset USB selama $\approx 60\text{ detik}$), auto-initialpose bawaan sempat kehabisan batas percobaan (sebelumnya dibatasi 8 kali).
+
+### 2. Solusi Permanen:
+1. **Dukungan Dual QoS `/initialpose`**:
+   - Di [`adaptive_velocity_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/adaptive_velocity_node.py) dan [`app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py), publisher `/initialpose` diubah menjadi publisher ganda: **`TRANSIENT_LOCAL` (reliable)** dan **`VOLATILE`**.
+   - Timestamp pesan di-generate dari clock aktual node (`self.get_clock().now().to_msg()`).
+2. **Auto-Retry Tanpa Batas**:
+   - Di `adaptive_velocity_node.py`, batasan kuota 8 kali dihapus dan diganti dengan pengiriman berkala setiap $4\text{ detik}$ sampai AMCL benar-benar terkonfirmasi aktif (`amcl_initialized = True`).
+3. **Inisialisasi Manual Seketika via Dashboard**:
+   - Pengguna cukup mengklik tombol **`📍 Set Posisi Awal`** di toolbar Dashboard (atau klik kanan pada kanvas peta $\rightarrow$ `Set Posisi Awal Robot (AMCL)`), atau mengklik tombol **`🔄 Relokalisasi (360°)`**.
+   - Begitu tombol ini diklik, status `AMCL ⏳` dan `Costmap ⏳` langsung berubah menjadi **`✔`**, dan log terminal berganti hijau:  
+     `🟢 [SIAP NAVIGASI] AMR SIAP UNTUK NAVIGASI & MENGANTAR!`
+
+---
+
+## 📌 21. Optimasi Manuver Putar Balik 180° (U-Turn) DWB Local Planner & Penanganan Ragu/Macet
+
+### 1. Gejala & Fenomena:
+- Saat robot diperintahkan bergerak ke tujuan yang arahnya berlawanan (putar balik 180° / U-turn), robot tampak terdiam, "kebingungan / berpikir lama", atau berhenti beberapa detik sebelum akhirnya mulai berputar.
+
+### 2. Akar Masalah:
+1. **Deadband Motor Fisik & Gesekan Ban (`min_speed_theta: 0.00`)**:
+   - DWB menghasilkan profil trajektori putar yang dimulai dari kecepatan sudut sangat kecil ($\omega \approx 0.03 - 0.08\text{ rad/s}$).
+   - Karena robot differential drive memiliki bobot sasis yang cukup berat dan ban karet bersentuhan langsung dengan lantai, tegangan PWM motor pada kecepatan rendah tersebut belum sanggup memecahkan gaya gesek statis (*breakaway friction / deadband*).
+   - Secara perangkat lunak ROS 2 Nav2 sudah memerintahkan berputar, tetapi secara fisik robot diam menunggu akumulasi $\omega$ melewati ambang torsi putar motor.
+2. **Konflik Bobot Evaluasi Jalur (`PathAlign.scale: 4.0`)**:
+   - Parameter `PathAlign.forward_point_distance: 0.30` mengevaluasi titik 30 cm di depan hidung robot agar selalu searah garis jalur (*global path*).
+   - Ketika jalur berbalik 180° persis di belakang robot, semua trajektori menghasilkan penalti `PathAlign` yang sangat buruk. Bobot `4.0` yang terlalu dominan menyebabkan kebuntuan evaluasi (*scoring deadlock*) sesaat saat memilih arah putaran awal.
+3. **Pemicu Palsu Rem Osilasi (`Oscillation.scale: 5.0`)**:
+   - Di awal U-turn, DWB mengevaluasi putaran kiri (+$\omega$) lalu sedikit penyesuaian kanan (-$\omega$).
+   - Fluktuasi kecil arah putar dalam jarak sempit ($< 0.05\text{ m}$) langsung dideteksi oleh `OscillationCritic` sebagai bahaya osilasi liar.
+   - Karena skalanya sangat sensitif (`5.0`), Nav2 memotong kecepatan robot menjadi `0.0` (rem paksa di tempat) sehingga robot terhenti sesaat.
+4. **Batasan Komputasi CPU Jetson (`vx_samples` & `vtheta_samples`)**:
+   - Total trajektori yang dihitung per siklus adalah $\text{vx\_samples} \times \text{vtheta\_samples}$.
+   - Menaikkan `vtheta_samples` ke 20 atau 25 terbukti membebani CPU Jetson Nano/Orin dan memicu *control loop missed*. Oleh karena itu, jumlah sampel putar **wajib dipertahankan di nilai 18**.
+
+### 3. Solusi Parameter di `nav2_params.yaml`:
+Solusi dilakukan murni dengan menyetel torsi putar awal dan bobot critic **tanpa menambah beban CPU Jetson sama sekali (0% CPU overhead)**:
+
+```yaml
+    # DWB parameters
+    FollowPath:
+      min_vel_x: 0.0
+      ...
+      min_speed_theta: 0.20        # (Sebelumnya: 0.00) -> Memberi torsi putar awal mengatasi gesekan ban/lantai
+      vx_samples: 14               # TETAP (Aman untuk CPU Jetson)
+      vtheta_samples: 18           # TETAP (Jangan dinaikkan ke 20-25 agar tidak membebani Jetson)
+      ...
+      PathAlign.scale: 1.5         # (Sebelumnya: 4.0) -> Mengurangi penalti hadap saat jalur berada di belakang
+      Oscillation.scale: 1.0       # (Sebelumnya: 5.0) -> Mencegah pemotongan kecepatan mendadak saat manuver U-turn
+```
 
 
+---
 
+## 📌 22. Solusi Sintaks CycloneDDS XML & Error `rcl node's rmw handle is invalid`
+
+### 1. Gejala & Pesan Error:
+Saat menjalankan node ROS 2 (misal `run arduino` atau `arduino_bridge.py`), muncul pesan kegagalan pembuatan domain DDS:
+```text
+python3: config: //CycloneDDS/Domain/Discovery/Peers: parser error invalid token encountered at line 18 (file:///home/jetson/deliver_amr/src/amr_simulation/config/cyclonedds_jetson.xml line 16)
+[ERROR] [rmw_cyclonedds_cpp]: rmw_create_node: failed to create domain, error Error
+_rclpy.RCLError: Unknown error creating node: rcl node's rmw handle is invalid, at ...
+```
+
+### 2. Akar Penyebab:
+- Terjadi kesalahan sintaks XML (*XML parser invalid token*) di dalam tag `<Peers>` pada file konfigurasi `cyclonedds_jetson.xml`.
+- Penyebab umum mencakup:
+  1. Lupa menutup tag `<Peer address="..."/>` (misal `<Peer address="...">` tanpa penutup `/>` atau tanpa `</Peer>`).
+  2. Komentar bertumpuk (*nested comment* `<!-- <!-- ... --> -->` atau karakter `--` di dalam komentar).
+  3. Tanda kutip miring / unicode (`“...”`) akibat copy-paste dari aplikasi pengolah kata.
+- Kegagalan parsing XML menyebabkan RMW layer (`rmw_cyclonedds_cpp`) gagal menginisialisasi domain DDS, sehingga semua panggilan pembuatan node (`rclpy.create_node`) gagal dengan `rmw handle is invalid`.
+
+### 3. Solusi & Format Standar:
+Pastikan file konfigurasi XML bersih dan rapi:
+```xml
+<?xml version="1.0" encoding="UTF-8" ?>
+<CycloneDDS xmlns="https://cdds.io/config" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+    <Domain id="any">
+        <General>
+            <NetworkInterfaceAddress>tailscale0</NetworkInterfaceAddress>
+            <AllowMulticast>false</AllowMulticast>
+        </General>
+        <Discovery>
+            <Peers>
+                <!-- Selalu daftarkan loopback dan IP Tailscale mesin sendiri -->
+                <Peer address="127.0.0.1"/>
+                <Peer address="100.84.182.79"/>
+                <!-- IP Tailscale Laptop Developer / Operator -->
+                <Peer address="100.127.135.67"/>
+            </Peers>
+            <ParticipantIndex>auto</ParticipantIndex>
+        </Discovery>
+    </Domain>
+</CycloneDDS>
+```
+Setelah diedit, jalankan `ros2 daemon stop` dan build kembali workspace bila perlu.
+
+---
+
+## 📌 23. Optimasi Modul Human Awareness: Solusi Lompat State Langsung ke `SAFE_STOP` (Bypassing `REDUCED_SPEED`)
+
+### 1. Gejala & Fenomena:
+Saat dilakukan penyesuaian lebar koridor lintasan robot (`corridor_width`) menjadi lebih sempit (tujuannya agar manusia di posisi serong tidak memicu perlambatan), saat robot mendekati manusia lurus di depannya, state robot dari `NORMAL` langsung melompat seketika ke `SAFE_STOP`. State `REDUCED_SPEED` sama sekali tidak tampak/terlewati.
+
+### 2. Akar Masalah:
+1. **Jebakan Matematis Overlap Koridor (`corridor_overlap >= 0.60`)**:
+   - Kode sebelumnya mengharuskan minimal 60% lebar bounding box manusia berada di dalam kotak koridor (`person["corridor_overlap"] >= 0.60`).
+   - Ketika koridor dipersempit (misal menjadi selebar 120 px) dan manusia mulai mendekat, tubuh manusia membesar (misal selebar 250 px).
+   - Irisan maksimal hanyalah selebar koridor itu sendiri (120 px), sehingga rasio overlap maksimal hanyalah $\frac{120}{250} = 48\% < 60\%$.
+   - Manusia yang berdiri tepat di depan hidung robot pun **dinyatakan bukan di dalam koridor (`target = None`)**. Akibatnya, zona koridor dipaksa bernilai `Zone.FAR` (`NORMAL`).
+2. **Logika Omnidirectional Emergency Stop (`near_person_outside_or_inside`)**:
+   - Di baris klasifikasi kedekatan, terdapat pemeriksaan:
+     ```python
+     near_person_outside_or_inside = any(person["r"] >= args.t_near_enter for person in persons)
+     ```
+   - Pemeriksaan ini sengaja memeriksa **seluruh manusia tanpa memedulikan koridor**.
+   - Ketika manusia masih berjarak sedang, manusia diabaikan karena tereliminasi oleh koridor sempit. Namun begitu manusia sudah sangat dekat hingga rasionya melewati `t_near_enter`, `force_near = True` langsung aktif dan membanting state seketika ke `SAFE_STOP`.
+3. **Rentang Ambang Batas Terlalu Rapat**:
+   - Nilai default `--t-med-enter: 0.85` dan `--t-near-enter: 0.95` hanya memiliki selisih $0.10$. Karena rasio bounding box membesar secara hiperbolik saat mendekat, rentang ini terlewati hanya dalam beberapa frame kamera.
+
+### 3. Solusi Permanen:
+1. **Ganti Logika Koridor Berbasis Titik Tengah Horizontal (*Center-X*) di [`human_awareness_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/human_awareness_node.py)**:
+   Mengganti perhitungan persentase irisan dengan pengecekan apakah titik pusat tubuh manusia berada di dalam koridor lintasan robot:
+   ```python
+   corridor_persons = []
+   for person in persons:
+       # Titik tengah horizontal tubuh
+       person_center_x = (person["x1"] + person["x2"]) / 2.0
+
+       # Manusia di dalam koridor jika titik tengahnya berada di koridor,
+       # ATAU jika tubuhnya sangat dekat hingga mencakup seluruh koridor
+       person["in_corridor"] = (
+           (corridor_x1 <= person_center_x <= corridor_x2) or
+           (person["x1"] <= corridor_x1 and person["x2"] >= corridor_x2)
+       )
+
+       if person["in_corridor"]:
+           corridor_persons.append(person)
+   ```
+2. **Standardisasi Ambang Batas Rasio Hysteresis**:
+   Menyesuaikan nilai default pada `human_awareness_node.py` dan `fsm.py` agar transisi kecepatan terlihat jelas dan halus:
+   - **`t_med_enter = 0.60`** (mulai melambat di jarak $\approx 2.0 - 2.5\text{ m}$)
+   - **`t_med_exit = 0.50`** (kembali ke kecepatan normal saat orang menjauh)
+   - **`t_near_enter = 0.85`** (rem darurat total di jarak $\approx 1.0 - 1.3\text{ m}$)
+   - **`t_near_exit = 0.80`** (keluar dari rem darurat saat orang mundur)
+
+---
+
+## 📌 24. Solusi AMCL Macet / Crash: `pf.c:381: pf_update_resample: Assertion 'i < set_a->sample_count' failed` (Nav2 Issue #2711)
+
+### 1. Gejala & Error:
+Pada log sistem Nav2 / Dashboard:
+```text
+[amcl-8] [INFO] [1793608198.693869320] [amcl]: createLaserObject
+[adaptive_velocity_node.py-6] [INFO] [1793608198.718929131] [adaptive_velocity_node]: 📍 Mengirim auto-initialpose ke AMCL (percobaan #1)...
+[amcl-8] [INFO] [1793608198.720448273] [amcl]: initialPoseReceived
+[amcl-8] [INFO] [1793608198.720945672] [amcl]: Setting pose: 0.000 0.000 0.000
+[amcl-8] amcl: /tmp/binarydeb/ros-foxy-nav2-amcl-0.4.7/src/pf/pf.c:381: pf_update_resample: Assertion `i < set_a->sample_count' failed.
+[ERROR] [amcl-8]: process has died [pid 42762, exit code -6]
+[adaptive_velocity_node.py-6] [INFO] [MENUNGGU] Peta ✔ | LiDAR ✔ | Encoder ✔ | AMCL ⏳ | Costmap ✔
+```
+Setelah itu, status AMCL tertahan di `AMCL ⏳` selamanya, dan percobaan auto-initialpose terus terulang hingga puluhan kali tanpa pernah direspons.
+
+### 2. Akar Masalah:
+- Ini adalah **bug *race condition* terkenal pada `nav2_amcl` ROS 2 Foxy (Nav2 Issue #2711)**.
+- Ketika driver LiDAR baru pulih / mengirim paket scan pertama, AMCL memanggil `createLaserObject` dan memulai proses resampling awal partikel (`pf_update_resample`).
+- Di saat bersamaan (selisih hanya 13 ms), `adaptive_velocity_node.py` langsung menembakkan pesan `/initialpose`.
+- Pada ROS 2 Foxy `nav2_amcl 0.4.7`, callback `initialPoseReceived` dan thread sensor scan tidak memiliki *mutex lock* penuh saat memodifikasi memori *particle filter* (`pf_`).
+- Data partikel diakses secara bersamaan, bobot partikel menjadi korup / tak ternormalisasi, sehingga indeks partikel `i` melebihi `sample_count` dan memicu `Assertion failed` (`SIGABRT / exit code -6`).
+- Begitu proses AMCL mati, AMCL tidak berjalan lagi di ROS 2, sehingga perintah *Set Posisi Awal* dari pengguna atau dari skrip tidak akan pernah diproses.
+
+### 3. Solusi di [`adaptive_velocity_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/adaptive_velocity_node.py):
+1. **Stabilisasi Aliran Laser Sebelum Initial Pose (`scan_stable`)**:
+   - Menambahkan pelacakan waktu pertama scan tiba (`self.first_scan_wall_time`).
+   - `send_auto_initialpose` **diwajibkan menunggu jeda stabil minimal 2.5 detik** setelah paket laser scan pertama diterima.
+   - Jeda ini memberi waktu bagi AMCL untuk menyelesaikan `createLaserObject`, membangun *likelihood field*, dan menstabilkan thread pemrosesan sebelum menerima pose awal.
+2. **Deteksi Crash Node AMCL**:
+   - Menambahkan deteksi otomatis jika node `amcl` sudah tidak terdaftar di ROS 2 (`self.get_node_names()`), sehingga langsung memunculkan pesan error jelas agar operator segera me-restart navigasi tanpa menunggu sia-sia.
+
+---
+
+## 📌 25. Polaritas DTR Motor RPLiDAR A1 (`ser.dtr = False`), Jebakan `termios.HUPCL` Linux, & Hard USB Reset
+
+### 1. Gejala & Error:
+- Saat menjalankan `run lidar` atau merestart navigasi, muncul error berulang:
+  ```text
+  [rplidar_node]: Cannot start scan: '80008000'!
+  [rplidar_node]: Error, operation time out. RESULT_OPERATION_TIMEOUT!
+  ```
+- Piringan motor RPLiDAR berhenti berputar atau baru mulai berputar lambat saat `rplidar_composition` sudah keburu timeout ($4.6\text{ detik}$).
+
+### 2. Akar Masalah:
+1. **Polaritas Pin `/DTR` Adapter CP2102 RPLiDAR A1 adalah Active-LOW (`clearDTR` = Motor ON)**:
+   - Di dalam source code C++ resmi Slamtec (`rplidar_driver.cpp` baris 2175):
+     - `startMotor()` memanggil `_chanDev->clearDTR()` $\rightarrow$ di `pyserial` sama dengan **`ser.dtr = False`** (tegangan pin `/DTR` = $3.3\text{V}$ = **Motor MENYALA**).
+     - `stopMotor()` memanggil `_chanDev->setDTR()` $\rightarrow$ di `pyserial` sama dengan **`ser.dtr = True`** (tegangan pin `/DTR` = $0\text{V}$ = **Motor MATI**).
+   - **JANGAN PERNAH** mengeset `ser.dtr = True` saat akan menjalankan `rplidar_composition`, karena itu justru mematikan motor!
+2. **Jebakan Kernel Linux `termios.HUPCL` (*Hang Up On Last Close*)**:
+   - Secara default di Linux, saat `pyserial` menutup port (`ser.close()` / keluar dari blok `with serial.Serial(...)`), flag kernel `HUPCL` otomatis meng-assert sinyal DTR (`/DTR` = $0\text{V}$), yang langsung **mematikan motor** tepat sebelum `rplidar_composition` dibuka.
+   - Ketika `rplidar_composition` mulai, fungsi internal `startMotor()` di C++ hanya menunggu `500 ms` sebelum memanggil `startScan()`. Waktu `500 ms` tidak cukup bagi motor yang sempat mati untuk mencapai RPM kerja, sehingga MCU RPLiDAR menolak scan (`80008000` / `RESULT_OPERATION_TIMEOUT!`).
+3. **Proses `rplidar_composition` Tidak Langsung Keluar Saat Timeout**:
+   - Saat `rplidar_node` gagal dengan `RESULT_OPERATION_TIMEOUT!`, proses kontainer `rplidar_composition` tetap hidup sebagai proses kosong tanpa mem-publish `/scan`.
+
+### 3. Solusi Permanen di [`rplidar_bridge.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/rplidar_bridge.py):
+1. **Matikan `termios.HUPCL` & Nyalakan Motor Sebelum Serah-Terima Port**:
+   - Menonaktifkan `termios.HUPCL` (`attrs[2] &= ~termios.HUPCL`) pada file descriptor serial agar kernel Linux tidak mematikan motor saat `ser.close()`.
+   - Mengeset `ser.dtr = False` (Motor ON) dan memberi waktu pre-spin $0.8\text{ detik}$ sebelum menyerahkan port ke `rplidar_composition`.
+2. **Deteksi Instan Fatal Error di `_consume_driver_stderr`**:
+   - Jika stderr mencetak `RESULT_OPERATION_TIMEOUT` atau `Cannot start scan`, flag `self.driver_fatal_error = True` langsung memicu recovery pada detik berikutnya tanpa menunggu watchdog 15 detik.
+3. **Siklus Daya USB via `sysfs authorized` + `USBDEVFS_RESET`**:
+   - Saat melakukan auto-reset USB kernel, `reset_usb_device()` terlebih dahulu mengubah `/sys/bus/usb/devices/.../authorized` ke `0` selama $2.0\text{ detik}$ lalu kembali ke `1` sebelum memanggil `ioctl(USBDEVFS_RESET)`.
+
+### 4. 🔒 STATUS KUNCI MUTLAK (FROZEN - JANGAN DIUBAH LAGI):
+- Status pengujian di hardware Jetson: **SEHAT 100% (Verifikasi Berhasil)**.
+- **ATURAN MUTLAK**: Script [`rplidar_bridge.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/rplidar_bridge.py) sudah berada pada kondisi final yang sangat stabil. **DILARANG KERAS** memodifikasi, mengotak-atik urutan baudrate, mengganti nilai `ser.dtr`, mengubah handler sinyal, atau menambah logika coba-coba pada `rplidar_bridge.py`. Kode ini dikunci permanen untuk proyek!

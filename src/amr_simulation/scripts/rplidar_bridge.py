@@ -16,6 +16,7 @@ import math
 import fcntl
 import signal
 import serial
+import termios
 import threading
 import subprocess
 import rclpy
@@ -26,22 +27,34 @@ from sensor_msgs.msg import LaserScan
 USBDEVFS_RESET = 21780  # 0x5514 ('U' << 8 | 20)
 
 
-def kill_other_instances(process_pattern: str):
+def kill_other_instances(process_pattern: str, graceful_first: bool = False):
     """Bunuh proses lain yang cocok dengan pattern kecuali PID proses ini sendiri dan parent-nya."""
     my_pid = os.getpid()
     my_ppid = os.getppid()
     try:
         res = subprocess.run(['pgrep', '-f', process_pattern], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        pids = []
         for line in res.stdout.splitlines():
             line = line.strip()
             if not line.isdigit():
                 continue
             pid = int(line)
             if pid not in (my_pid, my_ppid):
+                pids.append(pid)
+        if not pids:
+            return
+        if graceful_first:
+            for pid in pids:
                 try:
-                    os.kill(pid, signal.SIGKILL)
+                    os.kill(pid, signal.SIGINT)
                 except Exception:
                     pass
+            time.sleep(0.5)
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -81,10 +94,11 @@ class RPLidarBridgeNode(Node):
         self.driver_start_time = 0.0
         self.restart_count = 0
         self.last_driver_err = ""
+        self.driver_fatal_error = False
 
         # Bersihkan proses rplidar_composition yatim (zombie) sebelum mulai agar port serial bebas
         if self.auto_launch:
-            kill_other_instances('rplidar_composition')
+            kill_other_instances('rplidar_composition', graceful_first=True)
             time.sleep(0.2)
             self.launch_rplidar_driver(force_usb_reset=False)
 
@@ -113,6 +127,13 @@ class RPLidarBridgeNode(Node):
                 return False
 
         if not os.access(self.port, os.R_OK | os.W_OK):
+            try:
+                real_port = os.path.realpath(self.port)
+                subprocess.run(['sudo', '-n', 'chmod', '666', real_port], check=False)
+            except Exception:
+                pass
+
+        if not os.access(self.port, os.R_OK | os.W_OK):
             self.get_logger().warn(
                 f"⚠️ Tidak punya izin read/write ke {self.port}! Coba jalankan: sudo chmod 666 {self.port}"
             )
@@ -122,7 +143,7 @@ class RPLidarBridgeNode(Node):
 
     def reset_usb_device(self):
         """
-        Reset port USB di level Kernel Linux (USBDEVFS_RESET).
+        Reset port USB di level Kernel Linux (sysfs authorized toggle + USBDEVFS_RESET).
         Hanya dipanggil jika RPLiDAR benar-benar macet setelah percobaan normal gagal.
         """
         try:
@@ -135,12 +156,14 @@ class RPLidarBridgeNode(Node):
             cur = os.path.realpath(sys_dev_path)
             busnum_file = None
             devnum_file = None
-            for _ in range(5):
+            sys_usb_dir = None
+            for _ in range(7):
                 b_cand = os.path.join(cur, "busnum")
                 d_cand = os.path.join(cur, "devnum")
                 if os.path.exists(b_cand) and os.path.exists(d_cand):
                     busnum_file = b_cand
                     devnum_file = d_cand
+                    sys_usb_dir = cur
                     break
                 cur = os.path.dirname(cur)
 
@@ -157,12 +180,35 @@ class RPLidarBridgeNode(Node):
                 return False
 
             self.get_logger().info(f"🔌 Melakukan Auto-Reset USB Kernel ({usb_dev_path}) seperti cabut-colok fisik...")
-            fd = os.open(usb_dev_path, os.O_WRONLY)
+
+            # 1. Toggle sysfs 'authorized' (0 -> jeda 2.0s -> 1) setara pencabutan kabel fisik
+            auth_file = os.path.join(sys_usb_dir, "authorized") if sys_usb_dir else None
+            if auth_file and os.path.exists(auth_file):
+                try:
+                    subprocess.run(['sudo', '-n', 'sh', '-c', f'echo 0 > {auth_file}'], stderr=subprocess.DEVNULL)
+                    time.sleep(2.0)
+                    subprocess.run(['sudo', '-n', 'sh', '-c', f'echo 1 > {auth_file}'], stderr=subprocess.DEVNULL)
+                    time.sleep(1.0)
+                except Exception:
+                    pass
+
+            # 2. Kirim ioctl USBDEVFS_RESET
+            fd = None
             try:
-                fcntl.ioctl(fd, USBDEVFS_RESET, 0)
-            finally:
-                os.close(fd)
-            time.sleep(1.2)
+                fd = os.open(usb_dev_path, os.O_WRONLY)
+            except PermissionError:
+                try:
+                    subprocess.run(['sudo', '-n', 'chmod', '666', usb_dev_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    fd = os.open(usb_dev_path, os.O_WRONLY)
+                except Exception:
+                    pass
+
+            if fd is not None:
+                try:
+                    fcntl.ioctl(fd, USBDEVFS_RESET, 0)
+                finally:
+                    os.close(fd)
+            time.sleep(1.5)
             self.get_logger().info("✅ Auto-Reset USB RPLiDAR berhasil!")
             return True
         except Exception as e:
@@ -181,23 +227,45 @@ class RPLidarBridgeNode(Node):
 
         try:
             with serial.Serial(self.port, self.baud, timeout=0.2, write_timeout=0.2) as ser:
-                ser.dtr = True
-                ser.rts = True
-                time.sleep(0.05)
-                # Kirim perintah STOP (\xA5\x25) untuk menghentikan stream lama
+                # Matikan flag HUPCL (Hang Up On Last Close) di kernel Linux agar saat ser.close()
+                # dipanggil, kernel TIDAK mengubah sinyal DTR (tidak mematikan motor LiDAR saat transisi ke driver C++)
+                try:
+                    attrs = termios.tcgetattr(ser.fd)
+                    attrs[2] = attrs[2] & ~termios.HUPCL
+                    termios.tcsetattr(ser.fd, termios.TCSANOW, attrs)
+                except Exception:
+                    pass
+
+                # Kirim perintah STOP (\xA5\x25) dua kali untuk menghentikan stream data aktif lama
                 ser.write(b'\xA5\x25')
                 ser.flush()
                 time.sleep(0.05)
-                if self.restart_count >= 1:
+                ser.write(b'\xA5\x25')
+                ser.flush()
+                time.sleep(0.1)
+                ser.reset_input_buffer()
+                ser.reset_output_buffer()
+
+                if self.restart_count >= 1 or force_usb_reset:
                     self.get_logger().info("🔄 Mengirim perintah Hardware Reboot (0xA5 0x40) ke MCU RPLiDAR...")
                     ser.write(b'\xA5\x40')
                     ser.flush()
-                    time.sleep(0.5)
+                    # Slamtec mensyaratkan jeda minimal 2.0 detik agar MCU selesai inisialisasi boot
+                    time.sleep(2.2)
+                    ser.reset_input_buffer()
+
+                # KRITIS PADA RPLiDAR A1 (Chip CP2102):
+                # Pin /DTR bersifat Active-LOW (lihat RPlidarDriverImplCommon::startMotor -> clearDTR()):
+                # - ser.dtr = False (clearDTR) -> pin /DTR = 3.3V (HIGH) -> MOTOR MENYALA (ON)!
+                # - ser.dtr = True  (setDTR)   -> pin /DTR = 0V   (LOW)  -> MOTOR MATI (OFF)!
                 ser.dtr = False
                 ser.rts = False
                 ser.reset_input_buffer()
                 ser.reset_output_buffer()
-            time.sleep(0.2)
+                # Beri waktu 0.8 detik agar motor RPLiDAR berputar stabil sebelum rplidar_composition memanggil startScan()
+                time.sleep(0.8)
+                ser.reset_input_buffer()
+            time.sleep(0.15)
             return True
         except Exception as e:
             self.get_logger().warn(f"⚠️ Peringatan saat pre-reset serial RPLiDAR: {e}")
@@ -211,14 +279,18 @@ class RPLidarBridgeNode(Node):
                 text = line.decode('utf-8', errors='ignore').strip()
                 if text:
                     self.last_driver_err = text
-                    if 'Error' in text or 'time out' in text.lower() or 'cannot' in text.lower():
+                    lower_txt = text.lower()
+                    if 'Error' in text or 'time out' in lower_txt or 'cannot' in lower_txt:
                         self.get_logger().warn(f"[rplidar_node] {text}")
+                    if 'result_operation_timeout' in lower_txt or 'cannot start scan' in lower_txt or 'cannot bind' in lower_txt:
+                        self.driver_fatal_error = True
         except Exception:
             pass
 
     def launch_rplidar_driver(self, force_usb_reset=False):
         """Jalankan rplidar_composition sebagai subprocess terkelola."""
         self.shutdown_driver_only()
+        self.driver_fatal_error = False
 
         if not self.hardware_reset_rplidar(force_usb_reset=force_usb_reset):
             self.driver_start_time = time.time()
@@ -305,6 +377,15 @@ class RPLidarBridgeNode(Node):
     def check_liveness(self):
         now = time.time()
         if not self.auto_launch:
+            return
+
+        # 0. Jika rplidar_node mencetak error fatal (misal RESULT_OPERATION_TIMEOUT / Cannot start scan)
+        if self.driver_fatal_error:
+            self.driver_fatal_error = False
+            self.get_logger().warn("⚡ Error fatal driver terdeteksi -> Langsung melakukan Auto-recovery RPLiDAR...")
+            self.restart_count += 1
+            self.has_first_scan = False
+            self.launch_rplidar_driver(force_usb_reset=(self.restart_count >= 2))
             return
 
         # 1. Jika driver proses berhenti sendiri (misal RESULT_OPERATION_TIMEOUT)

@@ -47,6 +47,7 @@ class AdaptiveVelocityNode(Node):
         self.nav_ready_announced = False
         self.last_ready_check_time = 0.0
         self.last_scan_wall_time = 0.0
+        self.first_scan_wall_time = 0.0
         self.last_initpose_sent_time = 0.0
         self.initpose_sent_count = 0
         self.last_map_odom_x = 0.0
@@ -77,7 +78,8 @@ class AdaptiveVelocityNode(Node):
         self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, tl_qos)
         self.create_subscription(PolygonStamped, '/local_costmap/published_footprint', self.on_local_footprint, 5)
         self.create_subscription(PolygonStamped, '/global_costmap/published_footprint', self.on_global_footprint, 5)
-        self.initialpose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
+        self.initialpose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', tl_qos)
+        self.initialpose_pub_vol = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
         self.delivery_log_pub = self.create_publisher(String, '/amr/delivery_log', 10)
 
         self.create_subscription(String, '/human_state', self.state_callback, 10)
@@ -96,7 +98,10 @@ class AdaptiveVelocityNode(Node):
             self.get_logger().info("🗺️ Peta (/map) terdeteksi oleh Nav2 Bootstrap.")
 
     def on_scan(self, msg: LaserScan):
-        self.last_scan_wall_time = time.time()
+        now = time.time()
+        if self.first_scan_wall_time == 0.0:
+            self.first_scan_wall_time = now
+        self.last_scan_wall_time = now
 
     def on_arduino_ready(self, msg: Bool):
         self.arduino_ready = bool(msg.data)
@@ -149,6 +154,7 @@ class AdaptiveVelocityNode(Node):
         msg.pose.covariance[7] = 0.25
         msg.pose.covariance[35] = 0.06853891945200942
         self.initialpose_pub.publish(msg)
+        self.initialpose_pub_vol.publish(msg)
 
     def state_callback(self, msg: String):
         severity = {"NORMAL": 0, "REDUCED_SPEED": 1, "SAFE_STOP": 2}
@@ -181,6 +187,8 @@ class AdaptiveVelocityNode(Node):
 
         # 1. Bootstrap TF map -> odom sebelum AMCL aktif (agar global_costmap & RViz langsung jalan sekali klik)
         scan_active = (wall_now - self.last_scan_wall_time) < 2.0
+        if not scan_active:
+            self.first_scan_wall_time = 0.0
         enc_ok = self.encoder_ok(wall_now)
         if not self.amcl_initialized:
             self.publish_bootstrap_tf(now_msg)
@@ -196,11 +204,16 @@ class AdaptiveVelocityNode(Node):
         self.encoder_was_ok = enc_ok
 
         # 2. Kirim otomatis /initialpose (0,0,0) saat /map, /scan_filtered & ENCODER sudah siap tapi AMCL belum init.
-        #    Initialpose sebelum odom valid membuat AMCL mengunci pose yang salah.
-        if (not self.amcl_initialized) and self.map_received and scan_active and enc_ok:
-            if (wall_now - self.start_wall_time > 3.0) and (wall_now - self.last_initpose_sent_time > 2.0) and (self.initpose_sent_count < 8):
+        #    Beri jeda minimal 2.5 detik sejak paket /scan pertama agar AMCL selesai menginisialisasi
+        #    createLaserObject dan likelihood field. Ini mencegah bug race-condition Nav2 pf_update_resample
+        #    assertion failed (Issue #2711) yang mematikan proses AMCL.
+        scan_stable = scan_active and (self.first_scan_wall_time > 0.0) and ((wall_now - self.first_scan_wall_time) >= 2.5)
+        if (not self.amcl_initialized) and self.map_received and scan_stable and enc_ok:
+            interval = 2.5 if self.initpose_sent_count < 5 else 4.0
+            if (wall_now - self.start_wall_time > 4.0) and (wall_now - self.last_initpose_sent_time > interval):
                 self.last_initpose_sent_time = wall_now
                 self.initpose_sent_count += 1
+                self.get_logger().info(f"📍 Mengirim auto-initialpose ke AMCL (percobaan #{self.initpose_sent_count})...")
                 self.send_auto_initialpose(now_msg)
 
         # 3. Verifikasi kesiapan penuh (Peta + LiDAR + Encoder + AMCL + Local/Global Costmap + Nav2 Stack Aktif)
@@ -240,6 +253,12 @@ class AdaptiveVelocityNode(Node):
                     f"Encoder {mark(enc_ok)} | AMCL {mark(self.amcl_initialized)} | "
                     f"Costmap {mark(self.local_costmap_active and self.global_costmap_active)}"
                 )
+                if not self.amcl_initialized and self.initpose_sent_count >= 3:
+                    node_names = self.get_node_names()
+                    if 'amcl' not in node_names:
+                        self.get_logger().error(
+                            "🔴 [AMCL CRASH] Node 'amcl' terdeteksi mati! Harap matikan (STOP) dan nyalakan (START) ulang Navigasi di Dashboard."
+                        )
 
         dt = (now - self.last_time).nanoseconds / 1e9
         self.last_time = now
