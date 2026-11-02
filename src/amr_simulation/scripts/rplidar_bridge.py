@@ -173,8 +173,10 @@ class RPLidarBridgeNode(Node):
         """
         Reset protokol serial RPLiDAR A1/A2 agar tidak hang/timeout.
         """
-        if force_usb_reset and self.restart_count >= 2:
+        # Reset USB fisik level kernel hanya jika restart_count tepat 3 (hindari reset berulang yang memutus port serial)
+        if force_usb_reset and self.restart_count == 3:
             self.reset_usb_device()
+            time.sleep(1.5)
 
         if not self.check_hardware_port():
             return False
@@ -184,20 +186,25 @@ class RPLidarBridgeNode(Node):
                 ser.dtr = True
                 ser.rts = True
                 time.sleep(0.05)
-                # Kirim perintah STOP (\xA5\x25) untuk menghentikan stream lama
+                # Kirim perintah STOP (\xA5\x25) untuk menghentikan stream data aktif lama
                 ser.write(b'\xA5\x25')
                 ser.flush()
-                time.sleep(0.05)
-                if self.restart_count >= 1:
+                time.sleep(0.1)
+                ser.reset_input_buffer()
+                ser.reset_output_buffer()
+
+                if self.restart_count in (1, 4):
                     self.get_logger().info("🔄 Mengirim perintah Hardware Reboot (0xA5 0x40) ke MCU RPLiDAR...")
                     ser.write(b'\xA5\x40')
                     ser.flush()
-                    time.sleep(0.5)
-                ser.dtr = False
+                    # Slamtec mensyaratkan jeda minimal 2.0 detik agar MCU selesai inisialisasi boot
+                    time.sleep(2.0)
+                    ser.reset_input_buffer()
+
+                # PENTING: DTR harus tetap True pada RPLiDAR A1 karena DTR terhubung ke pin MOTOCTL (daya motor)
+                ser.dtr = True
                 ser.rts = False
-                ser.reset_input_buffer()
-                ser.reset_output_buffer()
-            time.sleep(0.2)
+            time.sleep(0.3)
             return True
         except Exception as e:
             self.get_logger().warn(f"⚠️ Peringatan saat pre-reset serial RPLiDAR: {e}")
@@ -318,14 +325,14 @@ class RPLidarBridgeNode(Node):
             if now - self.driver_start_time >= 2.0:
                 self.restart_count += 1
                 self.has_first_scan = False
-                self.launch_rplidar_driver(force_usb_reset=(self.restart_count >= 2))
+                self.launch_rplidar_driver(force_usb_reset=(self.restart_count == 3))
             return
 
         # 2. Jika sejak diluncurkan > 15.0 detik belum ada paket /scan pertama sama sekali
         if not self.has_first_scan and (now - self.driver_start_time > 15.0):
             self.get_logger().warn("⚠️ Belum ada /scan setelah 15 detik -> Auto-recovery RPLiDAR...")
             self.restart_count += 1
-            self.launch_rplidar_driver(force_usb_reset=(self.restart_count >= 2))
+            self.launch_rplidar_driver(force_usb_reset=(self.restart_count == 3))
             return
 
         # 3. Jika sudah pernah dapat scan tapi tiba-tiba terhenti > 6.0 detik
