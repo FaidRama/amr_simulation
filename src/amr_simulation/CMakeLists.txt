@@ -44,6 +44,8 @@ install(PROGRAMS
   scripts/benchmark_skripsi.py
   scripts/deadzone_monitor_node.py
   scripts/plot_deadzone.py
+  scripts/step_response_monitor_node.py
+  scripts/plot_step_response.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
