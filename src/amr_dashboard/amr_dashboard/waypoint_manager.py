@@ -51,6 +51,9 @@ class WaypointManager(Node):
         self.log_pub = self.create_publisher(String, '/amr/delivery_log', 20)
         # Stop velocity (emergency stop)
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        # Voice notifications ke robot speaker (non-blocking)
+        self.voice_play_pub = self.create_publisher(String, '/robot_voice/play', 10)
+        self.voice_say_pub = self.create_publisher(String, '/robot_voice/say', 10)
         
         # === SUBSCRIBERS ===
         # Menerima task baru dari dashboard
@@ -111,6 +114,20 @@ class WaypointManager(Node):
         except Exception:
             pass
     
+    def notify_voice(self, event_type, custom_text=None):
+        """Kirim event suara ke speaker AMR via /robot_voice (non-blocking)."""
+        try:
+            if custom_text:
+                msg = String()
+                msg.data = custom_text
+                self.voice_say_pub.publish(msg)
+            else:
+                msg = String()
+                msg.data = event_type
+                self.voice_play_pub.publish(msg)
+        except Exception:
+            pass
+
     def load_config(self):
         """Load home_position dan settings dari waypoints.yaml sesuai mode aktif."""
         config_paths = [
@@ -336,6 +353,7 @@ class WaypointManager(Node):
             self.confirm_received = False
             self.publish_status()
             self.log('info', f'📍 SAMPAI di titik pickup [{pickup["name"]}]. Menunggu konfirmasi: "Barang Sudah Dimuat"...')
+            self.notify_voice('pickup', f"Pickup tiba. Robot sudah sampai di titik {pickup['name']}. Silakan muat barang.")
             
             # Tunggu operator tekan tombol "Barang Sudah Dimuat"
             while not self.confirm_received and not self.is_cancelled:
@@ -374,6 +392,7 @@ class WaypointManager(Node):
             self.confirm_received = False
             self.publish_status()
             self.log('info', f'📍 SAMPAI di titik delivery [{delivery["name"]}]. Menunggu konfirmasi: "Barang Sudah Diambil"...')
+            self.notify_voice('arrival', f"Deliver tiba. Robot sudah sampai di titik {delivery['name']}. Silakan ambil barang.")
             
             # Tunggu operator tekan tombol "Barang Sudah Diambil"
             while not self.confirm_received and not self.is_cancelled:
@@ -436,6 +455,7 @@ class WaypointManager(Node):
                 
                 if home_success:
                     self.log('info', '🎉 AMR telah kembali ke Home. Misi selesai dengan sukses!')
+                    self.notify_voice('home', "Misi selesai. Robot kembali ke stasiun pangkalan.")
                 else:
                     self.log('warn', '⚠️ AMR tidak dapat mencapai koordinat Home (mungkin terhalang). Misi diselesaikan di posisi saat ini.')
             else:

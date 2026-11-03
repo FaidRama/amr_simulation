@@ -434,6 +434,13 @@ class DashboardNode(Node):
         self.control_pub = self.create_publisher(String, '/amr/delivery_control', 10)
         # Manual velocity
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        # Voice & Bluetooth robot speaker
+        self.voice_status = {'connected': False, 'target_mac': '', 'target_name': ''}
+        self.voice_status_sub = self.create_subscription(
+            String, '/robot_voice/status', self.on_voice_status, 10)
+        self.voice_say_pub = self.create_publisher(String, '/robot_voice/say', 10)
+        self.voice_play_pub = self.create_publisher(String, '/robot_voice/play', 10)
+        self.voice_config_pub = self.create_publisher(String, '/robot_voice/config', 10)
         # Initial pose AMCL (/initialpose) - Dukung Transient Local & Volatile QoS
         qos_tl = QoSProfile(
             depth=1,
@@ -747,6 +754,13 @@ class DashboardNode(Node):
         with self.lock:
             self.human_info = info
             self.last_human_info_time = time.time()
+
+    def on_voice_status(self, msg):
+        """Callback status robot voice & bluetooth (/robot_voice/status)."""
+        try:
+            self.voice_status = json.loads(msg.data)
+        except Exception:
+            pass
     
     def on_compressed_annotated_camera(self, msg):
         """Callback kamera ber-anotasi AI terkompresi JPEG (YOLO bounding box & HUD)."""
@@ -1973,6 +1987,7 @@ def api_status():
                 'camera_ready': is_camera_ready(),
                 'human_node_active': is_human_node_active(),
                 'human_node_ready': is_human_node_ready(),
+                'voice': getattr(ros_node, 'voice_status', {}),
                 'connected': True,
                 'timestamp': time.time()
             })
@@ -2393,6 +2408,142 @@ def api_tts():
     except Exception as e:
         print(f'[WARN] Gagal mengunduh audio Google TTS: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+# =====================================================================
+# BLUETOOTH SPEAKER & ROBOT VOICE CONTROL API
+# =====================================================================
+@app.route('/api/bluetooth/status', methods=['GET'])
+def api_bluetooth_status():
+    """Dapatkan status koneksi Bluetooth Speaker & Konfigurasi Suara."""
+    try:
+        from amr_simulation.scripts.test_robot_voice import load_voice_config, is_bluetooth_device_connected, check_pulseaudio_status
+        cfg = load_voice_config()
+        target_mac = cfg.get('target_mac', '')
+        connected = is_bluetooth_device_connected(target_mac)
+        pa_status = check_pulseaudio_status()
+        return jsonify({
+            'success': True,
+            'connected': connected,
+            'target_mac': target_mac,
+            'target_name': cfg.get('target_name', 'Bluetooth Speaker'),
+            'auto_reconnect': cfg.get('auto_reconnect', True),
+            'obstacle_voice_delay_s': cfg.get('obstacle_voice_delay_s', 10),
+            'obstacle_phrase': cfg.get('obstacle_phrase', 'Permisi, robot mau lewat.'),
+            'pulseaudio_running': pa_status.get('pulseaudio_running', False),
+            'default_sink': pa_status.get('default_sink', ''),
+            'bluetooth_sinks': pa_status.get('bluetooth_sinks', [])
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/bluetooth/scan', methods=['POST'])
+def api_bluetooth_scan():
+    """Scan perangkat Bluetooth terdekat selama 4 detik."""
+    try:
+        # Jalankan scan bluetooth
+        subprocess.run(['bluetoothctl', '--timeout', '4', 'scan', 'on'],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        res = subprocess.run(['bluetoothctl', 'devices'],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3)
+        devices = []
+        if res.returncode == 0:
+            for line in res.stdout.strip().splitlines():
+                parts = line.split(' ', 2)
+                if len(parts) >= 3 and parts[0] == 'Device':
+                    mac = parts[1]
+                    name = parts[2]
+                    devices.append({'mac': mac, 'name': name})
+        return jsonify({'success': True, 'devices': devices})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e), 'devices': []}), 500
+
+
+@app.route('/api/bluetooth/connect', methods=['POST'])
+def api_bluetooth_connect():
+    """Hubungkan Jetson ke speaker Bluetooth berdasarkan MAC."""
+    data = request.json or {}
+    mac = data.get('mac', '').strip()
+    name = data.get('name', 'Speaker Bluetooth').strip()
+    if not mac:
+        return jsonify({'success': False, 'error': 'MAC address harus diisi'}), 400
+
+    try:
+        subprocess.run(['bluetoothctl', 'trust', mac], timeout=3)
+        res = subprocess.run(['bluetoothctl', 'connect', mac],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=6)
+        output = res.stdout.strip()
+        success = ('Connection successful' in output or 'Connected: yes' in output)
+
+        from amr_simulation.scripts.test_robot_voice import load_voice_config, save_voice_config
+        cfg = load_voice_config()
+        cfg['target_mac'] = mac
+        cfg['target_name'] = name
+        save_voice_config(cfg)
+
+        if ros_node and ros_node.voice_config_pub:
+            msg = String()
+            msg.data = json.dumps({'target_mac': mac, 'target_name': name})
+            ros_node.voice_config_pub.publish(msg)
+
+        return jsonify({'success': success, 'mac': mac, 'name': name, 'output': output})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/bluetooth/disconnect', methods=['POST'])
+def api_bluetooth_disconnect():
+    """Putus koneksi perangkat Bluetooth aktif."""
+    data = request.json or {}
+    mac = data.get('mac', '').strip()
+    if not mac:
+        from amr_simulation.scripts.test_robot_voice import load_voice_config
+        mac = load_voice_config().get('target_mac', '')
+    try:
+        if mac:
+            subprocess.run(['bluetoothctl', 'disconnect', mac], timeout=4)
+        return jsonify({'success': True, 'mac': mac})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/voice/config', methods=['GET', 'POST'])
+def api_voice_config():
+    """Ambil atau perbarui setting konfigurasi suara robot."""
+    from amr_simulation.scripts.test_robot_voice import load_voice_config, save_voice_config
+    if request.method == 'GET':
+        return jsonify({'success': True, 'config': load_voice_config()})
+
+    data = request.json or {}
+    cfg = load_voice_config()
+    cfg.update(data)
+    save_voice_config(cfg)
+
+    if ros_node and ros_node.voice_config_pub:
+        msg = String()
+        msg.data = json.dumps(cfg)
+        ros_node.voice_config_pub.publish(msg)
+
+    return jsonify({'success': True, 'config': cfg})
+
+
+@app.route('/api/voice/test', methods=['POST'])
+def api_voice_test():
+    """Keluarkan uji suara pada speaker robot via ROS 2."""
+    data = request.json or {}
+    mode = data.get('mode', 'play')
+    text = data.get('text', 'arrival')
+
+    if ros_node:
+        msg = String()
+        msg.data = text
+        if mode == 'say':
+            ros_node.voice_say_pub.publish(msg)
+        else:
+            ros_node.voice_play_pub.publish(msg)
+        return jsonify({'success': True, 'mode': mode, 'text': text})
+    return jsonify({'success': False, 'error': 'ROS node tidak aktif'}), 500
 
 
 # =====================================================================

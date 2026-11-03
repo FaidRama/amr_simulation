@@ -294,6 +294,10 @@ function navigateTo(page) {
         content.appendChild(renderers[page]());
     }
 
+    if (page === 'settings') {
+        loadVoiceConfig();
+    }
+
     if (typeof handleDeliveryStatusUpdate === 'function' && APP.delivery) {
         handleDeliveryStatusUpdate(APP.delivery);
     }
@@ -3327,37 +3331,108 @@ function renderSettings() {
                 </div>
 
                 <div class="page-section">
-                    <div class="section-title">03 // SISTEM AUDIO & NOTIFIKASI</div>
+                    <div class="section-title">
+                        <span>03 // SISTEM SUARA & SPEAKER BLUETOOTH ROBOT</span>
+                        <span id="bt-status-badge" class="badge badge-offline" style="font-size:0.62rem;">BLUETOOTH OFF</span>
+                    </div>
                     <div class="panel">
+                        <!-- BLUETOOTH SPEAKER HARDWARE -->
+                        <div class="setting-row" style="flex-wrap:wrap; gap:10px;">
+                            <div>
+                                <div class="setting-label">Speaker Bluetooth AMR (Hardware Jetson)</div>
+                                <div class="setting-desc" id="bt-target-desc">Target: Acome A1 (0E:21:D5:E9:AB:5F) — Suara keluar langsung dari fisik robot</div>
+                            </div>
+                            <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                                <button type="button" class="btn btn-outline btn-sm" id="btn-scan-bt" onclick="scanBluetoothFromUI()">
+                                    ${getIcon('search', 13)} Scan Bluetooth
+                                </button>
+                                <button type="button" class="btn btn-primary btn-sm" id="btn-connect-bt" onclick="connectBluetoothFromUI()">
+                                    ${getIcon('link', 13)} Hubungkan
+                                </button>
+                                <button type="button" class="btn btn-danger btn-sm" id="btn-disconnect-bt" onclick="disconnectBluetoothFromUI()">
+                                    ${getIcon('x', 13)} Putuskan
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- LIST PERANGKAT BLUETOOTH HASIL SCAN -->
+                        <div id="bt-scan-results-box" class="hidden" style="margin: 8px 0; padding: 10px; background: rgba(0,0,0,0.25); border-radius: 6px; border: 1px solid var(--border-color);">
+                            <div style="font-size:0.75rem; font-weight:600; margin-bottom:6px; color:var(--accent-bright);">
+                                📡 Perangkat Bluetooth Terdeteksi di Sekitar Jetson:
+                            </div>
+                            <div id="bt-device-list" style="display:flex; flex-direction:column; gap:6px;">
+                                <span style="font-size:0.75rem; color:var(--text-muted);">Klik Scan Bluetooth untuk mendeteksi perangkat terdekat...</span>
+                            </div>
+                        </div>
+
+                        <!-- SETTING HALANGAN SAFE_STOP -->
+                        <div class="setting-row" style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 8px;">
+                            <div>
+                                <div class="setting-label">Batas Waktu Halang SAFE_STOP (Detik)</div>
+                                <div class="setting-desc">Berapa lama manusia menghalangi sebelum robot bersuara meminta jalan</div>
+                            </div>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <input class="setting-input" id="set-obstacle-delay" type="number"
+                                       step="1" min="3" max="60" value="10" style="width:75px;" onchange="saveVoiceConfigFromUI()">
+                                <span style="font-size:0.75rem; color:var(--text-muted);">detik</span>
+                            </div>
+                        </div>
+
                         <div class="setting-row">
                             <div>
-                                <div class="setting-label">Mode Audio Kedatangan</div>
-                                <div class="setting-desc">Output suara saat unit tiba di pickup/delivery</div>
+                                <div class="setting-label">Kalimat Saat Terhalang Manusia</div>
+                                <div class="setting-desc">Pesan TTS yang diucapkan saat SAFE_STOP melampaui batas waktu</div>
+                            </div>
+                            <input class="setting-input" id="set-obstacle-phrase" type="text"
+                                   value="Permisi, robot mau lewat. Mohon beri jalan." style="min-width:250px; flex:1;" onchange="saveVoiceConfigFromUI()">
+                        </div>
+
+                        <div class="setting-row">
+                            <div>
+                                <div class="setting-label">Auto-Reconnect Bluetooth Watchdog</div>
+                                <div class="setting-desc">Otomatis hubungkan kembali jika speaker mati/hidup atau sinyal terputus</div>
+                            </div>
+                            <label class="switch-toggle" style="margin:0;">
+                                <input type="checkbox" id="set-auto-recon" checked onchange="saveVoiceConfigFromUI()">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+
+                        <!-- UJI SUARA SPEAKER FISIK ROBOT -->
+                        <div class="setting-row" style="flex-wrap:wrap; border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 8px;">
+                            <div>
+                                <div class="setting-label">Uji Suara Speaker Robot (Fisik Jetson)</div>
+                                <div class="setting-desc">Kirim perintah suara langsung ke speaker Bluetooth AMR via ROS 2</div>
+                            </div>
+                            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                                <button type="button" class="btn btn-outline btn-sm" onclick="testRobotHardwareVoice('play', 'chime')">
+                                    ${getIcon('bell', 13)} Bel Chime
+                                </button>
+                                <button type="button" class="btn btn-outline btn-sm" onclick="testRobotHardwareVoice('play', 'deliver')">
+                                    ${getIcon('volume', 13)} Deliver Tiba
+                                </button>
+                                <button type="button" class="btn btn-outline btn-sm" onclick="testRobotHardwareVoice('play', 'pickup')">
+                                    ${getIcon('pickup', 13)} Pickup Tiba
+                                </button>
+                                <button type="button" class="btn btn-outline btn-sm" onclick="testRobotHardwareVoice('play', 'obstacle')">
+                                    ${getIcon('user', 13)} Permisi Lewat
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- SUARA KEDATANGAN DI BROWSER DASHBOARD -->
+                        <div class="setting-row" style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 8px;">
+                            <div>
+                                <div class="setting-label">Mode Audio Tambahan di Browser Dashboard</div>
+                                <div class="setting-desc">Apakah speaker browser laptop juga ikut berbunyi saat robot tiba</div>
                             </div>
                             <select class="input-field" id="set-sound-mode" onchange="setSoundMode(this.value)"
                                      style="width: auto; min-width: 190px; cursor: pointer;">
-                                <option value="human" ${currentSoundMode === 'human' ? 'selected' : ''}>Voice TTS (Suara Manusia)</option>
-                                <option value="chime" ${currentSoundMode === 'chime' ? 'selected' : ''}>Synth Chime (Nada Teknis)</option>
+                                <option value="human" ${currentSoundMode === 'human' ? 'selected' : ''}>Voice TTS Browser</option>
+                                <option value="chime" ${currentSoundMode === 'chime' ? 'selected' : ''}>Synth Chime Browser</option>
                                 <option value="both" ${currentSoundMode === 'both' ? 'selected' : ''}>Hybrid (Chime + Voice TTS)</option>
-                                <option value="mute" ${currentSoundMode === 'mute' ? 'selected' : ''}>Silent (Nonaktif)</option>
+                                <option value="mute" ${currentSoundMode === 'mute' ? 'selected' : ''}>Mute (Hanya Speaker Robot)</option>
                             </select>
-                        </div>
-                        <div class="setting-row" style="flex-wrap: wrap;">
-                            <div>
-                                <div class="setting-label">Diagnostik Output Audio</div>
-                                <div class="setting-desc">Uji sampel pengumuman suara di perangkat ini</div>
-                            </div>
-                            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-                                <button type="button" class="btn btn-outline btn-sm" onclick="testArrivalSound('waiting_pickup')">
-                                    ${getIcon('volume', 13)} Uji Pickup
-                                </button>
-                                <button type="button" class="btn btn-outline btn-sm" onclick="testArrivalSound('waiting_delivery')">
-                                    ${getIcon('volume', 13)} Uji Delivery
-                                </button>
-                                <button type="button" class="btn btn-outline btn-sm" onclick="playChimeSound('waiting_pickup')">
-                                    ${getIcon('bell', 13)} Uji Chime
-                                </button>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -4024,6 +4099,138 @@ async function saveSettings() {
     }
 }
 
+// ====================== ROBOT VOICE & BLUETOOTH MANAGEMENT ======================
+async function loadVoiceConfig() {
+    try {
+        const res = await apiGet('/api/voice/config');
+        if (res && res.success && res.config) {
+            APP.voiceConfig = res.config;
+            const delayInput = document.getElementById('set-obstacle-delay');
+            const phraseInput = document.getElementById('set-obstacle-phrase');
+            const autoReconInput = document.getElementById('set-auto-recon');
+            if (delayInput) delayInput.value = res.config.obstacle_voice_delay_s || 10;
+            if (phraseInput) phraseInput.value = res.config.obstacle_phrase || "Permisi, robot mau lewat. Mohon beri jalan.";
+            if (autoReconInput) autoReconInput.checked = res.config.auto_reconnect !== false;
+            updateVoiceSpeakerUI(res.config);
+        }
+    } catch (e) {
+        console.warn('Gagal memuat voice config:', e);
+    }
+}
+
+async function saveVoiceConfigFromUI() {
+    const delay = parseInt(document.getElementById('set-obstacle-delay')?.value) || 10;
+    const phrase = document.getElementById('set-obstacle-phrase')?.value?.trim() || "Permisi, robot mau lewat. Mohon beri jalan.";
+    const autoRecon = !!document.getElementById('set-auto-recon')?.checked;
+
+    const payload = {
+        obstacle_voice_delay_s: delay,
+        obstacle_phrase: phrase,
+        auto_reconnect: autoRecon
+    };
+
+    const res = await apiPost('/api/voice/config', payload);
+    if (res && res.success) {
+        APP.voiceConfig = res.config;
+        showToast('⚙️ Setting suara robot tersimpan!', 'success');
+    }
+}
+
+async function scanBluetoothFromUI() {
+    const btn = document.getElementById('btn-scan-bt');
+    const box = document.getElementById('bt-scan-results-box');
+    const list = document.getElementById('bt-device-list');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner" style="display:inline-block; width:12px; height:12px; border-width:2px;"></span> Memindai...`;
+    }
+    if (box) box.classList.remove('hidden');
+    if (list) list.innerHTML = `<div style="font-size:0.75rem; color:var(--text-muted);">Sedang memindai perangkat Bluetooth terdekat (4 detik)...</div>`;
+
+    showToast('📡 Memindai sinyal Bluetooth terdekat...', 'info');
+    try {
+        const res = await apiPost('/api/bluetooth/scan');
+        if (res && res.success && res.devices && res.devices.length > 0) {
+            list.innerHTML = res.devices.map(d => `
+                <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.05); padding:6px 10px; border-radius:4px;">
+                    <div>
+                        <div style="font-weight:600; font-size:0.8rem; color:var(--text-bright);">${d.name || 'Perangkat Tanpa Nama'}</div>
+                        <div style="font-size:0.68rem; font-family:monospace; color:var(--text-muted);">${d.mac}</div>
+                    </div>
+                    <button type="button" class="btn btn-outline btn-sm" onclick="connectBluetoothDevice('${d.mac}', '${d.name.replace(/'/g, "\\'")}')">
+                        Hubungkan
+                    </button>
+                </div>
+            `).join('');
+            showToast(`Ditemukan ${res.devices.length} perangkat Bluetooth`, 'success');
+        } else {
+            list.innerHTML = `<div style="font-size:0.75rem; color:var(--text-muted);">Tidak ada perangkat baru terdeteksi. Pastikan speaker dalam mode pairing.</div>`;
+        }
+    } catch (e) {
+        if (list) list.innerHTML = `<div style="font-size:0.75rem; color:var(--accent-danger);">Gagal memindai: ${e.message}</div>`;
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = `${getIcon('search', 13)} Scan Bluetooth`;
+        }
+    }
+}
+
+async function connectBluetoothDevice(mac, name) {
+    showToast(`Menghubungkan ke ${name} (${mac})...`, 'info');
+    const res = await apiPost('/api/bluetooth/connect', { mac, name });
+    if (res && res.success) {
+        showToast(`🟢 Berhasil terhubung ke ${name}!`, 'success');
+        loadVoiceConfig();
+    } else {
+        showToast(`❌ Gagal terhubung ke ${mac}: ${res ? res.output || res.error : 'Timeout'}`, 'error');
+    }
+}
+
+async function connectBluetoothFromUI() {
+    const currentMac = APP.voiceConfig?.target_mac || '0E:21:D5:E9:AB:5F';
+    const currentName = APP.voiceConfig?.target_name || 'Acome A1';
+    await connectBluetoothDevice(currentMac, currentName);
+}
+
+async function disconnectBluetoothFromUI() {
+    showToast('Memutuskan Bluetooth...', 'info');
+    const res = await apiPost('/api/bluetooth/disconnect');
+    if (res && res.success) {
+        showToast('Bluetooth terputus', 'info');
+        loadVoiceConfig();
+    }
+}
+
+async function testRobotHardwareVoice(mode, text) {
+    showToast(`📢 Mengirim perintah suara ke robot: "${text}"`, 'info');
+    const res = await apiPost('/api/voice/test', { mode, text });
+    if (res && res.success) {
+        showToast('✓ Perintah suara diterima robot', 'success');
+    } else {
+        showToast('Gagal mengirim perintah suara', 'error');
+    }
+}
+
+function updateVoiceSpeakerUI(voiceData) {
+    if (!voiceData) return;
+    const badge = document.getElementById('bt-status-badge');
+    const desc = document.getElementById('bt-target-desc');
+    const isConn = !!voiceData.connected;
+
+    if (badge) {
+        badge.className = isConn ? 'badge badge-online' : 'badge badge-offline';
+        badge.textContent = isConn ? 'SPEAKER TERHUBUNG ✅' : 'SPEAKER TERPUTUS ❌';
+    }
+    if (desc) {
+        const name = voiceData.target_name || 'Acome A1';
+        const mac = voiceData.target_mac || '0E:21:D5:E9:AB:5F';
+        desc.textContent = isConn
+            ? `Target: ${name} (${mac}) — TERKONEKSI (Suara aktif di fisik robot)`
+            : `Target: ${name} (${mac}) — TERPUTUS (Auto-reconnect aktif)`;
+    }
+}
+
 function showAddPointModal() {
     const curX = (APP.pose && APP.pose.x) ? APP.pose.x.toFixed(2) : '0.0';
     const curY = (APP.pose && APP.pose.y) ? APP.pose.y.toFixed(2) : '0.0';
@@ -4216,6 +4423,11 @@ async function globalStatusPoll() {
 
         if (typeof handleDeliveryStatusUpdate === 'function') {
             handleDeliveryStatusUpdate(APP.delivery);
+        }
+
+        if (data.voice) {
+            APP.voice = data.voice;
+            updateVoiceSpeakerUI(data.voice);
         }
 
         if (badge) {

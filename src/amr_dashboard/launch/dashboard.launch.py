@@ -52,9 +52,20 @@ def generate_launch_description():
         actions=[dashboard_server]
     )
 
+    # 3. Robot Voice & Bluetooth Watchdog Node
+    robot_voice_node = Node(
+        package='amr_simulation',
+        executable='test_robot_voice.py',
+        name='robot_voice_node',
+        output='screen',
+        arguments=['--node'],
+        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}]
+    )
+
     return LaunchDescription([
         mode_arg,
         use_sim_time_arg,
         waypoint_manager_node,
+        robot_voice_node,
         delayed_dashboard,
     ])
