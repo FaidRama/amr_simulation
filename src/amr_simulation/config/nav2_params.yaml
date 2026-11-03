@@ -148,7 +148,7 @@ controller_server:
           "GoalAlign",
           "PathDist",
           "GoalDist",
-        ] 
+        ]
 
       BaseObstacle.scale: 0.05
       GoalAlign.scale: 24.0
@@ -183,7 +183,7 @@ local_costmap:
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 4.5
+        cost_scaling_factor: 3.5
         inflation_radius: 0.52
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
