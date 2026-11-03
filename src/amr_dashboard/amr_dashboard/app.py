@@ -897,6 +897,19 @@ class DashboardNode(Node):
 app = Flask(__name__,
             template_folder=TEMPLATE_DIR,
             static_folder=STATIC_DIR)
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+
+
+@app.after_request
+def add_no_cache_headers(response):
+    """Pastikan browser selalu mengambil file HTML dan JS terbaru tanpa tersangkut di disk cache."""
+    content_type = response.headers.get('Content-Type', '')
+    if 'text/html' in content_type or 'javascript' in content_type:
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    return response
+
 
 # Global reference ke ROS2 node
 ros_node = None

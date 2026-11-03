@@ -4216,6 +4216,8 @@ function updateVoiceSpeakerUI(voiceData) {
     if (!voiceData) return;
     const badge = document.getElementById('bt-status-badge');
     const desc = document.getElementById('bt-target-desc');
+    const topDot = document.getElementById('topbar-bt-dot');
+    const topLabel = document.getElementById('topbar-bt-label');
     const isConn = !!voiceData.connected;
 
     if (badge) {
@@ -4228,6 +4230,13 @@ function updateVoiceSpeakerUI(voiceData) {
         desc.textContent = isConn
             ? `Target: ${name} (${mac}) — TERKONEKSI (Suara aktif di fisik robot)`
             : `Target: ${name} (${mac}) — TERPUTUS (Auto-reconnect aktif)`;
+    }
+    if (topDot) {
+        topDot.style.background = isConn ? '#10b981' : '#ef4444';
+    }
+    if (topLabel) {
+        topLabel.textContent = isConn ? 'BT: ON' : 'BT: OFF';
+        topLabel.style.color = isConn ? '#10b981' : 'var(--text-muted)';
     }
 }
 
