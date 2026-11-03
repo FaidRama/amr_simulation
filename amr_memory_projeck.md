@@ -807,3 +807,96 @@ Setelah itu, status AMCL tertahan di `AMCL ⏳` selamanya, dan percobaan auto-in
    - `reset_usb_device()` tidak lagi menjalankan `echo 0/1 > authorized` dan `ioctl(USBDEVFS_RESET)` secara beruntun dalam satu fungsi agar tidak terjadi tabrakan re-enumerasi `udev` di USB Hub 7-Port.
    - `shutdown_driver_only()` serta `_cleanup_stale_processes()` di [`real_navigation.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/real_navigation.launch.py) dan [`real_mapping.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/real_mapping.launch.py) mengirimkan `SIGINT` terlebih dahulu (dan mengirim `0xA5 0x25` STOP saat keluar) agar LiDAR tidak terus membanjiri buffer FIFO chip CP2102 di USB Hub saat berganti sesi.
 
+---
+
+## 📌 26. Integrasi Audio Bluetooth (Speaker Acome A1), NVIDIA BlueZ Audio Unblock, Watchdog Auto-Reconnect, & Safe-Stop Voice Warning
+
+### 1. Masalah & Solusi Pembukaan Blokir Audio Bluetooth NVIDIA Jetson:
+- **Gejala Error**:
+  Saat menghubungkan speaker Bluetooth (Acome A1 `0E:21:D5:E9:AB:5F`) via `bluetoothctl`:
+  - `pair` dan `trust` berhasil (`Paired: yes`, `ServicesResolved: yes`).
+  - Namun perintah `connect` selalu gagal dengan `Failed to connect: org.bluez.Error.Failed` atau `org.bluez.Error.NotAvailable`.
+  - Log PulseAudio (`pulseaudio -v`) memunculkan:
+    ```text
+    E: [pulseaudio] bluez5-util.c: org.bluez.Media1.RegisterEndpoint() failed: org.freedesktop.DBus.Error.UnknownMethod: Method "RegisterEndpoint" with signature "oa{sv}" on interface "org.bluez.Media1" doesn't exist
+    ```
+- **Akar Masalah**:
+  1. NVIDIA JetPack secara default menonaktifkan profil audio konsumen (`--noplugin=audio,a2dp,avrcp`) di file service BlueZ:
+     `/lib/systemd/system/bluetooth.service.d/nv-bluetooth-service.conf`.
+     NVIDIA melakukan ini untuk sertifikasi kepatuhan stack industri & BLE, sehingga endpoint A2DP tidak pernah teregistrasi di D-Bus.
+  2. Display manager GNOME (`gdm`) menjalankan instance PulseAudio tersendiri di latar belakang yang mendahului membajak media endpoint BlueZ.
+- **Solusi Permanen**:
+  1. Menghapus pembatasan `--noplugin=audio,a2dp,avrcp` di konfigurasi service BlueZ NVIDIA:
+     ```bash
+     sudo sed -i 's/--noplugin=audio,a2dp,avrcp//g' /lib/systemd/system/bluetooth.service.d/*.conf
+     sudo systemctl daemon-reload && sudo systemctl restart bluetooth
+     ```
+  2. Mencegah user `gdm` membajak PulseAudio:
+     ```bash
+     sudo mkdir -p /var/lib/gdm3/.config/pulse
+     sudo tee /var/lib/gdm3/.config/pulse/client.conf << 'EOF'
+     autospawn = no
+     daemon-binary = /bin/true
+     EOF
+     sudo chown -R gdm:gdm /var/lib/gdm3/.config/pulse
+     sudo killall -9 -u gdm pulseaudio 2>/dev/null
+     ```
+  3. Mengaktifkan PulseAudio dan user lingering untuk user `jetson`:
+     ```bash
+     sudo loginctl enable-linger jetson
+     pulseaudio --start
+     ```
+
+---
+
+### 2. Watchdog Auto-Reconnect Bluetooth & Arsitektur Non-Blocking:
+- **Tantangan**: Speaker portabel (Acome A1) memiliki fitur auto-standby/sleep jika tidak ada audio aktif, atau sinyal radio 2.4 GHz bisa putus sesaat saat robot bergerak jauh. Di Linux biasa, koneksi harus dihubungkan ulang secara manual.
+- **Implementasi Watchdog (`BluetoothWatchdog`)**:
+  - Dibuatkan background daemon thread di [`test_robot_voice.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/test_robot_voice.py) yang memantau koneksi ke target MAC address (`0E:21:D5:E9:AB:5F`) setiap 5 detik.
+  - Jika speaker mati lalu dinyalakan lagi, watchdog otomatis memanggil `bluetoothctl connect` dan mengarahkan PulseAudio default sink ke `bluez_sink.0E_21_D5_E9_AB_5F.a2dp_sink` dengan volume 80%.
+- **Jaminan Anti-Bentrok dengan Navigasi**:
+  - Perintah suara bersifat *fire-and-forget* via pesan ROS 2 (`/robot_voice/play` dan `/robot_voice/say`), yang selesai dalam 0.0001 detik tanpa menahan eksekutor Nav2 atau `/cmd_vel`.
+  - Pemutaran audio ditangani oleh worker thread terpisah (`queue.Queue`) dengan batas waktu ketat (`timeout=4-6s`). Jika speaker mati atau audio error, perintah suara dibuang secara senyap (*fail-safe*) dan navigasi tetap berjalan normal 100% pada 20 Hz.
+
+---
+
+### 3. Logika Peringatan Halangan Manusia ("Permisi, Robot Mau Lewat"):
+- Node [`test_robot_voice.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/test_robot_voice.py) membaca topic `/human_state` yang dipancarkan oleh [`human_awareness_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/human_awareness_node.py).
+- Jika status `SAFE_STOP` berlangsung melampaui `obstacle_voice_delay_s` (default 10 detik, dapat diatur dari 3 hingga 60 detik via dashboard), robot otomatis membunyikan bel ding-dong lalu mengucapkan pesan:
+  > *"Permisi, robot mau lewat. Mohon beri jalan."*
+- Terdapat jeda pengulangan berkala (`obstacle_voice_repeat_s = 12s`) agar tidak terjadi pengulangan suara yang bertabrakan selama manusia masih berada di depan robot.
+- Begitu manusia menyingkir (`human_state != 'SAFE_STOP'`), penghitung waktu otomatis di-reset.
+
+---
+
+### 4. Pemberitahuan Suara Kedatangan Titik Misi di [`waypoint_manager.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/waypoint_manager.py):
+- **Tiba di Titik Pickup**:
+  Memanggil `self.notify_voice('pickup', f"Pickup tiba. Robot sudah sampai di titik {pickup['name']}. Silakan muat barang.")`.
+- **Tiba di Titik Delivery**:
+  Memanggil `self.notify_voice('arrival', f"Deliver tiba. Robot sudah sampai di titik {delivery['name']}. Silakan ambil barang.")`.
+- **Tiba Kembali di Home**:
+  Memanggil `self.notify_voice('home', "Misi selesai. Robot kembali ke stasiun pangkalan.")`.
+
+---
+
+### 5. Fitur Dashboard UI, REST API, & Solusi Browser Caching:
+- **Indikator Cepat Topbar**: Ditambahkan tombol status Bluetooth (`BT: ON` / `BT: OFF`) di baris atas dashboard di sebelah indikator mode `REAL ROBOT` agar dapat dipantau dan diklik dari halaman mana pun.
+- **Panel Pengaturan (03 // SISTEM SUARA & SPEAKER BLUETOOTH ROBOT)**:
+  - Indikator status live speaker fisik.
+  - Tombol **Scan Bluetooth** untuk memindai perangkat sekitar secara dinamis.
+  - Tombol **Hubungkan** dan **Putuskan**.
+  - Pengatur batas waktu halangan `SAFE_STOP` (detik).
+  - Input kustomisasi kalimat pengumuman saat terhalang.
+  - Tombol uji suara hardware robot (*Bel Chime*, *Deliver Tiba*, *Pickup Tiba*, *Permisi Lewat*).
+- **Penanganan Cache Browser & Service Reload**:
+  - Di [`app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py): ditambahkan `app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0` dan hook `@app.after_request` dengan header `Cache-Control: no-cache, no-store, must-revalidate`.
+  - Di [`index.html`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/templates/index.html): versi skrip dinaikkan ke `?v=3.2_voice` untuk memaksa browser mengunduh ulang JavaScript terbaru.
+  - **Prosedur Update di Jetson**: Karena dashboard dikelola oleh `amr_dashboard.service`, setiap ada perubahan file web wajib menjalankan:
+    ```bash
+    cd ~/deliver_amr
+    git pull
+    colcon build --packages-select amr_dashboard amr_simulation
+    sudo systemctl restart amr_dashboard
+    ```
+
+
