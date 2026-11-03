@@ -7,7 +7,7 @@ from geometry_msgs.msg import Twist, TransformStamped, PoseWithCovarianceStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String, Bool
-from tf2_ros import TransformBroadcaster
+from tf2_ros import TransformBroadcaster, Buffer, TransformListener
 
 
 class AdaptiveVelocityNode(Node):
@@ -33,12 +33,13 @@ class AdaptiveVelocityNode(Node):
         self.last_linear_v = 0.0
         self.last_time = self.get_clock().now()
 
-        # --- NAV2 BOOTSTRAP TF (map -> odom) & AUTO-INITIALPOSE ---
-        # Menjamin frame 'map' selalu ada sejak detik ke-0 agar global_costmap,
-        # planner_server, bt_navigator, dan RViz tidak pernah gagal "frame map does not exist".
-        # Begitu AMCL aktif (/amcl_pose diterima & /scan_filtered mengalir), kendali TF map->odom
-        # diserahkan sepenuhnya ke AMCL.
+        # --- NAV2 BOOTSTRAP TF & CONTINUITY KEEPER (map -> odom) ---
+        # Menjamin frame 'map' selalu ada sejak detik ke-0 DAN tidak pernah kedaluwarsa
+        # di TF buffer saat robot diam lama / standby antar-pengantaran.
         self.tf_broadcaster = TransformBroadcaster(self)
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.last_amcl_tf_wall = 0.0
         self.start_wall_time = time.time()
         self.amcl_initialized = False
         self.map_received = False
@@ -115,6 +116,7 @@ class AdaptiveVelocityNode(Node):
         return self.arduino_ready and (wall_now - self.last_odom_wall_time) < 1.0
 
     def on_amcl_pose(self, msg: PoseWithCovarianceStamped):
+        self.last_amcl_tf_wall = time.time()
         if not self.amcl_initialized:
             self.amcl_initialized = True
             self.get_logger().info("✅ AMCL telah aktif (/amcl_pose diterima) -> TF map->odom dikelola penuh oleh AMCL.")
@@ -185,13 +187,35 @@ class AdaptiveVelocityNode(Node):
         now_msg = now.to_msg()
         wall_now = time.time()
 
-        # 1. Bootstrap TF map -> odom sebelum AMCL aktif (agar global_costmap & RViz langsung jalan sekali klik)
+        # Pantau transform map -> odom dari AMCL yang ada di TF buffer
+        try:
+            t = self.tf_buffer.lookup_transform('map', 'odom', rclpy.time.Time())
+            self.last_map_odom_x = t.transform.translation.x
+            self.last_map_odom_y = t.transform.translation.y
+            self.last_map_odom_qz = t.transform.rotation.z
+            self.last_map_odom_qw = t.transform.rotation.w
+
+            t_sec = t.header.stamp.sec + (t.header.stamp.nanosec / 1e9)
+            now_sec = now.nanoseconds / 1e9
+            if abs(now_sec - t_sec) < 0.4:
+                self.last_amcl_tf_wall = wall_now
+        except Exception:
+            pass
+
+        # 1. Bootstrap TF map -> odom & TF Continuity Keeper:
+        # Menjamin frame 'map' selalu terhubung ke 'odom' dan TIDAK PERNAH KEDALUWARSA di TF buffer!
+        # - Saat startup sebelum AMCL init: siarkan bootstrap TF (0,0)
+        # - Saat AMCL sedang hening > 0.4s (misal robot diam lama saat standby / menunggu dispatch baru):
+        #   siarkan ulang transform map->odom terakhir yang valid dengan stempel waktu sekarang (now + 0.1s).
         scan_active = (wall_now - self.last_scan_wall_time) < 2.0
         if not scan_active:
             self.first_scan_wall_time = 0.0
         enc_ok = self.encoder_ok(wall_now)
-        if not self.amcl_initialized:
-            self.publish_bootstrap_tf(now_msg)
+
+        amcl_silent = (wall_now - self.last_amcl_tf_wall) > 0.4
+        if (not self.amcl_initialized) or amcl_silent:
+            future_stamp = (now + rclpy.duration.Duration(seconds=0.1)).to_msg()
+            self.publish_bootstrap_tf(future_stamp)
 
         # Deteksi encoder hilang/kembali setelah sempat siap
         if self.encoder_was_ok and not enc_ok:
