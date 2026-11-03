@@ -47,6 +47,7 @@ install(PROGRAMS
   scripts/step_response_monitor_node.py
   scripts/plot_step_response.py
   scripts/evaluasi_pid.py
+  scripts/test_robot_voice.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

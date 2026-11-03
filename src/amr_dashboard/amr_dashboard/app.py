@@ -1153,8 +1153,8 @@ def _update_process_states_loop():
             ard_rdy = False
             if ard_act and ros_node is not None:
                 with ros_node.lock:
-                    if ros_node.arduino_ready and (time.time() - ros_node.last_arduino_ready_time < 3.0):
-                        ard_rdy = True
+                    if getattr(ros_node, 'last_arduino_ready_time', 0.0) > 0.0:
+                        ard_rdy = bool(ros_node.arduino_ready and (time.time() - ros_node.last_arduino_ready_time < 3.0))
                     elif (time.time() - getattr(ros_node, 'last_odom_time', 0.0)) < 1.5:
                         ard_rdy = True
 
@@ -1244,8 +1244,8 @@ def is_arduino_ready():
         return False
     if ros_node is not None:
         with ros_node.lock:
-            if ros_node.arduino_ready and (time.time() - ros_node.last_arduino_ready_time < 3.0):
-                return True
+            if getattr(ros_node, 'last_arduino_ready_time', 0.0) > 0.0:
+                return bool(ros_node.arduino_ready and (time.time() - ros_node.last_arduino_ready_time < 3.0))
             if (time.time() - getattr(ros_node, 'last_odom_time', 0.0)) < 1.5:
                 return True
     return bool(RUNTIME_CACHE.get('arduino_ready', False))
