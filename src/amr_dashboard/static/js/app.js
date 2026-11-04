@@ -4173,7 +4173,14 @@ async function connectBluetoothDevice(mac, name) {
     const res = await apiPost('/api/bluetooth/connect', { mac, name });
     if (res && res.success) {
         showToast(`🟢 Berhasil terhubung ke ${name}!`, 'success');
-        loadVoiceConfig();
+        if (APP.voiceConfig) {
+            APP.voiceConfig.connected = true;
+            APP.voiceConfig.auto_reconnect = true;
+            updateVoiceSpeakerUI(APP.voiceConfig);
+        }
+        const autoReconInput = document.getElementById('set-auto-recon');
+        if (autoReconInput) autoReconInput.checked = true;
+        setTimeout(loadVoiceConfig, 300);
     } else {
         showToast(`❌ Gagal terhubung ke ${mac}: ${res ? res.output || res.error : 'Timeout'}`, 'error');
     }
@@ -4187,10 +4194,20 @@ async function connectBluetoothFromUI() {
 
 async function disconnectBluetoothFromUI() {
     showToast('Memutuskan Bluetooth...', 'info');
-    const res = await apiPost('/api/bluetooth/disconnect');
+    const targetMac = APP.voiceConfig?.target_mac || '0E:21:D5:E9:AB:5F';
+    const res = await apiPost('/api/bluetooth/disconnect', { mac: targetMac });
     if (res && res.success) {
-        showToast('Bluetooth terputus', 'info');
-        loadVoiceConfig();
+        showToast('✓ Bluetooth terputus (Auto-reconnect nonaktif)', 'info');
+        if (APP.voiceConfig) {
+            APP.voiceConfig.connected = false;
+            APP.voiceConfig.auto_reconnect = false;
+            updateVoiceSpeakerUI(APP.voiceConfig);
+        }
+        const autoReconInput = document.getElementById('set-auto-recon');
+        if (autoReconInput) autoReconInput.checked = false;
+        setTimeout(loadVoiceConfig, 300);
+    } else {
+        showToast(`Gagal memutuskan Bluetooth: ${res ? res.error : 'Timeout'}`, 'error');
     }
 }
 

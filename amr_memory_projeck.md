@@ -923,6 +923,25 @@ Setelah itu, status AMCL tertahan di `AMCL ⏳` selamanya, dan percobaan auto-in
   3. **Nonaktifkan Fallback Web Speech di [`app.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/app.js)**:
      `fallbackWebSpeech()` dimatikan agar browser tidak pernah memicu engine sintesis robotik lokal, dan `getSoundMode()` disetel default `'mute'` agar speaker fisik Jetson menjadi fokus utama output audio AMR tanpa tabrakan dengan speaker laptop.
 
+---
+
+### 7. Perbaikan Fitur Putus Koneksi Bluetooth (`api_bluetooth_disconnect`):
+- **Akar Masalah**:
+  1. Saat tombol **Putuskan** ditekan di dashboard, `bluetoothctl disconnect <mac>` memang dijalankan. Namun karena di latar belakang ada thread `BluetoothWatchdog` di [`test_robot_voice.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/test_robot_voice.py) yang mengecek status setiap 2–5 detik dan opsi `auto_reconnect` masih bernilai `True`, watchdog langsung menganggap speaker terputus secara tidak disengaja dan **seketika menyambungkan ulang (`bluetoothctl connect <mac>`)**.
+  2. Selain itu, modul card PulseAudio (`bluez_card.<mac>`) masih memegang sink audio A2DP sehingga BlueZ kadang menolak atau menunda proses pemutusan koneksi radio.
+- **Solusi yang Diterapkan**:
+  1. **Nonaktifkan `auto_reconnect` Saat User Manual Memutuskan**:
+     Pada [`app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py) di endpoint `/api/bluetooth/disconnect`, konfigurasi `auto_reconnect` otomatis diubah ke `False`, disimpan ke `voice_config.json`, dan dipublikasikan ke topik ROS 2 `/robot_voice/config`. Dengan demikian, `BluetoothWatchdog` langsung berhenti dan tidak akan menyambung ulang speaker secara sepihak.
+  2. **Pelepasan Audio Profile PulseAudio**:
+     Sebelum memutus BlueZ, dijalankan `pactl set-card-profile bluez_card.<mac> off` agar aliran audio A2DP segera dilepas secara bersih.
+  3. **Sinkronisasi Otomatis pada Dashboard UI**:
+     Pada [`app.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/app.js):
+     - Saat klik **Putuskan**: Saklar `Auto-Reconnect Bluetooth Watchdog` di halaman Pengaturan otomatis bergeser ke posisi nonaktif (`OFF`), dan badge status seketika berubah menjadi `SPEAKER TERPUTUS ❌` / `BT: OFF`.
+     - Saat klik **Hubungkan**: Opsi `auto_reconnect` otomatis diaktifkan kembali (`True`), saklar watchdog menyala (`ON`), dan watchdog kembali mengamankan koneksi jika speaker sempat mati/hidup kembali.
+  4. **Penambahan CLI & Menu Terminal**:
+     Di [`test_robot_voice.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/test_robot_voice.py), ditambahkan opsi CLI `--disconnect` dan menu interaktif nomor `8` (*Putuskan Koneksi Bluetooth Speaker*).
+
+
 
 
 

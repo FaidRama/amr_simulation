@@ -243,6 +243,35 @@ def is_bluetooth_device_connected(mac_address):
     return False
 
 
+def disconnect_bluetooth_device(mac_address=None):
+    """Putus koneksi Bluetooth di level PulseAudio dan BlueZ secara bersih."""
+    cfg = load_voice_config()
+    target_mac = mac_address or cfg.get('target_mac', '')
+    env = get_pulse_env()
+
+    if target_mac:
+        clean_mac = target_mac.replace(':', '_')
+        try:
+            subprocess.run(['pactl', 'set-card-profile', f'bluez_card.{clean_mac}', 'off'],
+                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+        except Exception:
+            pass
+
+    try:
+        if target_mac:
+            subprocess.run(['bluetoothctl', 'disconnect', target_mac],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=4)
+        subprocess.run(['bluetoothctl', 'disconnect'],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+    except Exception:
+        pass
+
+    cfg['auto_reconnect'] = False
+    save_voice_config(cfg)
+    print(f"🛑 [Bluetooth] Speaker {target_mac} diputus dan Auto-Reconnect dinonaktifkan.")
+    return True
+
+
 def play_audio_file(filepath):
     """Putar file audio (wav atau mp3) secara aman dengan batas timeout langsung ke speaker Bluetooth."""
     if not os.path.exists(filepath):
@@ -612,12 +641,13 @@ def interactive_menu():
         print("  5. 💬 Ucapkan Kalimat Custom (Ketik bebas)")
         print("  6. 📊 Periksa Status Bluetooth & Audio Sink")
         print("  7. 🔗 Hubungkan Ulang Bluetooth Speaker Manual")
-        print("  8. 🤖 Jalankan sebagai ROS 2 Voice & Watchdog Node")
+        print("  8. ❌ Putuskan Koneksi Bluetooth Speaker")
+        print("  9. 🤖 Jalankan sebagai ROS 2 Voice & Watchdog Node")
         print("  q. Keluar")
         print("=" * 58)
 
         try:
-            choice = input("👉 Pilih menu (1-8 / q): ").strip().lower()
+            choice = input("👉 Pilih menu (1-9 / q): ").strip().lower()
         except (KeyboardInterrupt, EOFError):
             print("\nKeluar.")
             break
@@ -648,8 +678,14 @@ def interactive_menu():
         elif choice == '7':
             target_mac = config.get('target_mac', '')
             print(f"🔄 Menghubungkan ke {target_mac}...")
+            config['auto_reconnect'] = True
+            save_voice_config(config)
             subprocess.run(['bluetoothctl', 'connect', target_mac])
         elif choice == '8':
+            target_mac = config.get('target_mac', '')
+            print(f"🔌 Memutuskan koneksi {target_mac}...")
+            disconnect_bluetooth_device(target_mac)
+        elif choice == '9':
             print("🤖 Memulai ROS 2 Node Voice & Watchdog...")
             run_ros2_node()
         elif choice in ('q', 'exit', 'quit'):
@@ -669,6 +705,7 @@ def main():
     parser.add_argument('--status', action='store_true', help="Cek status bluetooth audio sink")
     parser.add_argument('--node', action='store_true', help="Jalankan sebagai ROS 2 Voice & Watchdog Node")
     parser.add_argument('--connect', type=str, help="Koneksikan ke MAC address bluetooth tertentu")
+    parser.add_argument('--disconnect', action='store_true', help="Putuskan koneksi speaker bluetooth")
 
     args = parser.parse_args()
     config = load_voice_config()
@@ -688,7 +725,11 @@ def main():
     elif args.say:
         speak(args.say, config=config)
     elif args.connect:
+        config['auto_reconnect'] = True
+        save_voice_config(config)
         subprocess.run(['bluetoothctl', 'connect', args.connect])
+    elif args.disconnect:
+        disconnect_bluetooth_device()
     elif args.node:
         run_ros2_node()
     else:

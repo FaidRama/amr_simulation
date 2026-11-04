@@ -2691,13 +2691,26 @@ def api_bluetooth_connect():
         cfg = load_voice_config()
         cfg['target_mac'] = mac
         cfg['target_name'] = name
+        cfg['auto_reconnect'] = True
         save_voice_config(cfg)
         ensure_voice_node_running()
 
         if ros_node and ros_node.voice_config_pub:
             msg = String()
-            msg.data = json.dumps({'target_mac': mac, 'target_name': name})
+            msg.data = json.dumps(cfg)
             ros_node.voice_config_pub.publish(msg)
+
+        global _cached_bt_status, _last_bt_check_time
+        _last_bt_check_time = time.time()
+        _cached_bt_status = {
+            'connected': success,
+            'target_mac': mac,
+            'target_name': name,
+            'auto_reconnect': True
+        }
+        if ros_node and hasattr(ros_node, 'voice_status') and isinstance(ros_node.voice_status, dict):
+            ros_node.voice_status['connected'] = success
+            ros_node.voice_status['auto_reconnect'] = True
 
         return jsonify({'success': success, 'mac': mac, 'name': name, 'output': output})
     except Exception as e:
@@ -2706,17 +2719,70 @@ def api_bluetooth_connect():
 
 @app.route('/api/bluetooth/disconnect', methods=['POST'])
 def api_bluetooth_disconnect():
-    """Putus koneksi perangkat Bluetooth aktif."""
+    """Putus koneksi perangkat Bluetooth aktif secara tuntas (PulseAudio + BlueZ + Watchdog)."""
     data = request.json or {}
-    mac = data.get('mac', '').strip()
-    if not mac:
-        mac = load_voice_config().get('target_mac', '')
+    cfg = load_voice_config()
+    mac = data.get('mac', '').strip() or cfg.get('target_mac', '')
+    env = get_pulse_env()
+    logs = []
+
+    # 1. Matikan audio card profile di PulseAudio agar A2DP stream segera dilepas
+    if mac:
+        clean_mac = mac.replace(':', '_')
+        try:
+            res_pa = subprocess.run(['pactl', 'set-card-profile', f'bluez_card.{clean_mac}', 'off'],
+                                    env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+            if res_pa.stdout:
+                logs.append(res_pa.stdout.strip())
+        except Exception:
+            pass
+
+    # 2. Putus koneksi radio Bluetooth via bluetoothctl
     try:
         if mac:
-            subprocess.run(['bluetoothctl', 'disconnect', mac], timeout=4)
-        return jsonify({'success': True, 'mac': mac})
+            res_bt = subprocess.run(['bluetoothctl', 'disconnect', mac],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=4)
+            if res_bt.stdout:
+                logs.append(res_bt.stdout.strip())
+        # Global disconnect sebagai safety
+        subprocess.run(['bluetoothctl', 'disconnect'],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        logs.append(str(e))
+
+    # 3. KUNCI UTAMA: Nonaktifkan auto_reconnect agar BluetoothWatchdog tidak langsung menyambung ulang!
+    cfg['auto_reconnect'] = False
+    save_voice_config(cfg)
+
+    # 4. Beritahukan ROS 2 node voice agar watchdog realtime mematikan auto_reconnect
+    if ros_node and ros_node.voice_config_pub:
+        try:
+            msg = String()
+            msg.data = json.dumps(cfg)
+            ros_node.voice_config_pub.publish(msg)
+        except Exception:
+            pass
+
+    # 5. Reset cache status seketika agar UI dashboard langsung menampilkan status TERPUTUS
+    global _cached_bt_status, _last_bt_check_time
+    _last_bt_check_time = time.time()
+    _cached_bt_status = {
+        'connected': False,
+        'target_mac': mac,
+        'target_name': cfg.get('target_name', 'Bluetooth Speaker'),
+        'auto_reconnect': False
+    }
+    if ros_node and hasattr(ros_node, 'voice_status') and isinstance(ros_node.voice_status, dict):
+        ros_node.voice_status['connected'] = False
+        ros_node.voice_status['auto_reconnect'] = False
+
+    return jsonify({
+        'success': True,
+        'mac': mac,
+        'connected': False,
+        'auto_reconnect': False,
+        'log': " ".join(logs)
+    })
 
 
 @app.route('/api/voice/config', methods=['GET', 'POST'])
