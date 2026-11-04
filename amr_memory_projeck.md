@@ -888,6 +888,10 @@ Setelah itu, status AMCL tertahan di `AMCL ⏳` selamanya, dan percobaan auto-in
   - Pengatur batas waktu halangan `SAFE_STOP` (detik).
   - Input kustomisasi kalimat pengumuman saat terhalang.
   - Tombol uji suara hardware robot (*Bel Chime*, *Deliver Tiba*, *Pickup Tiba*, *Permisi Lewat*).
+- **Pemisahan Modul Mandiri & Dual-Channel Audio Playback**:
+  - Di [`app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py): fungsi Bluetooth (`is_bluetooth_device_connected`, `check_pulseaudio_status`, `load_voice_config`, `save_voice_config`) didefinisikan secara mandiri tanpa dependensi impor `amr_simulation` (menghindari `ModuleNotFoundError`).
+  - **Dual-Channel Voice Dispatch**: Tombol uji suara di dashboard mem-publish ke topik ROS 2 (`/robot_voice/play`) SEKALIGUS memicu `play_voice_in_background()` langsung ke speaker fisik. Sehingga saat node background ROS 2 belum aktif, speaker fisik tetap 100% langsung berbunyi.
+  - **Dynamic System Telemetry**: `api_status()` membaca langsung status koneksi BlueZ/PulseAudio setiap 2.5 detik jika node ROS 2 belum mem-publish, sehingga dashboard langsung akurat mendeteksi status speaker (`BT: ON` / `SPEAKER TERHUBUNG ✅`) tanpa jeda.
 - **Penanganan Cache Browser & Service Reload**:
   - Di [`app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py): ditambahkan `app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0` dan hook `@app.after_request` dengan header `Cache-Control: no-cache, no-store, must-revalidate`.
   - Di [`index.html`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/templates/index.html): versi skrip dinaikkan ke `?v=3.2_voice` untuk memaksa browser mengunduh ulang JavaScript terbaru.
@@ -898,5 +902,6 @@ Setelah itu, status AMCL tertahan di `AMCL ⏳` selamanya, dan percobaan auto-in
     colcon build --packages-select amr_dashboard amr_simulation
     sudo systemctl restart amr_dashboard
     ```
+
 
 

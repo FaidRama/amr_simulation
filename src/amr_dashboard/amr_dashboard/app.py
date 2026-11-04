@@ -759,6 +759,7 @@ class DashboardNode(Node):
         """Callback status robot voice & bluetooth (/robot_voice/status)."""
         try:
             self.voice_status = json.loads(msg.data)
+            self.last_voice_status_time = time.time()
         except Exception:
             pass
     
@@ -2000,7 +2001,7 @@ def api_status():
                 'camera_ready': is_camera_ready(),
                 'human_node_active': is_human_node_active(),
                 'human_node_ready': is_human_node_ready(),
-                'voice': getattr(ros_node, 'voice_status', {}),
+                'voice': get_voice_telemetry_status(),
                 'connected': True,
                 'timestamp': time.time()
             })
@@ -2526,10 +2527,87 @@ def is_bluetooth_device_connected(mac_address):
     return False
 
 
+_last_bt_check_time = 0.0
+_cached_bt_status = {'connected': False, 'target_mac': '', 'target_name': ''}
+
+
+def get_voice_telemetry_status():
+    """Dapatkan status Bluetooth riil untuk telemetri dashboard (akurat & realtime)."""
+    global _last_bt_check_time, _cached_bt_status
+    now = time.time()
+    # Jika ada update dari topic /robot_voice/status dalam 3 detik terakhir, gunakan itu
+    if ros_node and hasattr(ros_node, 'last_voice_status_time') and (now - getattr(ros_node, 'last_voice_status_time', 0) < 3.0):
+        return ros_node.voice_status
+
+    # Jika tidak ada update ROS 2 node, periksa status fisik BlueZ langsung setiap 2.5 detik
+    if now - _last_bt_check_time > 2.5:
+        _last_bt_check_time = now
+        try:
+            cfg = load_voice_config()
+            target_mac = cfg.get('target_mac', '0E:21:D5:E9:AB:5F')
+            target_name = cfg.get('target_name', 'Acome A1')
+            conn = is_bluetooth_device_connected(target_mac)
+            _cached_bt_status = {
+                'connected': conn,
+                'target_mac': target_mac,
+                'target_name': target_name
+            }
+        except Exception:
+            pass
+    return _cached_bt_status
+
+
+def ensure_voice_node_running():
+    """Pastikan node test_robot_voice.py --node berjalan di latar belakang."""
+    try:
+        res = subprocess.run(['pgrep', '-f', 'test_robot_voice.py.*--node'],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        if res.stdout.strip():
+            return True
+        for wr in get_workspace_roots():
+            script = os.path.join(wr, 'src', 'amr_simulation', 'scripts', 'test_robot_voice.py')
+            if os.path.exists(script):
+                subprocess.Popen(['python3', script, '--node'],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 preexec_fn=os.setsid)
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def play_voice_in_background(mode, text):
+    """Putar suara langsung di speaker hardware Jetson di background thread."""
+    def _worker():
+        try:
+            ws_roots = get_workspace_roots()
+            script_cand = None
+            for wr in ws_roots:
+                c = os.path.join(wr, 'src', 'amr_simulation', 'scripts', 'test_robot_voice.py')
+                if os.path.exists(c):
+                    script_cand = c
+                    break
+            if script_cand:
+                if text == 'chime' or mode == 'chime':
+                    cmd = ['python3', script_cand, '--chime']
+                elif text in ('arrival', 'pickup', 'obstacle'):
+                    cmd = ['python3', script_cand, f'--{text}']
+                elif mode == 'say':
+                    cmd = ['python3', script_cand, '--say', text]
+                else:
+                    cmd = ['python3', script_cand, '--say', text]
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=12)
+        except Exception as e:
+            print(f"[WARN] Gagal putar suara fisik di app.py: {e}")
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 @app.route('/api/bluetooth/status', methods=['GET'])
 def api_bluetooth_status():
     """Dapatkan status koneksi Bluetooth Speaker & Konfigurasi Suara."""
     try:
+        ensure_voice_node_running()
         cfg = load_voice_config()
         target_mac = cfg.get('target_mac', '')
         connected = is_bluetooth_device_connected(target_mac)
@@ -2592,6 +2670,7 @@ def api_bluetooth_connect():
         cfg['target_mac'] = mac
         cfg['target_name'] = name
         save_voice_config(cfg)
+        ensure_voice_node_running()
 
         if ros_node and ros_node.voice_config_pub:
             msg = String()
@@ -2639,11 +2718,12 @@ def api_voice_config():
 
 @app.route('/api/voice/test', methods=['POST'])
 def api_voice_test():
-    """Keluarkan uji suara pada speaker robot via ROS 2."""
+    """Keluarkan uji suara pada speaker robot via ROS 2 & background worker."""
     data = request.json or {}
     mode = data.get('mode', 'play')
     text = data.get('text', 'arrival')
 
+    # 1. Publikasikan ke ROS 2 topic jika ada node yang subscribe
     if ros_node:
         msg = String()
         msg.data = text
@@ -2651,8 +2731,14 @@ def api_voice_test():
             ros_node.voice_say_pub.publish(msg)
         else:
             ros_node.voice_play_pub.publish(msg)
-        return jsonify({'success': True, 'mode': mode, 'text': text})
-    return jsonify({'success': False, 'error': 'ROS node tidak aktif'}), 500
+
+    # 2. Putar suara langsung secara fisik di background worker agar pasti berbunyi
+    play_voice_in_background(mode, text)
+
+    # 3. Pastikan node background aktif untuk pengumuman otomatis
+    ensure_voice_node_running()
+
+    return jsonify({'success': True, 'mode': mode, 'text': text})
 
 
 # =====================================================================
