@@ -40,7 +40,7 @@ bool proses_selesai = false;
 // =========================================================================
 // ROUTINE INTERRUPT ENCODER (QUADRATURE READING)
 // =========================================================================
-void IRAM_ATTR ISR_Encoder_Kiri() {
+void ISR_Encoder_Kiri() {
   // Jika saat Channel A RISING, Channel B bernilai HIGH -> Maju (ticks++)
   if (digitalRead(PIN_ENC_L_B) == HIGH) {
     enc_ticks_L++;
@@ -49,7 +49,7 @@ void IRAM_ATTR ISR_Encoder_Kiri() {
   }
 }
 
-void IRAM_ATTR ISR_Encoder_Kanan() {
+void ISR_Encoder_Kanan() {
   if (digitalRead(PIN_ENC_R_B) == HIGH) {
     enc_ticks_R++;
   } else {
