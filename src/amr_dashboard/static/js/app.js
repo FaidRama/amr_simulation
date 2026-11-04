@@ -1233,7 +1233,8 @@ function updateMissionUI() {
 
 // ====================== AUDIO & NOTIFICATION SYSTEM ======================
 function getSoundMode() {
-    return localStorage.getItem('amr_sound_mode') || (APP.settings && APP.settings.arrival_sound_mode) || 'human';
+    // Default 'mute' agar speaker fisik AMR di Jetson menjadi suara utama tanpa dobel audio dari browser laptop
+    return localStorage.getItem('amr_sound_mode') || (APP.settings && APP.settings.arrival_sound_mode) || 'mute';
 }
 
 function setSoundMode(mode) {
@@ -1324,27 +1325,18 @@ function speakHumanVoice(text) {
         _sharedAudio.src = audioUrl;
 
         _sharedAudio.play().catch(err => {
-            console.warn('Gagal memutar audio /api/tts, mencoba fallback Web Speech:', err);
-            fallbackWebSpeech(text);
+            console.warn('Gagal memutar audio /api/tts di browser:', err);
+            // Fallback Web Speech robot dimatikan agar tidak muncul suara espeak aneh
         });
     } catch (e) {
         console.warn('Error saat memutar audio TTS:', e);
-        fallbackWebSpeech(text);
     }
 }
 
 function fallbackWebSpeech(text) {
-    if (!('speechSynthesis' in window)) return;
-    try {
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = 'id-ID';
-        utterance.rate = 0.95;
-        const voices = window.speechSynthesis.getVoices();
-        const idVoice = voices.find(v => v.lang === 'id-ID' || v.lang.startsWith('id'));
-        if (idVoice) utterance.voice = idVoice;
-        window.speechSynthesis.speak(utterance);
-    } catch (e) {}
+    // Dinonaktifkan permanen: Web Speech API di Linux menggunakan engine espeak yang kaku/robotik.
+    // Seluruh pengumuman suara AMR dialirkan via Google TTS alami atau speaker Bluetooth Jetson fisik.
+    return;
 }
 
 if ('speechSynthesis' in window) {

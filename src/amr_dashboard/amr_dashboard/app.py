@@ -2616,7 +2616,7 @@ def play_voice_in_background(mode, text):
                 else:
                     cmd = ['python3', script_cand, '--say', text]
                 res = subprocess.run(cmd, env=get_pulse_env(),
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12)
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20)
                 if res.returncode != 0:
                     print(f"[WARN] test_robot_voice returned {res.returncode}: {res.stderr.strip()}")
         except Exception as e:
@@ -2740,25 +2740,33 @@ def api_voice_config():
 
 @app.route('/api/voice/test', methods=['POST'])
 def api_voice_test():
-    """Keluarkan uji suara pada speaker robot via ROS 2 & background worker."""
+    """Keluarkan uji suara pada speaker robot via ROS 2 atau background worker (tanpa dobel suara)."""
     data = request.json or {}
     mode = data.get('mode', 'play')
     text = data.get('text', 'arrival')
 
-    # 1. Publikasikan ke ROS 2 topic jika ada node yang subscribe
-    if ros_node:
+    # Cek apakah node background (test_robot_voice.py --node) sedang aktif
+    node_active = False
+    try:
+        chk = subprocess.run(['pgrep', '-f', 'test_robot_voice.py.*--node'],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        if chk.stdout.strip():
+            node_active = True
+    except Exception:
+        pass
+
+    # JIKA node aktif, kirim HANYA via topik ROS 2 agar tidak terjadi pemutaran ganda
+    if node_active and ros_node:
         msg = String()
         msg.data = text
         if mode == 'say':
             ros_node.voice_say_pub.publish(msg)
         else:
             ros_node.voice_play_pub.publish(msg)
-
-    # 2. Putar suara langsung secara fisik di background worker agar pasti berbunyi
-    play_voice_in_background(mode, text)
-
-    # 3. Pastikan node background aktif untuk pengumuman otomatis
-    ensure_voice_node_running()
+    else:
+        # Jika node belum aktif, putar via background worker dan jalankan node
+        play_voice_in_background(mode, text)
+        ensure_voice_node_running()
 
     return jsonify({'success': True, 'mode': mode, 'text': text})
 

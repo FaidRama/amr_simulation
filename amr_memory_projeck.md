@@ -903,5 +903,26 @@ Setelah itu, status AMCL tertahan di `AMCL ⏳` selamanya, dan percobaan auto-in
     sudo systemctl restart amr_dashboard
     ```
 
+---
+
+### 6. Eliminasi Suara Dobel (Duplicate Voice) & Penghapusan Suara Robotik (`espeak`):
+- **Akar Masalah yang Ditemukan**:
+  1. **Suara Dobel (Duplicate Playback)**:
+     Pada [`app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py), endpoint `/api/voice/test` sebelumnya mem-publish pesan ke topik ROS 2 (`/robot_voice/play` atau `/robot_voice/say`) **SEKALIGUS** memanggil `play_voice_in_background()`. Ketika node background ROS 2 (`test_robot_voice.py --node`) aktif, kedua proses memutar suara yang sama secara paralel ke speaker Bluetooth.
+  2. **Suara Robotik Aneh (`espeak`) Menyusul**:
+     - Pada [`test_robot_voice.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/test_robot_voice.py), fungsi pemutaran audio (`play_audio_file`) sebelumnya memiliki batas waktu pendek (`timeout=6` detik). Kalimat pengumuman bahasa Indonesia (misal: *"Deliver tiba. Robot sudah sampai di titik tujuan, silakan ambil barang."*) berdurasi ~6.5–7.5 detik, sehingga pada detik ke-6 pemutaran MP3 Google TTS dihentikan paksa oleh Python (`TimeoutExpired`).
+     - Karena fungsi pemutar mengembalikan `False`, fungsi `speak()` langsung melompat ke fallback offline baris 377: `subprocess.run(['espeak', '-v', 'id', text_to_speak])`. Engine `espeak` ini menghasilkan suara sintesis mekanik robotik yang kaku dan mengulang kalimat yang sama dari awal.
+  3. **Fallback Browser Web Speech**:
+     Pada [`app.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/app.js), browser dashboard sebelumnya memiliki default mode suara kedatangan `'human'`, dan saat `/api/tts` terkendala di browser Linux, `fallbackWebSpeech()` memanggil `window.speechSynthesis` yang di Linux menggunakan engine `espeak`.
+- **Solusi yang Diterapkan**:
+  1. **Mencegah Pemutaran Ganda di [`app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py)**:
+     `/api/voice/test` kini memeriksa status proses node background (`pgrep -f "test_robot_voice.py.*--node"`). Jika node aktif, pengiriman dilakukan **HANYA** melalui topik ROS 2 tanpa memicu `play_voice_in_background()`. Jika node belum berjalan, barulah `play_voice_in_background()` memutar suara sekali dan menyalakan node.
+  2. **Perpanjang Batas Waktu & Matikan Permanen `espeak` di [`test_robot_voice.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/test_robot_voice.py)**:
+     - Batas waktu pemutaran MP3 dinaikkan menjadi `timeout=18` detik (cukup untuk kalimat panjang).
+     - Blok pemanggilan `espeak` dan `spd-say` dihapus/dinonaktifkan secara permanen. Jika Google TTS sudah diunduh atau ada di cache lokal, sistem hanya memutar audio alami tersebut.
+  3. **Nonaktifkan Fallback Web Speech di [`app.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/app.js)**:
+     `fallbackWebSpeech()` dimatikan agar browser tidak pernah memicu engine sintesis robotik lokal, dan `getSoundMode()` disetel default `'mute'` agar speaker fisik Jetson menjadi fokus utama output audio AMR tanpa tabrakan dengan speaker laptop.
+
+
 
 

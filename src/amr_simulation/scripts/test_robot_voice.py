@@ -261,14 +261,14 @@ def play_audio_file(filepath):
                 if target_sink:
                     cmd += ['-d', target_sink]
                 cmd.append(filepath)
-                res = subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
+                res = subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
                 if res.returncode == 0:
                     return True
             except Exception:
                 pass
         if shutil.which('aplay'):
             try:
-                res = subprocess.run(['aplay', '-q', filepath], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
+                res = subprocess.run(['aplay', '-q', filepath], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
                 if res.returncode == 0:
                     return True
             except Exception:
@@ -281,7 +281,7 @@ def play_audio_file(filepath):
             if target_sink:
                 cmd += ['-a', target_sink]
             cmd.append(filepath)
-            res = subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
+            res = subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=18)
             if res.returncode == 0:
                 return True
         except Exception:
@@ -290,13 +290,13 @@ def play_audio_file(filepath):
         try:
             wav_tmp = f"/tmp/amr_play_{int(time.time()*1000)}.wav"
             subprocess.run(['ffmpeg', '-y', '-i', filepath, '-ar', '44100', '-ac', '2', wav_tmp],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=4)
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8)
             if os.path.exists(wav_tmp):
                 cmd = ['paplay']
                 if target_sink:
                     cmd += ['-d', target_sink]
                 cmd.append(wav_tmp)
-                res = subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
+                res = subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=18)
                 try:
                     os.remove(wav_tmp)
                 except Exception:
@@ -308,7 +308,7 @@ def play_audio_file(filepath):
     if shutil.which('ffplay'):
         try:
             res = subprocess.run(['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', filepath],
-                                 env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
+                                 env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=18)
             if res.returncode == 0:
                 return True
         except Exception:
@@ -332,7 +332,7 @@ def get_tts_audio_path(text):
             url,
             headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         )
-        with urllib.request.urlopen(req, timeout=4) as resp:
+        with urllib.request.urlopen(req, timeout=5) as resp:
             data = resp.read()
             with open(cache_file, 'wb') as f:
                 f.write(data)
@@ -372,25 +372,13 @@ def speak(text, play_chime_first=True, config=None):
         played = play_audio_file(audio_file)
         if played:
             return True
+        # Jika percobaan pertama gagal, coba sekali lagi
+        time.sleep(0.2)
+        return play_audio_file(audio_file)
 
-    # 2. Fallback offline: espeak jika tersedia
-    if shutil.which('espeak'):
-        try:
-            subprocess.run(['espeak', '-v', 'id', text_to_speak],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
-            return True
-        except Exception:
-            pass
-
-    # 3. Fallback offline: spd-say jika tersedia
-    if shutil.which('spd-say'):
-        try:
-            subprocess.run(['spd-say', '-l', 'id', text_to_speak],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
-            return True
-        except Exception:
-            pass
-
+    # Catatan: Fallback offline robot (espeak / spd-say) dinonaktifkan permanen
+    # agar robot selalu menggunakan suara manusia alami Google TTS dan tidak menimbulkan
+    # suara robot kaku/aneh atau pemutaran dobel.
     return False
 
 
