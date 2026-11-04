@@ -35,13 +35,12 @@ volatile long enc_ticks_R = 0;
 // Variabel Waktu Eksperimen
 unsigned long t_start_us = 0;
 unsigned long t_last_us  = 0;
-bool proses_selesai = false;
+bool sedang_tes = false;
 
 // =========================================================================
 // ROUTINE INTERRUPT ENCODER (QUADRATURE READING)
 // =========================================================================
 void ISR_Encoder_Kiri() {
-  // Jika saat Channel A RISING, Channel B bernilai HIGH -> Maju (ticks++)
   if (digitalRead(PIN_ENC_L_B) == HIGH) {
     enc_ticks_L++;
   } else {
@@ -63,11 +62,11 @@ void ISR_Encoder_Kanan() {
 // =========================================================================
 void setMotorKiri(int pwm_val) {
   if (pwm_val > 0) {
-    analogWrite(PIN_RPWM_L, pwm_val); // Maju
+    analogWrite(PIN_RPWM_L, pwm_val);
     analogWrite(PIN_LPWM_L, 0);
   } else if (pwm_val < 0) {
     analogWrite(PIN_RPWM_L, 0);
-    analogWrite(PIN_LPWM_L, abs(pwm_val)); // Mundur
+    analogWrite(PIN_LPWM_L, abs(pwm_val));
   } else {
     analogWrite(PIN_RPWM_L, 0);
     analogWrite(PIN_LPWM_L, 0);
@@ -102,23 +101,36 @@ void aktifkanDriver(bool state) {
   }
 }
 
+void mulaiPengujian() {
+  setMotorKiri(0);
+  setMotorKanan(0);
+  aktifkanDriver(true);
+
+  noInterrupts();
+  enc_ticks_L = 0;
+  enc_ticks_R = 0;
+  interrupts();
+
+  Serial.println(F("t_sec;pwm_input;ticks_L;ticks_R;rpm_L;rpm_R"));
+  t_start_us = micros();
+  t_last_us  = t_start_us;
+  sedang_tes = true;
+}
+
 // =========================================================================
 // SETUP PERANGKAT KERAS
 // =========================================================================
 void setup() {
   Serial.begin(115200);
 
-  // Inisialisasi Pin Encoder
   pinMode(PIN_ENC_L_A, INPUT_PULLUP);
   pinMode(PIN_ENC_L_B, INPUT_PULLUP);
   pinMode(PIN_ENC_R_A, INPUT_PULLUP);
   pinMode(PIN_ENC_R_B, INPUT_PULLUP);
 
-  // Pasang External Interrupt pada pin D2 dan D3
   attachInterrupt(digitalPinToInterrupt(PIN_ENC_L_A), ISR_Encoder_Kiri, RISING);
   attachInterrupt(digitalPinToInterrupt(PIN_ENC_R_A), ISR_Encoder_Kanan, RISING);
 
-  // Inisialisasi Pin Driver BTS7960
   pinMode(PIN_RPWM_L, OUTPUT);
   pinMode(PIN_LPWM_L, OUTPUT);
   pinMode(PIN_REN_L, OUTPUT);
@@ -129,41 +141,37 @@ void setup() {
   pinMode(PIN_REN_R, OUTPUT);
   pinMode(PIN_LEN_R, OUTPUT);
 
-  // Matikan motor dan aktifkan enable driver
   setMotorKiri(0);
   setMotorKanan(0);
   aktifkanDriver(true);
 
-  // Hitung mundur 5 detik untuk bersiap meletakkan robot di lantai
-  Serial.println(F("# Standby... Robot mulai bergerak dalam 5 detik!"));
-  for (int i = 5; i > 0; i--) {
-    Serial.print(F("# "));
-    Serial.println(i);
-    delay(1000);
-  }
-
-  // Header format CSV
-  Serial.println(F("t_sec;pwm_input;ticks_L;ticks_R;rpm_L;rpm_R"));
-
-  t_start_us = micros();
-  t_last_us  = t_start_us;
+  delay(1000);
+  // Otomatis langsung mulai pengujian saat boot / serial terhubung
+  mulaiPengujian();
 }
 
 // =========================================================================
 // LOOP EKSEKUSI PENGAMBILAN DATA (50 Hz / 20 ms)
 // =========================================================================
 void loop() {
-  if (proses_selesai) return;
+  // Jika user mengirim tombol/karakter di Serial, tes bisa diulang kapan saja
+  while (Serial.available() > 0) {
+    char c = Serial.read();
+    if (c == '1' || c == 'r' || c == 'R' || c == '\n') {
+      mulaiPengujian();
+      return;
+    }
+  }
+
+  if (!sedang_tes) return;
 
   unsigned long current_us = micros();
 
-  // Loop diskrit presisi tinggi berbasis micros()
   if (current_us - t_last_us >= SAMPLING_US) {
-    float dt = (current_us - t_last_us) / 1000000.0; // detik
+    float dt = (current_us - t_last_us) / 1000000.0;
     float t_sec = (current_us - t_start_us) / 1000000.0;
     t_last_us = current_us;
 
-    // Ambil dan reset pulsa tick secara atomic
     noInterrupts();
     long delta_ticks_L = enc_ticks_L;
     long delta_ticks_R = enc_ticks_R;
@@ -171,33 +179,28 @@ void loop() {
     enc_ticks_R = 0;
     interrupts();
 
-    // Hitung Kecepatan RPM Aktual
     float rpm_L = (abs(delta_ticks_L) / PPR_OUTPUT) * (60.0 / dt);
     float rpm_R = (abs(delta_ticks_R) / PPR_OUTPUT) * (60.0 / dt);
 
-    // Jadwal Profil Sinyal PWM (40 -> 160)
     int pwm_target = 0;
     if (t_sec < 1.0) {
-      pwm_target = 0;    // Detik 0 s.d 1 : Diam
+      pwm_target = 0;
     } else if (t_sec < 3.0) {
-      pwm_target = 40;   // Detik 1 s.d 3 : Garis dasar stabil (lepas zona mati)
+      pwm_target = 40;
     } else if (t_sec <= 6.0) {
-      pwm_target = 160;  // Detik 3 s.d 6 : Hentakan step linier
+      pwm_target = 160;
     } else {
-      // Selesai pengujian
       setMotorKiri(0);
       setMotorKanan(0);
       aktifkanDriver(false);
-      proses_selesai = true;
-      Serial.println(F("# PENGUJIAN SELESAI. Silakan copy data CSV di atas."));
+      sedang_tes = false;
+      Serial.println(F("# PENGUJIAN SELESAI"));
       return;
     }
 
-    // Terapkan PWM ke motor fisik
     setMotorKiri(pwm_target);
     setMotorKanan(pwm_target);
 
-    // Cetak Data ke Serial Monitor (Format CSV dengan Delimiter ';')
     Serial.print(t_sec, 3);
     Serial.print(';');
     Serial.print(pwm_target);
