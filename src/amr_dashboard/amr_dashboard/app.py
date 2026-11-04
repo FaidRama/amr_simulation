@@ -2426,11 +2426,110 @@ def api_tts():
 # =====================================================================
 # BLUETOOTH SPEAKER & ROBOT VOICE CONTROL API
 # =====================================================================
+DEFAULT_VOICE_CONFIG = {
+    "target_mac": "0E:21:D5:E9:AB:5F",
+    "target_name": "Acome A1",
+    "auto_reconnect": True,
+    "reconnect_interval_s": 5,
+    "obstacle_voice_delay_s": 10,
+    "obstacle_voice_repeat_s": 12,
+    "obstacle_phrase": "Permisi, robot mau lewat. Mohon beri jalan.",
+    "arrival_phrase": "Deliver tiba. Robot sudah sampai di titik tujuan, silakan ambil barang.",
+    "pickup_phrase": "Pickup tiba. Robot sudah sampai di titik pickup, silakan muat barang.",
+    "home_phrase": "Misi selesai. Robot kembali ke stasiun pangkalan."
+}
+
+
+def get_voice_config_paths():
+    """Daftar lokasi file voice_config.json di workspace dan home."""
+    paths = []
+    for wr in get_workspace_roots():
+        paths.append(os.path.join(wr, 'src', 'amr_simulation', 'config', 'voice_config.json'))
+    paths.append(os.path.expanduser('~/.config/amr_voice/voice_config.json'))
+    return paths
+
+
+def load_voice_config():
+    """Muat konfigurasi suara dari file JSON tanpa dependensi package luar."""
+    cfg = dict(DEFAULT_VOICE_CONFIG)
+    for p in get_voice_config_paths():
+        if os.path.isfile(p):
+            try:
+                with open(p, 'r') as f:
+                    cfg.update(json.load(f))
+                break
+            except Exception:
+                pass
+    return cfg
+
+
+def save_voice_config(config_dict):
+    """Simpan konfigurasi suara ke file JSON lokal."""
+    for p in get_voice_config_paths():
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, 'w') as f:
+                json.dump(config_dict, f, indent=2)
+            return True
+        except Exception:
+            pass
+    return False
+
+
+def check_pulseaudio_status():
+    """Cek status PulseAudio dan apakah Bluetooth Sink terdeteksi."""
+    info = {
+        'pulseaudio_running': False,
+        'default_sink': '',
+        'has_bluetooth_sink': False,
+        'bluetooth_sinks': []
+    }
+    try:
+        res = subprocess.run(['pactl', 'list', 'sinks', 'short'],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+        if res.returncode == 0:
+            info['pulseaudio_running'] = True
+            for line in res.stdout.strip().splitlines():
+                parts = line.split('\t')
+                sink_name = parts[1] if len(parts) > 1 else parts[0]
+                if 'bluez' in sink_name.lower():
+                    info['has_bluetooth_sink'] = True
+                    info['bluetooth_sinks'].append(sink_name)
+
+        res_info = subprocess.run(['pactl', 'info'],
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+        if res_info.returncode == 0:
+            for line in res_info.stdout.splitlines():
+                if 'Default Sink:' in line:
+                    info['default_sink'] = line.split('Default Sink:')[-1].strip()
+    except Exception:
+        pass
+    return info
+
+
+def is_bluetooth_device_connected(mac_address):
+    """Cek apakah perangkat MAC tertentu terkoneksi di BlueZ / PulseAudio."""
+    if not mac_address:
+        return False
+    try:
+        res = subprocess.run(['bluetoothctl', 'info', mac_address],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+        if res.returncode == 0 and 'Connected: yes' in res.stdout:
+            return True
+    except Exception:
+        pass
+    mac_clean = mac_address.replace(':', '_').lower()
+    pa_status = check_pulseaudio_status()
+    for s in pa_status['bluetooth_sinks']:
+        if mac_clean in s.lower():
+            return True
+    return False
+
+
 @app.route('/api/bluetooth/status', methods=['GET'])
 def api_bluetooth_status():
     """Dapatkan status koneksi Bluetooth Speaker & Konfigurasi Suara."""
     try:
-        from amr_simulation.scripts.test_robot_voice import load_voice_config, is_bluetooth_device_connected, check_pulseaudio_status
         cfg = load_voice_config()
         target_mac = cfg.get('target_mac', '')
         connected = is_bluetooth_device_connected(target_mac)
@@ -2487,9 +2586,8 @@ def api_bluetooth_connect():
         res = subprocess.run(['bluetoothctl', 'connect', mac],
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=6)
         output = res.stdout.strip()
-        success = ('Connection successful' in output or 'Connected: yes' in output)
+        success = ('Connection successful' in output or 'Connected: yes' in output or is_bluetooth_device_connected(mac))
 
-        from amr_simulation.scripts.test_robot_voice import load_voice_config, save_voice_config
         cfg = load_voice_config()
         cfg['target_mac'] = mac
         cfg['target_name'] = name
@@ -2511,7 +2609,6 @@ def api_bluetooth_disconnect():
     data = request.json or {}
     mac = data.get('mac', '').strip()
     if not mac:
-        from amr_simulation.scripts.test_robot_voice import load_voice_config
         mac = load_voice_config().get('target_mac', '')
     try:
         if mac:
@@ -2524,7 +2621,6 @@ def api_bluetooth_disconnect():
 @app.route('/api/voice/config', methods=['GET', 'POST'])
 def api_voice_config():
     """Ambil atau perbarui setting konfigurasi suara robot."""
-    from amr_simulation.scripts.test_robot_voice import load_voice_config, save_voice_config
     if request.method == 'GET':
         return jsonify({'success': True, 'config': load_voice_config()})
 
