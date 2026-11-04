@@ -50,10 +50,11 @@ void ISR_Encoder_Kiri() {
 }
 
 void ISR_Encoder_Kanan() {
+  // Motor kanan terbalik secara fisik di sasis (Invert Encoder R)
   if (digitalRead(PIN_ENC_R_B) == HIGH) {
-    enc_ticks_R++;
-  } else {
     enc_ticks_R--;
+  } else {
+    enc_ticks_R++;
   }
 }
 
@@ -74,12 +75,13 @@ void setMotorKiri(int pwm_val) {
 }
 
 void setMotorKanan(int pwm_val) {
+  // Motor Kanan (INVERTED): Maju = LPWM aktif, RPWM nol
   if (pwm_val > 0) {
-    analogWrite(PIN_RPWM_R, pwm_val); // Maju
-    analogWrite(PIN_LPWM_R, 0);
-  } else if (pwm_val < 0) {
     analogWrite(PIN_RPWM_R, 0);
-    analogWrite(PIN_LPWM_R, abs(pwm_val)); // Mundur
+    analogWrite(PIN_LPWM_R, pwm_val);
+  } else if (pwm_val < 0) {
+    analogWrite(PIN_RPWM_R, abs(pwm_val));
+    analogWrite(PIN_LPWM_R, 0);
   } else {
     analogWrite(PIN_RPWM_R, 0);
     analogWrite(PIN_LPWM_R, 0);
