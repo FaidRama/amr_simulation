@@ -2477,6 +2477,23 @@ def save_voice_config(config_dict):
     return False
 
 
+def get_pulse_env():
+    """Environment untuk berkomunikasi dengan PulseAudio user jetson (UID 1000)."""
+    env = dict(os.environ)
+    for uid in ['1000', '1001']:
+        user_run = f'/run/user/{uid}'
+        pulse_sock = f'{user_run}/pulse/native'
+        if os.path.exists(pulse_sock):
+            env['XDG_RUNTIME_DIR'] = user_run
+            env['PULSE_SERVER'] = f'unix:{pulse_sock}'
+            break
+    if 'USER' not in env:
+        env['USER'] = 'jetson'
+    if 'HOME' not in env:
+        env['HOME'] = '/home/jetson'
+    return env
+
+
 def check_pulseaudio_status():
     """Cek status PulseAudio dan apakah Bluetooth Sink terdeteksi."""
     info = {
@@ -2485,9 +2502,10 @@ def check_pulseaudio_status():
         'has_bluetooth_sink': False,
         'bluetooth_sinks': []
     }
+    env = get_pulse_env()
     try:
         res = subprocess.run(['pactl', 'list', 'sinks', 'short'],
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+                             env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
         if res.returncode == 0:
             info['pulseaudio_running'] = True
             for line in res.stdout.strip().splitlines():
@@ -2498,7 +2516,7 @@ def check_pulseaudio_status():
                     info['bluetooth_sinks'].append(sink_name)
 
         res_info = subprocess.run(['pactl', 'info'],
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+                                  env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
         if res_info.returncode == 0:
             for line in res_info.stdout.splitlines():
                 if 'Default Sink:' in line:
@@ -2568,6 +2586,7 @@ def ensure_voice_node_running():
             script = os.path.join(wr, 'src', 'amr_simulation', 'scripts', 'test_robot_voice.py')
             if os.path.exists(script):
                 subprocess.Popen(['python3', script, '--node'],
+                                 env=get_pulse_env(),
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                  preexec_fn=os.setsid)
                 return True
@@ -2596,7 +2615,10 @@ def play_voice_in_background(mode, text):
                     cmd = ['python3', script_cand, '--say', text]
                 else:
                     cmd = ['python3', script_cand, '--say', text]
-                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=12)
+                res = subprocess.run(cmd, env=get_pulse_env(),
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12)
+                if res.returncode != 0:
+                    print(f"[WARN] test_robot_voice returned {res.returncode}: {res.stderr.strip()}")
         except Exception as e:
             print(f"[WARN] Gagal putar suara fisik di app.py: {e}")
 

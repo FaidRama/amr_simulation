@@ -132,6 +132,60 @@ def generate_chime_wav(filepath=CHIME_WAV_PATH):
     return filepath
 
 
+def get_pulse_env():
+    """Environment untuk berkomunikasi dengan PulseAudio user jetson (UID 1000)."""
+    env = dict(os.environ)
+    for uid in ['1000', '1001']:
+        user_run = f'/run/user/{uid}'
+        pulse_sock = f'{user_run}/pulse/native'
+        if os.path.exists(pulse_sock):
+            env['XDG_RUNTIME_DIR'] = user_run
+            env['PULSE_SERVER'] = f'unix:{pulse_sock}'
+            break
+    if 'USER' not in env:
+        env['USER'] = 'jetson'
+    if 'HOME' not in env:
+        env['HOME'] = '/home/jetson'
+    return env
+
+
+def route_audio_to_bluetooth(mac_address=None):
+    """Pastikan default sink PulseAudio diarahkan ke Bluetooth speaker dan tidak di-mute."""
+    env = get_pulse_env()
+    try:
+        res = subprocess.run(['pactl', 'list', 'sinks', 'short'],
+                             env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+        bt_sinks = []
+        if res.returncode == 0:
+            for line in res.stdout.strip().splitlines():
+                parts = line.split('\t')
+                sname = parts[1] if len(parts) > 1 else parts[0]
+                if 'bluez' in sname.lower():
+                    bt_sinks.append(sname)
+
+        target_sink = None
+        if mac_address:
+            mac_clean = mac_address.replace(':', '_').lower()
+            for s in bt_sinks:
+                if mac_clean in s.lower():
+                    target_sink = s
+                    break
+        if not target_sink and bt_sinks:
+            target_sink = bt_sinks[0]
+
+        if target_sink:
+            subprocess.run(['pactl', 'set-default-sink', target_sink],
+                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            subprocess.run(['pactl', 'set-sink-mute', target_sink, '0'],
+                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            subprocess.run(['pactl', 'set-sink-volume', target_sink, '85%'],
+                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            return target_sink
+    except Exception:
+        pass
+    return None
+
+
 def check_pulseaudio_status():
     """Cek status PulseAudio dan apakah Bluetooth Sink terdeteksi."""
     info = {
@@ -140,10 +194,10 @@ def check_pulseaudio_status():
         'has_bluetooth_sink': False,
         'bluetooth_sinks': []
     }
-
+    env = get_pulse_env()
     try:
         res = subprocess.run(['pactl', 'list', 'sinks', 'short'],
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+                             env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
         if res.returncode == 0:
             info['pulseaudio_running'] = True
             lines = res.stdout.strip().splitlines()
@@ -155,7 +209,7 @@ def check_pulseaudio_status():
                     info['bluetooth_sinks'].append(sink_name)
 
         res_info = subprocess.run(['pactl', 'info'],
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+                                  env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
         if res_info.returncode == 0:
             for line in res_info.stdout.splitlines():
                 if 'Default Sink:' in line:
@@ -190,9 +244,12 @@ def is_bluetooth_device_connected(mac_address):
 
 
 def play_audio_file(filepath):
-    """Putar file audio (wav atau mp3) secara aman dengan batas timeout."""
+    """Putar file audio (wav atau mp3) secara aman dengan batas timeout langsung ke speaker Bluetooth."""
     if not os.path.exists(filepath):
         return False
+
+    env = get_pulse_env()
+    target_sink = route_audio_to_bluetooth()
 
     ext = os.path.splitext(filepath)[1].lower()
 
@@ -200,14 +257,18 @@ def play_audio_file(filepath):
     if ext == '.wav':
         if shutil.which('paplay'):
             try:
-                res = subprocess.run(['paplay', filepath], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
+                cmd = ['paplay']
+                if target_sink:
+                    cmd += ['-d', target_sink]
+                cmd.append(filepath)
+                res = subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
                 if res.returncode == 0:
                     return True
             except Exception:
                 pass
         if shutil.which('aplay'):
             try:
-                res = subprocess.run(['aplay', '-q', filepath], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
+                res = subprocess.run(['aplay', '-q', filepath], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
                 if res.returncode == 0:
                     return True
             except Exception:
@@ -216,22 +277,38 @@ def play_audio_file(filepath):
     # Prioritas MP3
     if shutil.which('mpg123'):
         try:
-            res = subprocess.run(['mpg123', '-q', filepath], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
+            cmd = ['mpg123', '-q']
+            if target_sink:
+                cmd += ['-a', target_sink]
+            cmd.append(filepath)
+            res = subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
             if res.returncode == 0:
                 return True
+        except Exception:
+            pass
+    if shutil.which('ffmpeg') and shutil.which('paplay'):
+        try:
+            wav_tmp = f"/tmp/amr_play_{int(time.time()*1000)}.wav"
+            subprocess.run(['ffmpeg', '-y', '-i', filepath, '-ar', '44100', '-ac', '2', wav_tmp],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=4)
+            if os.path.exists(wav_tmp):
+                cmd = ['paplay']
+                if target_sink:
+                    cmd += ['-d', target_sink]
+                cmd.append(wav_tmp)
+                res = subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
+                try:
+                    os.remove(wav_tmp)
+                except Exception:
+                    pass
+                if res.returncode == 0:
+                    return True
         except Exception:
             pass
     if shutil.which('ffplay'):
         try:
             res = subprocess.run(['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', filepath],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
-            if res.returncode == 0:
-                return True
-        except Exception:
-            pass
-    if shutil.which('paplay'):
-        try:
-            res = subprocess.run(['paplay', filepath], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
+                                 env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6)
             if res.returncode == 0:
                 return True
         except Exception:
