@@ -1,7 +1,7 @@
 home_position:
-  x: 0.0
-  y: 0.0
-  yaw: 0.0
+  x: 8.24
+  y: -3.66
+  yaw: -1.571
 operation_mode: real
 predefined_points:
 - &id001
@@ -19,10 +19,10 @@ predefined_points:
 profiles:
   real:
     home_position:
-      x: 0.0
-      y: 0.0
-      yaw: 0.0
-    map_file: peta_1b_lengkap.yaml
+      x: 8.24
+      y: -3.66
+      yaw: -1.571
+    map_file: peta_l1_dc.yaml
     max_angular_speed: 0.6
     max_linear_speed: 0.35
     predefined_points:
@@ -31,7 +31,7 @@ profiles:
     settings:
       arrival_sound_mode: human
       max_angular_speed: 0.5
-      max_linear_speed: 0.35
+      max_linear_speed: 0.4
       theme: nordic-slate
       waypoint_pause_duration: 3
   sim:
@@ -56,6 +56,6 @@ profiles:
 settings:
   arrival_sound_mode: human
   max_angular_speed: 0.5
-  max_linear_speed: 0.35
+  max_linear_speed: 0.4
   theme: nordic-slate
   waypoint_pause_duration: 3
