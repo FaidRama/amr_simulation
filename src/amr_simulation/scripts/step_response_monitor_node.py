@@ -2,16 +2,16 @@
 """
 step_response_monitor_node.py
 ROS 2 Node untuk mengontrol dan menyimpan data pengujian Step Response Open-Loop
-Motor DC PG36 + BTS7960 secara otomatis ke file CSV.
+Motor DC PG36 + BTS7960 secara otomatis ke file CSV (Raw Encoder Data - Tanpa Filter EMA).
 
-Skenario Pengujian (6 detik):
+Skenario Pengujian:
   - 0-1s : Diam (PWM 0)
-  - 1-3s : Baseline konstan (PWM 40)
-  - 3-6s : Step Jump (PWM 140) -> Area Identifikasi Fungsi Alih G(s)
+  - 1-3s : Baseline konstan (PWM Base, default 40)
+  - 3-6s : Step Jump (PWM Step, default 140 atau pilihan: 100, 120, 140, 160, 180)
   - > 6s : Selesai & Motor Stop Otomatis
 
 Output File:
-  - data_step_response/step_response_YYYYMMDD_HHMMSS.csv
+  - data_step_response/step_response_base{base}_step{step}_YYYYMMDD_HHMMSS.csv
 """
 
 import os
@@ -33,10 +33,14 @@ class StepResponseMonitorNode(Node):
         self.declare_parameter('port', '/dev/ttyACM0')
         self.declare_parameter('baudrate', 115200)
         self.declare_parameter('output_dir', default_output)
+        self.declare_parameter('base_pwm', 40)
+        self.declare_parameter('step_pwm', 140)
 
         self.port = self.get_parameter('port').value
         self.baud = self.get_parameter('baudrate').value
         self.output_dir = self.get_parameter('output_dir').value
+        self.base_pwm = int(self.get_parameter('base_pwm').value)
+        self.step_pwm = int(self.get_parameter('step_pwm').value)
 
         # Buat folder jika belum ada
         os.makedirs(self.output_dir, exist_ok=True)
@@ -66,16 +70,19 @@ class StepResponseMonitorNode(Node):
         # Timer pembacaan serial 50 Hz
         self.timer = self.create_timer(0.01, self.read_serial_loop)
 
-        # Thread keyboard input (Tekan Enter untuk mulai)
+        # Thread keyboard input
         self.kb_thread = threading.Thread(target=self.keyboard_loop, daemon=True)
         self.kb_thread.start()
 
         self.get_logger().info(
             f"✅ Step Response Monitor aktif di {self.port} ({self.baud} baud)\n"
             f"   📁 Folder Simpan CSV : {self.output_dir}\n"
-            "   [STANDBY] Motor diam aman. Siapkan lintasan lurus bebas hambatan!\n"
-            "   >>> Tekan [ENTER] di terminal ini untuk MEMULAI pengujian 6 detik! <<<\n"
-            "   >>> Atau kirim topik: ros2 topic pub --once /motor_test/start std_msgs/msg/Empty <<<\n"
+            f"   ⚙️ Setting Default   : Base={self.base_pwm} PWM, Step={self.step_pwm} PWM\n"
+            "   [STANDBY] Motor diam aman. Siapkan lintasan bebas!\n"
+            "   >>> Tekan [ENTER] untuk mulai dengan setting saat ini <<<\n"
+            "   >>> Atau ketik nilai Step (100, 120, 140, 160, 180) lalu [ENTER] <<<\n"
+            "   >>> Atau ketik 'base,step' misal '40,160' lalu [ENTER] <<<\n"
+            "   >>> Ketik '0' atau 's' untuk STOP DARURAT <<<\n"
         )
 
     def connect_serial(self):
@@ -88,17 +95,22 @@ class StepResponseMonitorNode(Node):
             self.get_logger().warn(f"⚠️ Menunggu koneksi port serial {self.port} ({e})")
             self.ser = None
 
-    def start_new_csv(self):
+    def start_new_csv(self, base_val=None, step_val=None):
+        if base_val is not None:
+            self.base_pwm = base_val
+        if step_val is not None:
+            self.step_pwm = step_val
+
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"step_response_{timestamp}.csv"
+        filename = f"step_response_base{self.base_pwm}_step{self.step_pwm}_{timestamp}.csv"
         self.csv_filepath = os.path.join(self.output_dir, filename)
 
         try:
             self.csv_file = open(self.csv_filepath, 'w', encoding='utf-8')
-            self.csv_file.write("t_sec,pwm_input,rpm_L,rpm_R,ticks_L,ticks_R\n")
+            self.csv_file.write("t_sec,pwm_input,raw_rpm_L,raw_rpm_R,ticks_L,ticks_R\n")
             self.csv_file.flush()
             self.test_active = True
-            self.get_logger().info(f"📄 Rekam CSV Baru Dimulai: {self.csv_filepath}")
+            self.get_logger().info(f"📄 Rekam CSV Baru Dimulai: {self.csv_filepath} (Base={self.base_pwm}, Step={self.step_pwm})")
         except Exception as e:
             self.get_logger().error(f"Gagal membuat file CSV: {e}")
             self.csv_file = None
@@ -123,9 +135,9 @@ class StepResponseMonitorNode(Node):
                 self.get_logger().error(f"Gagal mengirim perintah: {e}")
 
     def start_callback(self, msg: Empty):
-        self.get_logger().info("🚀 Menerima START via ROS 2! Mengirim '1' ke Arduino...")
+        self.get_logger().info(f"🚀 Menerima START via ROS 2! Base={self.base_pwm}, Step={self.step_pwm}...")
         self.start_new_csv()
-        self.send_cmd("1\n")
+        self.send_cmd(f"{self.base_pwm},{self.step_pwm}\n")
 
     def stop_callback(self, msg: Empty):
         self.get_logger().warn("🛑 Menerima STOP via ROS 2! Mengirim '0' ke Arduino...")
@@ -144,9 +156,30 @@ class StepResponseMonitorNode(Node):
                     self.send_cmd("0\n")
                     self.close_csv()
                 else:
-                    self.get_logger().info("🚀 Tombol ENTER ditekan! Mengirim MULAI ('1') ke Arduino...")
-                    self.start_new_csv()
-                    self.send_cmd("1\n")
+                    # Parsing input user jika memasukkan angka step tertentu
+                    target_base = self.base_pwm
+                    target_step = self.step_pwm
+
+                    # Cek jika format "base,step" atau "base step"
+                    clean_cmd = cmd.replace(',', ' ').replace(';', ' ')
+                    parts = [p for p in clean_cmd.split() if p.isdigit()]
+
+                    if len(parts) >= 2:
+                        target_base = int(parts[0])
+                        target_step = int(parts[1])
+                    elif len(parts) == 1:
+                        val = int(parts[0])
+                        presets = {2: 100, 3: 120, 4: 140, 5: 160, 6: 180}
+                        if val in presets:
+                            target_step = presets[val]
+                        elif val >= 50:
+                            target_step = val
+                        elif val == 1:
+                            target_step = self.step_pwm
+
+                    self.get_logger().info(f"🚀 Memulai Uji: Base={target_base} PWM -> Step={target_step} PWM...")
+                    self.start_new_csv(target_base, target_step)
+                    self.send_cmd(f"{target_base},{target_step}\n")
             except Exception:
                 break
 
@@ -173,9 +206,9 @@ class StepResponseMonitorNode(Node):
                             self.close_csv()
                         continue
 
-                    # Format data: t_sec,pwm_input,rpm_L,rpm_R,ticks_L,ticks_R
+                    # Format data: t_sec,pwm_input,raw_rpm_L,raw_rpm_R,ticks_L,ticks_R
                     parts = line.split(',')
-                    if len(parts) == 6:
+                    if len(parts) >= 4:
                         try:
                             t_sec = float(parts[0])
                             pwm_val = int(parts[1])

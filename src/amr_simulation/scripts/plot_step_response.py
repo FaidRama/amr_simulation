@@ -4,18 +4,19 @@ plot_step_response.py
 Visualisasi Step Response & Identifikasi Parameter Model Dinamis Motor DC PG36:
   G(s) = K / (tau * s + 1) = b / (s + a)
 
-Menghitung otomatis:
-  1. Kecepatan Baseline y0 pada PWM 40
-  2. Kecepatan Steady-State y_ss pada PWM 140 (Delta PWM = 100)
-  3. Gain Statis K = Delta_y / Delta_u
-  4. Time Constant tau (waktu capai 63.2% kenaikan)
-  5. Fungsi Alih Kontinu G_kiri(s) dan G_kanan(s)
+Fitur:
+  1. Mendukung data mentah (RAW data tanpa filter EMA) serta file lama.
+  2. Otomatis mendeteksi Baseline PWM dan Step PWM (misal 40->100, 120, 140, 160, 180).
+  3. Menghitung Delta U, Delta Y, Gain K, dan Time Constant tau (Least Squares + 63.2%).
+  4. Delimiter otomatis (koma ',' maupun titik koma ';').
+  5. Mode perbandingan multi-file (--compare) untuk visualisasi perbandingan step 100 s/d 180.
 """
 
 import os
 import sys
 import glob
 import csv
+import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -27,76 +28,31 @@ def get_latest_csv(folder):
     return max(files, key=os.path.getctime)
 
 
-def calculate_first_order_params(t_arr, rpm_arr, t_step=3.0, delta_u=100.0):
-    # 1. Baseline y0 (rata-rata pada t = 2.0 s/d 2.95s)
-    idx_base = np.where((t_arr >= 2.0) & (t_arr < 2.95))[0]
-    y0 = np.mean(rpm_arr[idx_base]) if len(idx_base) > 0 else 0.0
+def load_step_csv(csv_path):
+    """Membaca file CSV step response dengan deteksi delimiter otomatis."""
+    if not os.path.exists(csv_path):
+        return None
 
-    # 2. Steady-state y_ss (rata-rata pada t = 5.0 s/d 5.95s)
-    idx_ss = np.where((t_arr >= 5.0) & (t_arr < 5.95))[0]
-    yss = np.mean(rpm_arr[idx_ss]) if len(idx_ss) > 0 else 0.0
-
-    delta_y = yss - y0
-    if delta_y <= 0:
-        return y0, yss, 0.0, 0.1, 0.0, 0.0
-
-    # Gain K = delta_y / delta_u
-    K = delta_y / delta_u
-
-    # 3. Waktu konstan tau: saat y(t) mencapai 63.2% dari kenaikan
-    y_target = y0 + (0.632 * delta_y)
-
-    idx_after_step = np.where(t_arr >= t_step)[0]
-    tau = 0.1 # default fallback
-    t_target = t_step
-    for idx in idx_after_step:
-        if rpm_arr[idx] >= y_target:
-            t_target = t_arr[idx]
-            tau = max(0.02, t_target - t_step)
-            break
-
-    a = 1.0 / tau
-    b = K / tau
-    return y0, yss, K, tau, a, b
-
-
-def main():
-    candidate_dirs = [
-        os.path.join(os.getcwd(), 'data_step_response'),
-        os.path.expanduser('~/deliver_amr/data_step_response'),
-        os.path.expanduser('~/Documents/amr_ws/data_step_response')
-    ]
-
-    csv_path = None
-    if len(sys.argv) > 1:
-        csv_path = sys.argv[1]
-    else:
-        for folder in candidate_dirs:
-            if os.path.exists(folder):
-                csv_path = get_latest_csv(folder)
-                if csv_path:
-                    break
-
-    if not csv_path or not os.path.exists(csv_path):
-        print("❌ File CSV Step Response tidak ditemukan di folder data_step_response!")
-        print("Jalankan pengujian terlebih dahulu: ros2 run amr_simulation step_response_monitor_node.py")
-        return
-
-    print(f"📊 Membaca data Step Response dari: {csv_path}")
+    # Deteksi delimiter (koma atau titik koma)
+    with open(csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+        sample = f.read(2048)
+        delimiter = ';' if ';' in sample and sample.count(';') > sample.count(',') else ','
 
     t_list, pwm_list, rpm_l_list, rpm_r_list = [], [], [], []
 
-    with open(csv_path, 'r', encoding='utf-8') as f:
-        reader = csv.reader(f)
-        header = next(reader, None)
+    with open(csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+        reader = csv.reader(f, delimiter=delimiter)
         for row in reader:
-            if len(row) < 4:
+            if not row or len(row) < 4:
+                continue
+            # Lewati baris header atau komentar
+            if row[0].startswith('#') or 't' in row[0].lower():
                 continue
             try:
-                t = float(row[0])
-                p = int(row[1])
-                rl = float(row[2])
-                rr = float(row[3])
+                t = float(row[0].strip())
+                p = int(float(row[1].strip()))
+                rl = float(row[2].strip())
+                rr = float(row[3].strip())
                 t_list.append(t)
                 pwm_list.append(p)
                 rpm_l_list.append(rl)
@@ -105,60 +61,147 @@ def main():
                 continue
 
     if not t_list:
-        print("⚠️ File CSV kosong atau rusak.")
-        return
+        return None
 
-    t_arr = np.array(t_list)
-    pwm_arr = np.array(pwm_list)
-    rpm_l_arr = np.array(rpm_l_list)
-    rpm_r_arr = np.array(rpm_r_list)
+    return {
+        'filepath': csv_path,
+        'filename': os.path.basename(csv_path),
+        't': np.array(t_list),
+        'pwm': np.array(pwm_list),
+        'rpm_l': np.array(rpm_l_list),
+        'rpm_r': np.array(rpm_r_list)
+    }
 
-    # Identifikasi Parameter Motor Kiri & Kanan
-    y0_l, yss_l, K_l, tau_l, a_l, b_l = calculate_first_order_params(t_arr, rpm_l_arr)
-    y0_r, yss_r, K_r, tau_r, a_r, b_r = calculate_first_order_params(t_arr, rpm_r_arr)
 
-    print("\n" + "=" * 65)
-    print("🎯 HASIL IDENTIFIKASI SISTEM DINAMIS MOTOR PG36:")
-    print("=" * 65)
+def calculate_first_order_params(t_arr, pwm_arr, rpm_arr, t_step=3.0):
+    """
+    Menghitung parameter orde 1:
+      K = Delta_y / Delta_u
+      tau = waktu konstan via least-squares curve fit optimal & 63.2%
+    """
+    # 1. Baseline pada t = 2.0 s/d 2.95s
+    idx_base = np.where((t_arr >= 2.0) & (t_arr < 2.95))[0]
+    y0 = float(np.mean(rpm_arr[idx_base])) if len(idx_base) > 0 else 0.0
+    u0 = float(np.mean(pwm_arr[idx_base])) if len(idx_base) > 0 else 40.0
+
+    # 2. Steady-state pada t = 5.0 s/d 5.95s
+    idx_ss = np.where((t_arr >= 5.0) & (t_arr < 5.95))[0]
+    yss = float(np.mean(rpm_arr[idx_ss])) if len(idx_ss) > 0 else 0.0
+    uss = float(np.mean(pwm_arr[idx_ss])) if len(idx_ss) > 0 else 140.0
+
+    delta_u = max(1.0, uss - u0)
+    delta_y = yss - y0
+
+    if delta_y <= 0:
+        return {
+            'y0': y0, 'yss': yss, 'u0': u0, 'uss': uss,
+            'delta_u': delta_u, 'delta_y': delta_y,
+            'K': 0.0, 'tau': 0.1, 'tau_63': 0.1, 'a': 10.0, 'b': 0.0
+        }
+
+    # Gain Statis K = delta_y / delta_u
+    K = delta_y / delta_u
+
+    # 3. Optimasi Least Squares untuk mencari tau terbaik (0.02s s/d 2.00s)
+    idx_step = np.where((t_arr >= t_step) & (t_arr <= 5.95))[0]
+    if len(idx_step) > 5:
+        t_fit = t_arr[idx_step] - t_step
+        y_meas = rpm_arr[idx_step]
+        tau_candidates = np.linspace(0.02, 2.0, 500)
+        # Evaluasi kuadrat galat: y_model = y0 + delta_y * (1 - exp(-t / tau))
+        models = y0 + delta_y * (1.0 - np.exp(-t_fit[:, None] / tau_candidates[None, :]))
+        sq_errors = np.sum((models - y_meas[:, None]) ** 2, axis=0)
+        best_tau = float(tau_candidates[np.argmin(sq_errors)])
+    else:
+        best_tau = 0.1
+
+    # Waktu konstan metode klasik 63.2%
+    y_target = y0 + (0.632 * delta_y)
+    tau_63 = best_tau
+    for idx in idx_step:
+        if rpm_arr[idx] >= y_target:
+            tau_63 = max(0.02, float(t_arr[idx] - t_step))
+            break
+
+    a = 1.0 / best_tau
+    b = K / best_tau
+
+    return {
+        'y0': y0,
+        'yss': yss,
+        'u0': u0,
+        'uss': uss,
+        'delta_u': delta_u,
+        'delta_y': delta_y,
+        'K': K,
+        'tau': best_tau,
+        'tau_63': tau_63,
+        'a': a,
+        'b': b
+    }
+
+
+def plot_single(data, show_gui=False):
+    """Membuat grafik analisis lengkap untuk satu file step response."""
+    t_arr = data['t']
+    pwm_arr = data['pwm']
+    rpm_l_arr = data['rpm_l']
+    rpm_r_arr = data['rpm_r']
+    csv_path = data['filepath']
+
+    res_l = calculate_first_order_params(t_arr, pwm_arr, rpm_l_arr)
+    res_r = calculate_first_order_params(t_arr, pwm_arr, rpm_r_arr)
+
+    u0 = int(round(res_l['u0']))
+    uss = int(round(res_l['uss']))
+
+    print("\n" + "=" * 68)
+    print(f"🎯 HASIL IDENTIFIKASI SISTEM MOTOR PG36 (Base={u0} -> Step={uss} PWM):")
+    print("=" * 68)
     print(f"📌 MOTOR KIRI:")
-    print(f"   - Baseline (PWM 40)   : {y0_l:.2f} RPM")
-    print(f"   - Steady (PWM 140)    : {yss_l:.2f} RPM (Delta = {yss_l - y0_l:.2f} RPM)")
-    print(f"   - Gain Statis (K)     : {K_l:.4f} RPM/PWM")
-    print(f"   - Time Constant (tau) : {tau_l:.4f} detik")
-    print(f"   - FUNGSI ALIH G_L(s)  : {K_l:.4f} / ({tau_l:.4f}*s + 1)")
-    print(f"                           = {b_l:.4f} / (s + {a_l:.4f})")
-    print("-" * 65)
+    print(f"   - Baseline (PWM {u0:3d}) : {res_l['y0']:.2f} RPM")
+    print(f"   - Steady   (PWM {uss:3d}) : {res_l['yss']:.2f} RPM (Delta = +{res_l['delta_y']:.2f} RPM)")
+    print(f"   - Gain Statis (K)     : {res_l['K']:.4f} RPM/PWM")
+    print(f"   - Time Constant (tau) : {res_l['tau']:.4f} detik (Metode Least Squares)")
+    print(f"   - Time Constant (63%) : {res_l['tau_63']:.4f} detik (Metode 63.2% Rise Time)")
+    print(f"   - FUNGSI ALIH G_L(s)  : {res_l['K']:.4f} / ({res_l['tau']:.4f}*s + 1)")
+    print(f"                           = {res_l['b']:.4f} / (s + {res_l['a']:.4f})")
+    print("-" * 68)
     print(f"📌 MOTOR KANAN:")
-    print(f"   - Baseline (PWM 40)   : {y0_r:.2f} RPM")
-    print(f"   - Steady (PWM 140)    : {yss_r:.2f} RPM (Delta = {yss_r - y0_r:.2f} RPM)")
-    print(f"   - Gain Statis (K)     : {K_r:.4f} RPM/PWM")
-    print(f"   - Time Constant (tau) : {tau_r:.4f} detik")
-    print(f"   - FUNGSI ALIH G_R(s)  : {K_r:.4f} / ({tau_r:.4f}*s + 1)")
-    print(f"                           = {b_r:.4f} / (s + {a_r:.4f})")
-    print("=" * 65 + "\n")
+    print(f"   - Baseline (PWM {u0:3d}) : {res_r['y0']:.2f} RPM")
+    print(f"   - Steady   (PWM {uss:3d}) : {res_r['yss']:.2f} RPM (Delta = +{res_r['delta_y']:.2f} RPM)")
+    print(f"   - Gain Statis (K)     : {res_r['K']:.4f} RPM/PWM")
+    print(f"   - Time Constant (tau) : {res_r['tau']:.4f} detik (Metode Least Squares)")
+    print(f"   - Time Constant (63%) : {res_r['tau_63']:.4f} detik (Metode 63.2% Rise Time)")
+    print(f"   - FUNGSI ALIH G_R(s)  : {res_r['K']:.4f} / ({res_r['tau']:.4f}*s + 1)")
+    print(f"                           = {res_r['b']:.4f} / (s + {res_r['a']:.4f})")
+    print("=" * 68 + "\n")
 
     # Plot Gambar
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
 
     # Subplot 1: Input PWM
-    ax1.plot(t_arr, pwm_arr, 'k-', linewidth=2, label='Input Sinyal PWM')
+    ax1.plot(t_arr, pwm_arr, 'k-', linewidth=2, label=f'Input PWM (Base {u0} -> Step {uss})')
     ax1.set_ylabel('Input PWM', fontsize=11, fontweight='bold')
-    ax1.set_title('Step Response Open-Loop Motor PG36 (Baseline PWM 40 -> Step 140)', fontsize=12, fontweight='bold', pad=10)
+    ax1.set_title(f'Step Response Open-Loop Motor PG36 (Base PWM {u0} -> Step {uss}) [Raw Encoder]',
+                  fontsize=12, fontweight='bold', pad=10)
     ax1.grid(True, linestyle=':', alpha=0.6)
     ax1.legend(loc='upper right')
 
-    # Subplot 2: Respon Kecepatan Aktual & Fit Model
-    ax2.plot(t_arr, rpm_l_arr, 'b-', alpha=0.85, linewidth=1.8, label=f'RPM Aktual Kiri (K={K_l:.3f}, tau={tau_l:.3f}s)')
-    ax2.plot(t_arr, rpm_r_arr, 'r-', alpha=0.85, linewidth=1.8, label=f'RPM Aktual Kanan (K={K_r:.3f}, tau={tau_r:.3f}s)')
+    # Subplot 2: Respon Kecepatan Aktual (Raw) & Fit Model
+    ax2.plot(t_arr, rpm_l_arr, 'b-', alpha=0.75, linewidth=1.5,
+             label=f'RPM Mentah Kiri (K={res_l["K"]:.3f}, tau={res_l["tau"]:.3f}s)')
+    ax2.plot(t_arr, rpm_r_arr, 'r-', alpha=0.75, linewidth=1.5,
+             label=f'RPM Mentah Kanan (K={res_r["K"]:.3f}, tau={res_r["tau"]:.3f}s)')
 
     # Model Prediksi Teoretis setelah Step (t >= 3.0)
-    idx_step = np.where(t_arr >= 3.0)[0]
+    idx_step = np.where((t_arr >= 3.0) & (t_arr <= 6.0))[0]
     if len(idx_step) > 0:
         t_model = t_arr[idx_step] - 3.0
-        model_l = y0_l + (yss_l - y0_l) * (1.0 - np.exp(-t_model / tau_l))
-        model_r = y0_r + (yss_r - y0_r) * (1.0 - np.exp(-t_model / tau_r))
-        ax2.plot(t_arr[idx_step], model_l, 'b--', linewidth=1.5, alpha=0.7, label='Fit Model G_L(s)')
-        ax2.plot(t_arr[idx_step], model_r, 'r--', linewidth=1.5, alpha=0.7, label='Fit Model G_R(s)')
+        model_l = res_l['y0'] + res_l['delta_y'] * (1.0 - np.exp(-t_model / res_l['tau']))
+        model_r = res_r['y0'] + res_r['delta_y'] * (1.0 - np.exp(-t_model / res_r['tau']))
+        ax2.plot(t_arr[idx_step], model_l, 'b--', linewidth=2.0, label='Fit Model G_L(s)')
+        ax2.plot(t_arr[idx_step], model_r, 'r--', linewidth=2.0, label='Fit Model G_R(s)')
 
     ax2.axvline(x=3.0, color='gray', linestyle=':', label='Saat Step Terjadi (t = 3.0s)')
     ax2.set_xlabel('Waktu (detik)', fontsize=11, fontweight='bold')
@@ -168,16 +211,137 @@ def main():
 
     plt.tight_layout()
 
-    # Simpan Gambar PNG Resolusi Tinggi (300 DPI)
-    output_png = csv_path.replace('.csv', '.png')
+    output_png = csv_path.rsplit('.', 1)[0] + '.png'
     plt.savefig(output_png, dpi=300)
-    print(f"✅ Gambar grafik kurva dan identifikasi model berhasil disimpan:")
+    print(f"✅ Gambar grafik kurva dan identifikasi model tersimpan:")
     print(f"   {output_png}\n")
 
-    try:
-        plt.show()
-    except Exception:
-        pass
+    if show_gui:
+        try:
+            plt.show()
+        except Exception:
+            pass
+
+
+def plot_comparison(datasets, output_png='data_step_response/step_response_comparison.png', show_gui=False):
+    """Membandingkan beberapa pengujian step (100, 120, 140, 160, 180) dalam satu gambar."""
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
+
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(11, 11), sharex=True)
+
+    print("\n" + "=" * 78)
+    print("📊 TABEL PERBANDINGAN IDENTIFIKASI MULTI-STEP RESPONSE:")
+    print("=" * 78)
+    print(f"{'Skenario':<20} | {'Motor Kiri (K | tau)':<25} | {'Motor Kanan (K | tau)':<25}")
+    print("-" * 78)
+
+    for i, data in enumerate(datasets):
+        c = colors[i % len(colors)]
+        t = data['t']
+        pwm = data['pwm']
+        rl = data['rpm_l']
+        rr = data['rpm_r']
+
+        res_l = calculate_first_order_params(t, pwm, rl)
+        res_r = calculate_first_order_params(t, pwm, rr)
+
+        u0 = int(round(res_l['u0']))
+        uss = int(round(res_l['uss']))
+        label_step = f"Step {u0}->{uss} PWM"
+
+        print(f"{label_step:<20} | K={res_l['K']:6.4f}, tau={res_l['tau']:5.3f}s | K={res_r['K']:6.4f}, tau={res_r['tau']:5.3f}s")
+
+        # Subplot 1: Input PWM
+        ax1.plot(t, pwm, color=c, linewidth=1.5, label=f'{label_step}')
+
+        # Subplot 2: Respon Motor Kiri
+        ax2.plot(t, rl, color=c, alpha=0.8, linewidth=1.4,
+                 label=f'{label_step} (K={res_l["K"]:.2f}, tau={res_l["tau"]:.2f}s)')
+
+        # Subplot 3: Respon Motor Kanan
+        ax3.plot(t, rr, color=c, alpha=0.8, linewidth=1.4,
+                 label=f'{label_step} (K={res_r["K"]:.2f}, tau={res_r["tau"]:.2f}s)')
+
+    print("=" * 78 + "\n")
+
+    ax1.set_ylabel('Input PWM', fontweight='bold')
+    ax1.set_title('Perbandingan Input Step PWM', fontsize=11, fontweight='bold')
+    ax1.grid(True, linestyle=':', alpha=0.6)
+    ax1.legend(loc='upper right', fontsize=8)
+
+    ax2.set_ylabel('RPM Motor Kiri', fontweight='bold')
+    ax2.set_title('Respon Kecepatan Motor Kiri (Raw Encoder)', fontsize=11, fontweight='bold')
+    ax2.grid(True, linestyle=':', alpha=0.6)
+    ax2.legend(loc='lower right', fontsize=8)
+
+    ax3.set_xlabel('Waktu (detik)', fontweight='bold')
+    ax3.set_ylabel('RPM Motor Kanan', fontweight='bold')
+    ax3.set_title('Respon Kecepatan Motor Kanan (Raw Encoder)', fontsize=11, fontweight='bold')
+    ax3.grid(True, linestyle=':', alpha=0.6)
+    ax3.legend(loc='lower right', fontsize=8)
+
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(os.path.abspath(output_png)), exist_ok=True)
+    plt.savefig(output_png, dpi=300)
+    print(f"✅ Gambar grafik perbandingan multi-step tersimpan di:\n   {output_png}\n")
+
+    if show_gui:
+        try:
+            plt.show()
+        except Exception:
+            pass
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Plot & Analisis Step Response Motor AMR")
+    parser.add_argument('files', nargs='*', help="File CSV yang akan diplot")
+    parser.add_argument('--compare', action='store_true', help="Bandingkan semua file yang diberikan dalam satu grafik")
+    parser.add_argument('--show', action='store_true', help="Tampilkan jendela interaktif GUI")
+    parser.add_argument('--output-img', type=str, default=None, help="Lokasi file output gambar perbandingan")
+    args = parser.parse_args()
+
+    files = args.files
+
+    if not files:
+        candidate_dirs = [
+            os.path.join(os.getcwd(), 'data_step_response'),
+            os.path.expanduser('~/deliver_amr/data_step_response'),
+            os.path.expanduser('~/Documents/amr_ws/data_step_response')
+        ]
+        for folder in candidate_dirs:
+            if os.path.exists(folder):
+                latest = get_latest_csv(folder)
+                if latest:
+                    files = [latest]
+                    break
+
+    if not files:
+        print("❌ Tidak ada file CSV Step Response yang ditemukan!")
+        print("Jalankan pengujian terlebih dahulu dengan: python3 logger_step_respon.py")
+        sys.exit(1)
+
+    # Muat dataset
+    datasets = []
+    for f in files:
+        if os.path.isdir(f):
+            for subf in sorted(glob.glob(os.path.join(f, "step_response_*.csv"))):
+                d = load_step_csv(subf)
+                if d:
+                    datasets.append(d)
+        else:
+            d = load_step_csv(f)
+            if d:
+                datasets.append(d)
+
+    if not datasets:
+        print("❌ Tidak ada data valid yang bisa dibaca dari file yang diberikan.")
+        sys.exit(1)
+
+    if args.compare or len(datasets) > 1:
+        out_img = args.output_img or os.path.join('data_step_response', 'step_response_comparison.png')
+        plot_comparison(datasets, out_img, show_gui=args.show)
+    else:
+        plot_single(datasets[0], show_gui=args.show)
 
 
 if __name__ == '__main__':

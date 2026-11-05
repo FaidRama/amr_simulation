@@ -942,6 +942,75 @@ Setelah itu, status AMCL tertahan di `AMCL ⏳` selamanya, dan percobaan auto-in
      Di [`test_robot_voice.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/test_robot_voice.py), ditambahkan opsi CLI `--disconnect` dan menu interaktif nomor `8` (*Putuskan Koneksi Bluetooth Speaker*).
 
 
+---
 
+## 27. Optimasi Pengujian Step Response Motor PG36 & Identifikasi Sistem Dinamis Open-Loop (November 2026)
 
+### 1. Masalah Utama & Urgensi Perbaikan:
+1. **Distorsi Fasa Akibat Filter EMA pada Firmware Lama**:
+   - Pada firmware [`uji_step_response.ino`](file:///home/faid/Documents/amr_ws/src/amr_simulation/arduino/uji_step_response/uji_step_response.ino), kecepatan motor sebelumnya disaring menggunakan *Exponential Moving Average* (EMA) dengan koefisien $\alpha = 0.35$.
+   - **Efek Buruk pada Identifikasi Sistem**: Filter digital low-pass EMA menyisipkan fasa lag / delay respon semu sebesar $\tau_{filter} \approx \frac{1-\alpha}{\alpha} T_s \approx \frac{0.65}{0.35} \times 20\text{ ms} \approx 37.1\text{ ms}$. Akibatnya, kurva respon tangga tampak lebih lambat dari respon fisik aktual motor PG36, menyebabkan estimasi konstanta waktu ($\tau$) fungsi alih (s) = \frac{K}{\tau s + 1}$ menjadi bias dan melambat.
+   - **Solusi**: Filter EMA dihapus total dari proses perekaman data identifikasi sistem. Firmware Arduino kini mengirimkan **nilai RPM mentah murni** (`raw_rpm_L` dan `raw_rpm_R`) yang dihitung langsung dari selisih tick enkoder per periode sampling ( = 20\text{ ms} / 50\text{ Hz}$).
+
+2. **Kekakuan Parameter Step PWM (Hardcoded 40 -> 140 PWM)**:
+   - Sebelumnya nilai pengujian dikunci secara statis: Baseline PWM 40 (t = 1–3 detik) dan Step Jump PWM 140 (t = 3–6 detik).
+   - Peneliti memerlukan pengambilan data dinamis multi-step dari baseline 40 ke berbagai variasi tangga: **100, 120, 140, 160, dan 180 PWM** guna menguji linearitas motor dan mencari rata-rata fungsi alih terbaik.
+   - **Solusi**: Firmware Arduino kini dilengkapi parser perintah Serial interaktif yang mendukung pemilihan preset instan maupun kustomisasi nilai `base_pwm` dan `step_pwm` tanpa perlu re-upload program.
+
+---
+
+### 2. Pembaruan Firmware Arduino ([`uji_step_response.ino`](file:///home/faid/Documents/amr_ws/src/amr_simulation/arduino/uji_step_response/uji_step_response.ino)):
+- **Output Data Mentah (Raw Telemetry 50 Hz)**:
+  - Header data: `t_sec,pwm_input,raw_rpm_L,raw_rpm_R,ticks_L,ticks_R`.
+  - Mengirim `raw_rpm_L` dan `raw_rpm_R` langsung tanpa penghalusan digital:
+    31\text{RPM}_{\text{raw}} = \frac{|\text{ticks}|}{\text{TICKS\_PER\_REV}} \times \frac{60}{T_s} = \frac{|\text{ticks}|}{350.7} \times 3000.031
+- **Menu Serial & Fleksibilitas Input Pengguna**:
+  - `1` atau `[ENTER]` : Menjalankan pengujian dengan konfigurasi aktif saat ini (default: 40 -> 140 PWM).
+  - `2` : Step 40 -> 100 PWM ($\Delta U = +60$ PWM)
+  - `3` : Step 40 -> 120 PWM ($\Delta U = +80$ PWM)
+  - `4` : Step 40 -> 140 PWM ($\Delta U = +100$ PWM - Standar)
+  - `5` : Step 40 -> 160 PWM ($\Delta U = +120$ PWM)
+  - `6` : Step 40 -> 180 PWM ($\Delta U = +140$ PWM)
+  - Custom: Kirim format `"base,step"` (misal `40,150` atau `40 180`) -> Arduino langsung menyetel dan menjalankan pengujian.
+  - `0` atau `s` : **STOP DARURAT** seketika kapan saja.
+- **Transisi State Otomatis**:
+  - Setelah pengujian 6 detik selesai, motor otomatis berhenti aman (`setMotorPWM(0, 0)`) dan status kembali ke `STATE_STANDBY`. Pengguna dapat langsung menjalankan pengujian step lain tanpa menekan tombol reset fisik Arduino.
+
+---
+
+### 3. Pembaruan Runner Script Python ([`logger_step_respon.py`](file:///home/faid/Documents/amr_ws/logger_step_respon.py)):
+- **Deteksi Port Serial Cerdas**:
+  - Otomatis mendeteksi symlink `/dev/arduino`, `/dev/ttyACM*`, `/dev/ttyUSB*`, atau mencari port Arduino via `pyserial`.
+- **Menu Interaktif Lengkap**:
+  - Opsi [1]–[5]: Pengujian individual step 100, 120, 140, 160, 180.
+  - Opsi [6]: **Uji SEMUA Step Berurutan**: Menjalankan step 100 s/d 180 secara otomatis dengan jeda konfirmasi posisi robot di antara setiap pengujian.
+  - Opsi [7]: Input kustom `base_pwm` dan `step_pwm`.
+- **Format File CSV Terorganisir**:
+  - File disimpan otomatis di direktori `data_step_response/` dengan nama timestamped:
+    `data_step_response/step_response_base{base}_step{step}_YYYYMMDD_HHMMSS.csv`.
+- **Integrasi Analisis Otomatis**:
+  - Begitu pengujian selesai, skrip otomatis memanggil [`plot_step_response.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/plot_step_response.py) untuk langsung menampilkan hasil identifikasi model (s)$ dan menyimpan kurva PNG resolusi tinggi (300 DPI).
+
+---
+
+### 4. Pembaruan ROS 2 Node ([`step_response_monitor_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/step_response_monitor_node.py)):
+- Ditambahkan parameter ROS 2 `base_pwm` (default 40) dan `step_pwm` (default 140).
+- Thread keyboard kini membaca angka masukan pengguna di terminal interaktif (misal ketik `120` atau `40 160` lalu Enter) dan langsung mengirimkannya ke Arduino.
+- File CSV otomatis dinamai berdasarkan nilai base dan step yang digunakan.
+
+---
+
+### 5. Pembaruan Skrip Plot & Identifikasi Sistem ([`plot_step_response.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/plot_step_response.py)):
+- **Deteksi Delimiter Otomatis**:
+  - Mampu membaca file CSV dengan pemisah koma (`,`) maupun titik koma (`;`) akibat format regional Excel/LibreOffice.
+- **Deteksi Dinamis Delta U & Gain Statis ($)**:
+  - Nilai baseline $\text{PWM}_{base}$ dihitung otomatis dari rata-rata  = 2.0–2.95\text{ s}$, dan steady-state $\text{PWM}_{step}$ dari rata-rata  = 5.0–5.95\text{ s}$.
+  - $\Delta U = \text{PWM}_{step} - \text{PWM}_{base}$ dihitung secara dinamis, sehingga perhitungan gain statis  = \frac{\Delta Y}{\Delta U}$ 100% akurat untuk sembarang variasi step (60, 80, 100, 120, 140 unit PWM).
+- **Estimasi Konstanta Waktu ($\tau$) Optimal (Least Squares)**:
+  - Menggunakan optimasi regresi non-linear *Least Squares* pada data mentah  \in [3.0, 6.0\text{ s}]$ untuk meminimalkan $\sum (y_{\text{aktual}} - y_{\text{model}}(\tau))^2$.
+  - Kebal terhadap derau diskrit kuantisasi enkoder PG36 (kuantisasi $\sim 8.55\text{ RPM/tick}$).
+  - Melaporkan sekaligus nilai $\tau$ regresi dan $\tau_{63\%}$ (metode konvensional 63.2% rise time).
+- **Mode Perbandingan Multi-Step (`--compare`)**:
+  - Dapat membandingkan kurva dari beberapa file pengujian (misal step 100, 120, 140, 160, 180) dalam satu kanvas gambar 3-subplot (PWM, RPM Motor Kiri, RPM Motor Kanan).
+  - Menghasilkan tabel perbandingan $ dan $\tau$ lintas variasi step untuk lampiran dokumen skripsi/laporan.
 
