@@ -16,16 +16,26 @@ import os
 import sys
 import glob
 import csv
+import re
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
+
+
+def extract_timestamp(filepath):
+    """Ambil timestamp YYYYMMDD_HHMMSS dari nama file."""
+    match = re.search(r'(\d{8}_\d{6})', os.path.basename(filepath))
+    if match:
+        return match.group(1)
+    return ""
 
 
 def get_latest_csv(folder):
     files = glob.glob(os.path.join(folder, "step_response_*.csv"))
     if not files:
         return None
-    return max(files, key=os.path.getctime)
+    # Urutkan berdasarkan timestamp YYYYMMDD_HHMMSS dari nama file, fallback ke mtime
+    return max(files, key=lambda f: (extract_timestamp(f), os.path.getmtime(f)))
 
 
 def load_step_csv(csv_path):
@@ -308,12 +318,23 @@ def main():
             os.path.expanduser('~/deliver_amr/data_step_response'),
             os.path.expanduser('~/Documents/amr_ws/data_step_response')
         ]
+        target_dir = None
         for folder in candidate_dirs:
-            if os.path.exists(folder):
-                latest = get_latest_csv(folder)
+            if os.path.exists(folder) and glob.glob(os.path.join(folder, "step_response_*.csv")):
+                target_dir = folder
+                break
+
+        if target_dir:
+            all_csvs = sorted(glob.glob(os.path.join(target_dir, "step_response_*.csv")),
+                              key=lambda f: (extract_timestamp(f), os.path.getmtime(f)))
+            if args.compare:
+                # Mode compare: otomatis ambil semua pengujian base terbaru
+                base_csvs = [f for f in all_csvs if 'step_response_base' in os.path.basename(f)]
+                files = base_csvs if len(base_csvs) >= 2 else all_csvs
+            else:
+                latest = get_latest_csv(target_dir)
                 if latest:
                     files = [latest]
-                    break
 
     if not files:
         print("❌ Tidak ada file CSV Step Response yang ditemukan!")
@@ -324,7 +345,9 @@ def main():
     datasets = []
     for f in files:
         if os.path.isdir(f):
-            for subf in sorted(glob.glob(os.path.join(f, "step_response_*.csv"))):
+            sub_files = sorted(glob.glob(os.path.join(f, "step_response_*.csv")),
+                               key=lambda x: (extract_timestamp(x), os.path.getmtime(x)))
+            for subf in sub_files:
                 d = load_step_csv(subf)
                 if d:
                     datasets.append(d)
@@ -336,6 +359,11 @@ def main():
     if not datasets:
         print("❌ Tidak ada data valid yang bisa dibaca dari file yang diberikan.")
         sys.exit(1)
+
+    loaded_names = [d['filename'] for d in datasets]
+    print(f"\n📂 File yang dimuat ({len(datasets)} file):")
+    for name in loaded_names:
+        print(f"   - {name}")
 
     if args.compare or len(datasets) > 1:
         out_img = args.output_img or os.path.join('data_step_response', 'step_response_comparison.png')
