@@ -171,8 +171,8 @@ void handleSerialInput() {
   while (Serial.available() > 0) {
     char c = Serial.read();
 
-    // STOP Darurat seketika
-    if (c == '0' || c == 's' || c == 'S') {
+    // STOP Darurat seketika hanya jika motor sedang berputar (STATE_RUNNING)
+    if (currentState == STATE_RUNNING && (c == '0' || c == 's' || c == 'S' || c == ' ')) {
       setMotorPWM(0, 0);
       currentState = STATE_STANDBY;
       cmd_index = 0;
@@ -195,8 +195,12 @@ void handleSerialInput() {
       char* p = cmd_buffer;
       while (*p == ' ' || *p == '\t') p++;
 
-      // Cek preset menu
-      if (strcmp(p, "1") == 0 || strcasecmp(p, "g") == 0 || strcasecmp(p, "start") == 0) {
+      // Cek apakah perintah adalah STOP saat STANDBY
+      if (strcmp(p, "0") == 0 || strcasecmp(p, "s") == 0 || strcasecmp(p, "stop") == 0) {
+        setMotorPWM(0, 0);
+        currentState = STATE_STANDBY;
+        Serial.println(F("# [STOP] Motor diam aman."));
+      } else if (strcmp(p, "1") == 0 || strcasecmp(p, "g") == 0 || strcasecmp(p, "start") == 0) {
         startStepTest(base_pwm, step_pwm);
       } else if (strcmp(p, "2") == 0) {
         startStepTest(40, 100);
