@@ -1049,6 +1049,8 @@ Setelah itu, status AMCL tertahan di `AMCL ⏳` selamanya, dan percobaan auto-in
   2. `max_beams`: Dinaikkan dari `60` ke **`120` sinar** (pencocokan kontur dinding 2x lebih rapat).
   3. `laser_max_range`: Dibatasi dari `12.0` ke **`8.0` m** (mengeliminasi noise pantulan jauh RPLiDAR A1).
   4. `sigma_hit`: Disesuaikan dari `0.15` ke **`0.20` m** untuk memperluas area tangkap *likelihood field*.
+- **Panduan Pengujian Lapangan**:
+  Panduan SOP dan langkah pelaksanaan pengujian Skenario 2 (5 titik datum, 25 run, perhitungan $T_{\text{conv}}, e_{\text{pos}}, e_\theta$, dan kelulusan skripsi) tersedia lengkap pada artifact [`panduan_skenario2_evaluasi_amcl.md`](file:///home/faid/.gemini/antigravity/brain/a3af2b69-fd73-41ee-8f16-8f2155ff7489/panduan_skenario2_evaluasi_amcl.md).
 
 ---
 
