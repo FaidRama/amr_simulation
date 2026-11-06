@@ -609,16 +609,9 @@ class WaypointManager(Node):
                 if self.human_state == 'SAFE_STOP':
                     if safe_stop_since is None:
                         safe_stop_since = time.time()
-                    elif (time.time() - safe_stop_since) >= 10.0:
-                        self.log('info', '🚶 [HUMAN AWARE] Manusia menghalangi > 10 detik: Menahan goal Nav2 sementara (tanpa batas waktu) sampai manusia lewat...')
-                        suspended_for_human = True
-                        if self.current_goal_handle:
-                            try:
-                                self.current_goal_handle.cancel_goal_async()
-                            except Exception:
-                                pass
-                        self.emergency_stop()
-                        break
+                    elif (time.time() - safe_stop_since) >= 5.0 and safe_stop_since != 0:
+                        self.log('info', '🚶 [HUMAN AWARE] Manusia diam > 5 detik: AMR beralih menghindar via local costmap...')
+                        safe_stop_since = 0  # Tandai sudah log agar tidak berulang-ulang
                 else:
                     safe_stop_since = None
 

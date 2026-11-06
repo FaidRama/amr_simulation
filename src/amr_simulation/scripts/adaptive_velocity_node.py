@@ -296,8 +296,21 @@ class AdaptiveVelocityNode(Node):
         else:
             orig_v, orig_w = self.in_v, self.in_w
 
+        # Cek durasi jika sedang berada di status SAFE_STOP
+        safe_stop_duration = (now - self.last_state_change_time).nanoseconds / 1e9 if self.effective_state == "SAFE_STOP" else 0.0
+
+        # Logika Jeda 5 Detik:
+        # 1. Jika SAFE_STOP < 5 detik: robot berhenti penuh (beri waktu orang lewat).
+        # 2. Jika SAFE_STOP >= 5 detik tapi orang tidak pergi: buka kecepatan pelan (REDUCED)
+        #    dan aktifkan setir (angular) agar Nav2 DWB membelok menghindar!
+        is_safe_stop_active = False
         if self.effective_state == "SAFE_STOP":
-            ceiling = 0.0
+            if safe_stop_duration < 5.0:
+                ceiling = 0.0
+                is_safe_stop_active = True
+            else:
+                # Setelah 5 detik orang tidak pergi: perlakukan sebagai rintangan biasa (REDUCED SPEED)
+                ceiling = self.get_parameter('reduced_max_linear').value
         elif self.effective_state == "REDUCED_SPEED":
             ceiling = self.get_parameter('reduced_max_linear').value
         else:
@@ -316,7 +329,8 @@ class AdaptiveVelocityNode(Node):
         out = Twist()
         out.linear.x = actual_v
 
-        if self.effective_state == "SAFE_STOP":
+        # Hanya matikan setir jika masih dalam masa jeda 5 detik pertama
+        if is_safe_stop_active:
             out.angular.z = 0.0
         elif abs(orig_v) > 0.02:
             scale = max(0.4, min(1.0, actual_v / orig_v))
