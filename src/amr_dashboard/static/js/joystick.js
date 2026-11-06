@@ -128,19 +128,35 @@ function initJoystick() {
         ctx.restore();
     }
 
+    // Set explicit touch-action and user-select on canvas and container
+    canvas.style.touchAction = 'none';
+    canvas.style.userSelect = 'none';
+    canvas.style.webkitUserSelect = 'none';
+    if (canvas.parentElement) {
+        canvas.parentElement.style.touchAction = 'none';
+        canvas.parentElement.style.userSelect = 'none';
+        canvas.parentElement.style.webkitUserSelect = 'none';
+    }
+
     function getRelativePos(e) {
         const rect = canvas.getBoundingClientRect();
-        let clientX, clientY;
+        let clientX = e.clientX;
+        let clientY = e.clientY;
+
         if (e.touches && e.touches.length > 0) {
             clientX = e.touches[0].clientX;
             clientY = e.touches[0].clientY;
-        } else {
-            clientX = e.clientX;
-            clientY = e.clientY;
+        } else if (e.changedTouches && e.changedTouches.length > 0) {
+            clientX = e.changedTouches[0].clientX;
+            clientY = e.changedTouches[0].clientY;
         }
+
+        const scaleX = size / (rect.width || size);
+        const scaleY = size / (rect.height || size);
+
         return {
-            x: (clientX - rect.left) * (size / rect.width),
-            y: (clientY - rect.top) * (size / rect.height)
+            x: (clientX - rect.left) * scaleX,
+            y: (clientY - rect.top) * scaleY
         };
     }
 
@@ -200,54 +216,28 @@ function initJoystick() {
         apiPost('/api/cmd_vel', { linear, angular });
     }
 
-    function startTouch(e) {
-        e.preventDefault();
+    function startInteraction(e) {
+        if (e.cancelable) e.preventDefault();
         touching = true;
-
-        if (e.pointerId !== undefined && canvas.setPointerCapture) {
-            try {
-                canvas.setPointerCapture(e.pointerId);
-            } catch (err) {}
-        }
-
         const pos = getRelativePos(e);
         updateKnob(pos.x, pos.y);
 
         if (joystickSendTimer) clearInterval(joystickSendTimer);
         sendVelocity(true);
         joystickSendTimer = setInterval(() => sendVelocity(false), 120);
-
-        // Pasang window listener untuk menjamin deteksi gerakan di seluruh layar laptop/HP
-        window.addEventListener('pointermove', moveTouch, { passive: false });
-        window.addEventListener('pointerup', endTouch, { passive: false });
-        window.addEventListener('pointercancel', endTouch, { passive: false });
-        window.addEventListener('mousemove', moveTouch);
-        window.addEventListener('mouseup', endTouch);
     }
 
-    function moveTouch(e) {
+    function moveInteraction(e) {
         if (!touching) return;
         if (e.cancelable) e.preventDefault();
         const pos = getRelativePos(e);
         updateKnob(pos.x, pos.y);
     }
 
-    function endTouch(e) {
+    function endInteraction(e) {
         if (!touching) return;
         if (e && e.cancelable) e.preventDefault();
         touching = false;
-
-        if (e && e.pointerId !== undefined && canvas.releasePointerCapture) {
-            try {
-                canvas.releasePointerCapture(e.pointerId);
-            } catch (err) {}
-        }
-
-        window.removeEventListener('pointermove', moveTouch);
-        window.removeEventListener('pointerup', endTouch);
-        window.removeEventListener('pointercancel', endTouch);
-        window.removeEventListener('mousemove', moveTouch);
-        window.removeEventListener('mouseup', endTouch);
 
         knobX = center;
         knobY = center;
@@ -270,18 +260,50 @@ function initJoystick() {
         draw();
     }
 
-    if (window.PointerEvent) {
-        canvas.addEventListener('pointerdown', startTouch, { passive: false });
-        canvas.addEventListener('pointermove', moveTouch, { passive: false });
-        canvas.addEventListener('pointerup', endTouch, { passive: false });
-        canvas.addEventListener('pointercancel', endTouch, { passive: false });
-    } else {
-        canvas.addEventListener('touchstart', startTouch, { passive: false });
-        canvas.addEventListener('touchmove', moveTouch, { passive: false });
-        canvas.addEventListener('touchend', endTouch, { passive: false });
-        canvas.addEventListener('touchcancel', endTouch, { passive: false });
-        canvas.addEventListener('mousedown', startTouch);
-    }
+    // --- MOBILE TOUCH EVENTS (Native tracking, lancar di HP & Tablet) ---
+    canvas.addEventListener('touchstart', (e) => {
+        startInteraction(e);
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+        moveInteraction(e);
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', (e) => {
+        endInteraction(e);
+    }, { passive: false });
+
+    canvas.addEventListener('touchcancel', (e) => {
+        endInteraction(e);
+    }, { passive: false });
+
+    // Tambahan window touch listener agar bila jari ditarik sangat jauh di HP tetap terlacak
+    window.addEventListener('touchmove', (e) => {
+        if (touching) moveInteraction(e);
+    }, { passive: false });
+
+    window.addEventListener('touchend', (e) => {
+        if (touching) endInteraction(e);
+    }, { passive: false });
+
+    // --- DESKTOP MOUSE EVENTS (Analog Gamepad style: drag bebas keluar kanvas di laptop) ---
+    canvas.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return; // Hanya klik kiri mouse
+        startInteraction(e);
+
+        function onWindowMouseMove(me) {
+            moveInteraction(me);
+        }
+
+        function onWindowMouseUp(me) {
+            window.removeEventListener('mousemove', onWindowMouseMove);
+            window.removeEventListener('mouseup', onWindowMouseUp);
+            endInteraction(me);
+        }
+
+        window.addEventListener('mousemove', onWindowMouseMove);
+        window.addEventListener('mouseup', onWindowMouseUp);
+    });
 
     draw();
 }
