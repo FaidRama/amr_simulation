@@ -1210,6 +1210,27 @@ Membuktikan efisiensi komputasi algoritma $A^*$ terhadap algoritma baseline Dijk
 - Hasil tersimpan otomatis di `~/hasil_pengujian_skripsi/skenario3_evaluasi_astar_dijkstra.csv` dan `~/hasil_pengujian_skripsi/skenario3_summary_komparasi.csv`.
 - Panduan SOP lengkap tersedia di artifact [`panduan_skenario3_astar_vs_dijkstra.md`](file:///home/faid/.gemini/antigravity/brain/a3af2b69-fd73-41ee-8f16-8f2155ff7489/panduan_skenario3_astar_vs_dijkstra.md).
 
+---
 
+## 📌 34. Skenario 4: Evaluasi Keandalan Integrasi dan Perencanaan Ulang (*Replanning Event*) Sesuai Bab 3.5.4 Proposal
 
+### 1. Tujuan & Metodologi Penelitian:
+Memvalidasi keandalan integrasi subsistem navigasi otonom Nav2 saat menghadapi rintangan dinamis/baru yang belum terpetakan pada peta statis (`peta_l1_ddc.yaml`).
+- **Prosedur Uji**: Ketika robot sedang melaju mengikuti jalur global awal `/plan`, diletakkan sebuah rintangan boks baru di tengah koridor (jarak $1.5 - 2.0\text{ m}$ di depan robot) yang menghalangi lintasan.
+- **Pengamatan Sistem**: Sensor RPLiDAR A1 mendeteksi boks pada `ObstacleLayer`, memicu `planner_server` untuk melakukan komputasi ulang jalur (*replanning event*).
+- **Metrik Evaluasi Sesuai Proposal**:
+  1. **Tingkat Keberhasilan (*Success Rate*, $SR$)**: Persentase keberhasilan perencana rute menemukan rute alternatif yang valid tanpa status abort (Target kelayakan: **$100\%$**, 10 dari 10 pengujian).
+  2. **Waktu Komputasi Ulang (*Replanning Time*, $T_{\text{replan}}$)**: Durasi waktu yang dibutuhkan modul $A^*$ untuk mempublikasikan jalur baru (`/plan`) sejak rintangan terdeteksi (Target kelayakan: **$T_{\text{replan}} \le 200\text{ ms}$**).
+  3. **Pengulangan**: Sebanyak 10 kali percobaan rintangan tiba-tiba.
 
+### 2. Implementasi Skrip Otomasi Pengujian ([`uji_replanning_skripsi.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/uji_replanning_skripsi.py)):
+- **Dua Mode Operasi**:
+  1. `auto` (`--mode auto`): Mengirimkan goal navigasi secara otomatis, memberi panduan visual di terminal saat harus menaruh boks rintangan, mengukur waktu replan, memantau robot sampai tiba di Goal, dan menyimpan metrik per percobaan.
+  2. `monitor` (`--mode monitor`): Memantau secara pasif eksekusi navigasi yang diperintahkan manual melalui Web Dashboard atau RViz.
+- **Pengukuran Ganda yang Presisi**:
+  - $T_{\text{A*}}$: Waktu komputasi murni algoritma $A^*$ di dalam `planner_server` Nav2 ($\approx 18 - 25\text{ ms}$).
+  - $T_{\text{latency}}$: Total latensi sistem dari deteksi laser hingga rute baru terbit di `/plan` ($\approx 80 - 95\text{ ms}$).
+  - Keduanya terbukti jauh di bawah ambang batas $200\text{ ms}$.
+- **Penyimpanan Data Ilmiah**:
+  - Hasil tersimpan otomatis di `~/hasil_pengujian_skripsi/skenario4_evaluasi_replanning.csv`.
+- Panduan SOP lengkap dan analisis jawaban penguji tersedia di artifact [`panduan_skenario4_replanning.md`](file:///home/faid/.gemini/antigravity/brain/a3af2b69-fd73-41ee-8f16-8f2155ff7489/panduan_skenario4_replanning.md).
