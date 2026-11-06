@@ -48,6 +48,9 @@ install(PROGRAMS
   scripts/plot_step_response.py
   scripts/evaluasi_pid.py
   scripts/test_robot_voice.py
+  scripts/uji_amcl_skripsi.py
+  scripts/uji_astar_dijkstra_skripsi.py
+  scripts/evaluasi_navigasi_skripsi.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
