@@ -610,7 +610,7 @@ class WaypointManager(Node):
                     if safe_stop_since is None:
                         safe_stop_since = time.time()
                     elif (time.time() - safe_stop_since) >= 15.0 and safe_stop_since != 0:
-                        self.log('info', '🚶 [HUMAN AWARE] Manusia diam > 5 detik: AMR beralih menghindar via local costmap...')
+                        self.log('info', '🚶 [HUMAN AWARE] Manusia diam > 15 detik: AMR beralih menghindar via local costmap...')
                         safe_stop_since = 0  # Tandai sudah log agar tidak berulang-ulang
                 else:
                     safe_stop_since = None
@@ -621,7 +621,7 @@ class WaypointManager(Node):
                 return False
 
             # Jika goal ditahan sementara karena manusia (SAFE_STOP) atau Pause, ulangi loop (tunggu aman lalu kirim goal lagi)
-            if suspended_for_human or self.nav_result_status == 'paused_wait' or self.is_paused or self.human_state == 'SAFE_STOP':
+            if self.nav_result_status != 'succeeded' and (suspended_for_human or self.nav_result_status == 'paused_wait' or self.is_paused or self.human_state == 'SAFE_STOP'):
                 self.nav_event.wait(timeout=1.5)
                 continue
 

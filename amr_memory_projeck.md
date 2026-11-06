@@ -1081,3 +1081,27 @@ Mengimplementasikan mekanisme "detak jantung" hening berkala langsung pada [`tes
    - Ditambahkan opsi `"keepalive_interval_s": 45` pada [`voice_config.json`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/voice_config.json).
    - Ditambahkan pengujian manual `--keepalive` dan Menu 9 pada `interactive_menu()` di CLI.
 
+---
+
+## 📌 30. Mekanisme Human-Aware: Safe Stop -> Suara Peringatan (5 Detik) -> Manuver Menghindar (15 Detik)
+
+### 1. Deskripsi Fitur & Alur Kerja:
+1. **Fase 1 (Detik 0–5, Henti Total)**:
+   - Manusia masuk koridor/zona dekat (`Zone.NEAR`) kamera AI $\to$ status beralih ke `SAFE_STOP`.
+   - Robot berhenti penuh (`ceiling = 0.0`, `angular.z = 0.0`) untuk memberi ruang dan waktu jika manusia hanya numpang lewat melintas.
+2. **Fase 2 (Detik 5, Suara Peringatan Permisi)**:
+   - Setelah tertahan selama 5 detik (`obstacle_voice_delay_s: 5`), node [`test_robot_voice.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/test_robot_voice.py) membunyikan suara:
+     *"Permisi, saya mau lewat. Mohon beri jalan."*
+   - Kalimat ini berdurasi $\approx 3.5\text{ detik}$, memberi peringatan audio yang ramah dan jelas.
+3. **Fase 3 (Detik 5–15, Toleransi Waktu Reaksi Manusia)**:
+   - Robot tetap diam di tempat selama $\approx 6.5\text{ detik}$ setelah suara selesai, memberi kesempatan bagi manusia untuk melangkah minggir.
+4. **Fase 4 (Detik >15, Manuver Menghindar Berkecepatan Aman)**:
+   - Jika manusia tetap diam dan tidak berpindah tempat setelah $\ge 15\text{ detik}$ (`safe_stop_wait_duration: 15.0`), robot tidak lagi diam membeku.
+   - Kecepatan linier dibuka pada batas aman `reduced_max_linear: 0.20 m/s`, dan kemudi `angular.z` diaktifkan kembali.
+   - Nav2 DWB Local Planner (`dwb_core::DWBLocalPlanner`) membaca rintangan kaki manusia di `local_costmap` dan memandu robot bermanuver memutari manusia secara otonom.
+
+### 2. Bug Kritis yang Diperbaiki di [`adaptive_velocity_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/adaptive_velocity_node.py):
+- **Akar Masalah**: Node kamera mem-publish topik `/human_state` pada frekuensi $15 - 30\text{ Hz}$. Variabel `self.last_state_change_time = now` sebelumnya dipanggil pada setiap frame incoming pesan, sehingga timer durasi `safe_stop_duration` terus-menerus ter-reset kembali ke $0.05\text{ detik}$ dan tidak pernah mencapai $15\text{ detik}$ (robot membeku selamanya).
+- **Perbaikan**: Menambahkan pelacak waktu masuk terpisah `self.safe_stop_enter_time` yang hanya di-set satu kali saat transisi pertama masuk ke `SAFE_STOP`, dan di-reset saat keluar dari `SAFE_STOP`. Durasi kini dihitung presisi dan robot dapat bertransisi ke manuver menghindar secara andal.
+
+

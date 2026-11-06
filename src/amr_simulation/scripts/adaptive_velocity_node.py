@@ -22,9 +22,12 @@ class AdaptiveVelocityNode(Node):
         self.declare_parameter('cmd_timeout', 0.5)
         self.declare_parameter('input_topic', '/cmd_vel')
         self.declare_parameter('output_topic', '/cmd_vel_safe')
+        self.declare_parameter('safe_stop_wait_duration', 15.0)
 
         self.effective_state = "NORMAL"
         self.last_state_change_time = self.get_clock().now()
+        self.safe_stop_enter_time = None
+        self.safe_stop_avoid_logged = False
 
         self.in_v = 0.0
         self.in_w = 0.0
@@ -168,14 +171,23 @@ class AdaptiveVelocityNode(Node):
         if new_sev >= curr_sev:
             if self.effective_state != new_state:
                 self.get_logger().info(f"[ADAPTIF] {self.effective_state} -> {new_state}")
-            self.effective_state = new_state
-            self.last_state_change_time = now
+                self.effective_state = new_state
+                self.last_state_change_time = now
+                if new_state == "SAFE_STOP":
+                    self.safe_stop_enter_time = now
+                    self.safe_stop_avoid_logged = False
+                else:
+                    self.safe_stop_enter_time = None
+                    self.safe_stop_avoid_logged = False
         else:
             dt_hold = (now - self.last_state_change_time).nanoseconds / 1e9
             if dt_hold >= self.get_parameter('state_hold_time').value:
                 self.get_logger().info(f"[ADAPTIF] Relaksasi {self.effective_state} -> {new_state}")
                 self.effective_state = new_state
                 self.last_state_change_time = now
+                if new_state != "SAFE_STOP":
+                    self.safe_stop_enter_time = None
+                    self.safe_stop_avoid_logged = False
 
     def cmd_callback(self, msg: Twist):
         self.in_v = msg.linear.x
@@ -297,19 +309,22 @@ class AdaptiveVelocityNode(Node):
             orig_v, orig_w = self.in_v, self.in_w
 
         # Cek durasi jika sedang berada di status SAFE_STOP
-        safe_stop_duration = (now - self.last_state_change_time).nanoseconds / 1e9 if self.effective_state == "SAFE_STOP" else 0.0
+        safe_stop_duration = (now - self.safe_stop_enter_time).nanoseconds / 1e9 if (self.effective_state == "SAFE_STOP" and self.safe_stop_enter_time is not None) else 0.0
+        safe_stop_wait = float(self.get_parameter('safe_stop_wait_duration').value)
 
-        # Logika Jeda 5 Detik:
-        # 1. Jika SAFE_STOP < 5 detik: robot berhenti penuh (beri waktu orang lewat).
-        # 2. Jika SAFE_STOP >= 5 detik tapi orang tidak pergi: buka kecepatan pelan (REDUCED)
-        #    dan aktifkan setir (angular) agar Nav2 DWB membelok menghindar!
+        # Logika Jeda Tunggu & Menghindar:
+        # 1. Jika SAFE_STOP < safe_stop_wait (default 15.0s): robot berhenti penuh (beri waktu orang lewat / minggir setelah mendengar peringatan suara pada detik ke-5).
+        # 2. Jika SAFE_STOP >= safe_stop_wait tapi orang tidak pergi: buka kecepatan pelan (REDUCED)
+        #    dan aktifkan setir (angular) agar Nav2 DWB membelok menghindar via local costmap!
         is_safe_stop_active = False
         if self.effective_state == "SAFE_STOP":
-            if safe_stop_duration < 15.0:
+            if safe_stop_duration < safe_stop_wait:
                 ceiling = 0.0
                 is_safe_stop_active = True
             else:
-                # Setelah 5 detik orang tidak pergi: perlakukan sebagai rintangan biasa (REDUCED SPEED)
+                if not self.safe_stop_avoid_logged:
+                    self.get_logger().info(f"🚶 [ADAPTIF] Manusia tetap di jalur > {safe_stop_wait:.1f}s: Mengaktifkan manuver menghindar pelan via costmap...")
+                    self.safe_stop_avoid_logged = True
                 ceiling = self.get_parameter('reduced_max_linear').value
         elif self.effective_state == "REDUCED_SPEED":
             ceiling = self.get_parameter('reduced_max_linear').value
