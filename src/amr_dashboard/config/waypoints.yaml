@@ -1,33 +1,26 @@
 home_position:
-  x: 8.24
-  y: -3.66
-  yaw: -1.571
+  x: 8.37
+  y: -2.5
+  yaw: 3.142
 operation_mode: real
 predefined_points:
 - &id001
-  description: Titik muat barang nyata
-  name: Pickup 1
+  description: ''
+  name: uji 1
   type: pickup
-  x: 1.0
-  y: 0.0
-- &id002
-  description: Titik antar barang nyata
-  name: Tujuan 1
-  type: delivery
-  x: 2.0
-  y: 0.5
+  x: 8.4
+  y: -2.55
 profiles:
   real:
     home_position:
-      x: 8.24
-      y: -3.66
-      yaw: -1.571
+      x: 8.37
+      y: -2.5
+      yaw: 3.142
     map_file: peta_l1_dc.yaml
     max_angular_speed: 0.6
     max_linear_speed: 0.35
     predefined_points:
     - *id001
-    - *id002
     settings:
       arrival_sound_mode: human
       max_angular_speed: 0.5
