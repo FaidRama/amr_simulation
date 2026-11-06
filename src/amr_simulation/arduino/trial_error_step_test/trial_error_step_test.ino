@@ -1,17 +1,11 @@
 /* =========================================================================
- * FIRMWARE AMR DIFFERENTIAL DRIVE - PENGUJIAN STEP RESPON TRIAL & ERROR
- * FITUR: MENCETAK DATA CSV + MENGHITUNG OTOMATIS 5 PARAMETER PERFORMA:
+ * FIRMWARE AMR DIFFERENTIAL DRIVE - PENGUJIAN STEP RESPON 60 RPM (TRIAL & ERROR)
+ * KHUSUS PENGUJIAN TUNGGAL: STEP 60 RPM (DURASI 6.5 DETIK)
+ * FITUR: MENCETAK DATA CSV 50 HZ + MENGHITUNG OTOMATIS 5 PARAMETER PERFORMA
  *        (RMSE, Overshoot, Rise Time, Settling Time, Steady-State Error)
- * PARAMETER : Kiri  (Kp = 2.5000 | Ki = 18.0000 | Kd = 0.0000)
- *             Kanan (Kp = 2.8000 | Ki = 18.0000 | Kd = 0.0000)
- * SKRIPSI   : DIVALA ZAHRA OKTAVIA (UNNES 2026)
- * =========================================================================
- * Menu Serial:
- *   '1' : Uji Step 60 RPM (6.5 detik)
- *   '2' : Uji Step 80 RPM (6.5 detik)
- *   '3' : Uji Step 100 RPM (6.5 detik)
- *   '4' : Uji Bertingkat 60 -> 80 -> 100 RPM (13.5 detik)
- *   '0' : Stop Darurat
+ * PARAMETER : Motor Kiri  (Kp = 2.5000 | Ki = 18.0000 | Kd = 0.0000)
+ *             Motor Kanan (Kp = 2.8000 | Ki = 18.0000 | Kd = 0.0000)
+ * SKRIPSI   : DIVALA ZAHRA OKTAVIA (TEKNIK KOMPUTER UNNES 2026)
  * ========================================================================= */
 
 #include <Arduino.h>
@@ -41,11 +35,10 @@ const bool INVERT_ENC_R   = true;
 
 // ====================== 3. SPESIFIKASI FISIK ROBOT =======================
 const float WHEEL_DIAMETER = 0.127; // 5 inci (0.127 meter)
-const float WHEEL_BASE_B   = 0.458; // 45.8 cm
 const float CPR_WHEEL      = 350.7; // 7 PPR * 50.1 gearbox = 350.7 ticks/rev
 
 // =========================================================================
-// 4. PARAMETER KENDALI TRIAL & ERROR
+// 4. PARAMETER KENDALI PI MANUAL TRIAL & ERROR
 // =========================================================================
 const float KP_L = 2.5000;
 const float KI_L = 18.0000;
@@ -58,27 +51,28 @@ const float KD_R = 0.0000;
 const unsigned long SAMPLING_MS = 20;
 const float DT = SAMPLING_MS / 1000.0; // 0.02 s (50 Hz)
 
+// TARGET STEP RPM & DURASI
+const float TARGET_STEP_RPM = 60.0;
+const float T_STEP_MULAI    = 0.5;   // Detik ke-0.5 step diaktifkan
+const float DURASI_TOTAL    = 6.5;   // Total durasi pengujian (detik)
+
 // ====================== 5. VARIABEL OPERASIONAL ==========================
 volatile long totalPulsa_L = 0, totalPulsa_R = 0;
 volatile long deltaPulsa_L = 0, deltaPulsa_R = 0;
 
-float odom_x = 0.0, odom_y = 0.0, odom_theta = 0.0;
-
 float setpoint_L = 0.0, setpoint_R = 0.0; // Target RPM
-float rpm_L = 0.0, rpm_R = 0.0;           // Aktual RPM
-float rpm_ctrl_L = 0.0, rpm_ctrl_R = 0.0; // Umpan balik kontrol
+float rpm_L = 0.0, rpm_R = 0.0;           // Aktual RPM (setelah filter)
+float rpm_ctrl_L = 0.0, rpm_ctrl_R = 0.0; // Register filter EMA
 float error_L = 0.0, prev_error_L = 0.0, integral_L = 0.0, pwm_L = 0.0;
 float error_R = 0.0, prev_error_R = 0.0, integral_R = 0.0, pwm_R = 0.0;
 
 unsigned long waktuSebelumnya = 0;
 unsigned long waktuMulaiTes   = 0;
-
-// Mode Uji: 4 = Otomatis Bertingkat (60->80->100), 1 = 60 RPM, 2 = 80 RPM, 3 = 100 RPM, 0 = Stop
-int modeUji = 4;
 bool sedangUji = true;
+bool stepAktif = false;
 
 // =========================================================================
-// 6. STRUKTUR AKUMULATOR 5 PARAMETER PERFORMA REAL-TIME (HEMAT MEMORI RAM)
+// 6. STRUKTUR AKUMULATOR 5 PARAMETER PERFORMA ON-CHIP
 // =========================================================================
 struct PerformaTracker {
   float target;
@@ -91,7 +85,6 @@ struct PerformaTracker {
   bool reached_90;
   bool settled;
   
-  // Akumulator fase steady-state
   float sum_error_sq;
   float sum_rpm;
   float sum_pwm;
@@ -117,7 +110,7 @@ struct PerformaTracker {
     if (target <= 1.0) return;
     float t_rel = t_now - t_step_start;
 
-    // 1. Catat Nilai Puncak untuk Overshoot
+    // 1. Catat Puncak Tertinggi untuk Overshoot
     if (rpm > ymax) ymax = rpm;
 
     // 2. Catat Waktu Naik (Rise Time: 10% s.d 90%)
@@ -130,19 +123,18 @@ struct PerformaTracker {
       reached_90 = true;
     }
 
-    // 3. Catat Waktu Mantap (Settling Time: Masuk pita toleransi +-5% dan bertahan)
+    // 3. Catat Settling Time (+-5% Pita Toleransi)
     float band = 0.05 * target;
     if (abs(rpm - target) <= band) {
-      if (!settled && t_rel >= 0.2) {
+      if (!settled && t_rel >= 0.15) {
         t_settle = t_rel;
         settled = true;
       }
     } else {
-      // Jika terpental keluar pita sebelum fase steady, perbarui waktu settle
       if (t_rel < 1.0) settled = false;
     }
 
-    // 4 & 5. Akumulasi Steady-State (setelah t_rel >= 1.0 detik) untuk RMSE & Ess
+    // 4 & 5. Akumulasi Steady-State (saat t_rel >= 1.0 detik)
     if (t_rel >= 1.0) {
       float err = target - rpm;
       sum_error_sq += (err * err);
@@ -183,10 +175,8 @@ struct PerformaTracker {
   }
 };
 
-// Pelacak performa untuk masing-masing tahap kecepatan (60, 80, 100 RPM)
-PerformaTracker perf_L[3];
-PerformaTracker perf_R[3];
-int tahap_aktif = -1;
+PerformaTracker perf_L;
+PerformaTracker perf_R;
 
 // ====================== 7. ISR ENCODER ===================================
 void isrL() {
@@ -235,77 +225,55 @@ void driveMotors(float pwmL, float pwmR) {
 // ====================== 9. CETAK REKAP HASIL 5 PARAMETER ==================
 void cetakRangkumanPerforma() {
   Serial.println(F("\n# ============================================================================"));
-  Serial.println(F("# RANGKUMAN 5 PARAMETER EVALUASI PERFORMA STEP RESPON (TRIAL & ERROR)"));
+  Serial.println(F("# RANGKUMAN 5 PARAMETER EVALUASI PERFORMA STEP RESPON 60 RPM (TRIAL & ERROR)"));
   Serial.println(F("# ============================================================================"));
-  Serial.println(F("# Keterangan Definisi Parameter:"));
-  Serial.println(F("# 1. RMSE (RPM)       : Ketepatan kecepatan roda mengikuti setpoint saat stabil."));
-  Serial.println(F("# 2. Overshoot (%)    : Lonjakan kecepatan melewati setpoint sebelum kembali stabil."));
-  Serial.println(F("# 3. Rise Time (s)    : Lama waktu naik dari kondisi 10% s.d 90% setpoint."));
-  Serial.println(F("# 4. Settling Time (s): Lama waktu hingga kecepatan masuk pita toleransi +-5%."));
-  Serial.println(F("# 5. Steady-State Err : Selisih antara setpoint dan kecepatan rata-rata saat stabil."));
+  Serial.println(F("# Parameter Evaluasi              | Motor Kiri     | Motor Kanan    | Satuan"));
+  Serial.println(F("# ----------------------------------------------------------------------------"));
+  
+  // 1. RMSE
+  Serial.print(F("# 1. RMSE (Ketepatan Setpoint)   | "));
+  Serial.print(perf_L.getRMSE(), 3); Serial.print(F("          | "));
+  Serial.print(perf_R.getRMSE(), 3); Serial.println(F("          | RPM"));
+
+  // 2. Overshoot
+  Serial.print(F("# 2. Overshoot (Lonjakan Puncak) | "));
+  Serial.print(perf_L.getOvershoot(), 2); Serial.print(F("%        | "));
+  Serial.print(perf_R.getOvershoot(), 2); Serial.println(F("%        | %"));
+
+  // 3. Rise Time
+  Serial.print(F("# 3. Rise Time (Waktu Naik)      | "));
+  Serial.print(perf_L.getRiseTime(), 3); Serial.print(F("        | "));
+  Serial.print(perf_R.getRiseTime(), 3); Serial.println(F("        | detik"));
+
+  // 4. Settling Time
+  Serial.print(F("# 4. Settling Time (Waktu Mantap)| "));
+  Serial.print(perf_L.getSettlingTime(), 3); Serial.print(F("        | "));
+  Serial.print(perf_R.getSettlingTime(), 3); Serial.println(F("        | detik"));
+
+  // 5. Steady-State Error
+  Serial.print(F("# 5. Steady-State Error (Ess)    | "));
+  Serial.print(perf_L.getEss(), 3); Serial.print(F("          | "));
+  Serial.print(perf_R.getEss(), 3); Serial.println(F("          | RPM"));
+
+  // Info Pendukung
+  Serial.print(F("#    Kecepatan Rata-rata Stabil  | "));
+  Serial.print(perf_L.getSteadyRPM(), 2); Serial.print(F("        | "));
+  Serial.print(perf_R.getSteadyRPM(), 2); Serial.println(F("        | RPM"));
+
+  Serial.print(F("#    Nilai PWM saat Stabil       | "));
+  Serial.print(perf_L.getSteadyPWM(), 1); Serial.print(F("        | "));
+  Serial.print(perf_R.getSteadyPWM(), 1); Serial.println(F("        | PWM (0-255)"));
   Serial.println(F("# ============================================================================"));
-
-  int jml_tahap = (modeUji == 4) ? 3 : 1;
-  float sp_list[3] = {60.0, 80.0, 100.0};
-  if (modeUji == 1) sp_list[0] = 60.0;
-  if (modeUji == 2) sp_list[0] = 80.0;
-  if (modeUji == 3) sp_list[0] = 100.0;
-
-  for (int i = 0; i < jml_tahap; i++) {
-    Serial.print(F("\n# >>> TAHAP SETPOINT: "));
-    Serial.print(sp_list[i], 0);
-    Serial.println(F(" RPM <<<"));
-    Serial.println(F("# ----------------------------------------------------------------------------"));
-    Serial.println(F("# Parameter Evaluasi              | Motor Kiri     | Motor Kanan    | Satuan"));
-    Serial.println(F("# ----------------------------------------------------------------------------"));
-    
-    // 1. RMSE
-    Serial.print(F("# 1. RMSE (Ketepatan Setpoint)   | "));
-    Serial.print(perf_L[i].getRMSE(), 3); Serial.print(F("          | "));
-    Serial.print(perf_R[i].getRMSE(), 3); Serial.println(F("          | RPM"));
-
-    // 2. Overshoot
-    Serial.print(F("# 2. Overshoot (Lonjakan Puncak) | "));
-    Serial.print(perf_L[i].getOvershoot(), 2); Serial.print(F("%        | "));
-    Serial.print(perf_R[i].getOvershoot(), 2); Serial.println(F("%        | %"));
-
-    // 3. Rise Time
-    Serial.print(F("# 3. Rise Time (Waktu Naik)      | "));
-    Serial.print(perf_L[i].getRiseTime(), 3); Serial.print(F("        | "));
-    Serial.print(perf_R[i].getRiseTime(), 3); Serial.println(F("        | detik"));
-
-    // 4. Settling Time
-    Serial.print(F("# 4. Settling Time (Waktu Mantap)| "));
-    Serial.print(perf_L[i].getSettlingTime(), 3); Serial.print(F("        | "));
-    Serial.print(perf_R[i].getSettlingTime(), 3); Serial.println(F("        | detik"));
-
-    // 5. Steady-State Error
-    Serial.print(F("# 5. Steady-State Error (Ess)    | "));
-    Serial.print(perf_L[i].getEss(), 3); Serial.print(F("          | "));
-    Serial.print(perf_R[i].getEss(), 3); Serial.println(F("          | RPM"));
-
-    // Info Pendukung
-    Serial.print(F("#    Kecepatan Rata-rata Stabil  | "));
-    Serial.print(perf_L[i].getSteadyRPM(), 2); Serial.print(F("        | "));
-    Serial.print(perf_R[i].getSteadyRPM(), 2); Serial.println(F("        | RPM"));
-
-    Serial.print(F("#    Nilai PWM saat Stabil       | "));
-    Serial.print(perf_L[i].getSteadyPWM(), 1); Serial.print(F("        | "));
-    Serial.print(perf_R[i].getSteadyPWM(), 1); Serial.println(F("        | PWM (0-255)"));
-    Serial.println(F("# ----------------------------------------------------------------------------"));
-  }
-  Serial.println(F("# ============================================================================"));
-  Serial.println(F("# PENGUJIAN SELESAI. Silakan copy data CSV atau tabel rangkuman di atas."));
+  Serial.println(F("# PENGUJIAN 60 RPM SELESAI. Silakan copy data CSV atau tabel di atas."));
 }
 
 // ====================== 10. CETAK HEADER CSV & RESET =====================
-void mulaiPengujianBaru(int mode) {
+void mulaiPengujian60RPM() {
   noInterrupts();
   totalPulsa_L = 0; totalPulsa_R = 0;
   deltaPulsa_L = 0; deltaPulsa_R = 0;
   interrupts();
 
-  odom_x = 0.0; odom_y = 0.0; odom_theta = 0.0;
   setpoint_L = 0.0; setpoint_R = 0.0;
   rpm_L = 0.0; rpm_R = 0.0;
   rpm_ctrl_L = 0.0; rpm_ctrl_R = 0.0;
@@ -313,19 +281,16 @@ void mulaiPengujianBaru(int mode) {
   error_R = 0.0; prev_error_R = 0.0; integral_R = 0.0; pwm_R = 0.0;
 
   driveMotors(0, 0);
-  modeUji = mode;
-  sedangUji = (mode != 0);
+  sedangUji = true;
+  stepAktif = false;
   waktuMulaiTes = millis();
   waktuSebelumnya = millis();
-  tahap_aktif = -1;
 
-  if (sedangUji) {
-    Serial.println(F("# TUNING_METHOD: PID_MANUAL_TRIAL_ERROR;;;;;;;;"));
-    Serial.println(F("# MOTOR_LEFT : Kp=2.5000; Ki=18.0000; Kd=0.0000;;;;;;"));
-    Serial.println(F("# MOTOR_RIGHT: Kp=2.8000; Ki=18.0000; Kd=0.0000;;;;;;"));
-    Serial.println(F("# WHEEL_DIAMETER: 0.127m; WHEEL_BASE: 0.458m;;;;;;;"));
-    Serial.println(F("Time_s;Target_RPM_L;Actual_RPM_L;PWM_L;Error_L;Target_RPM_R;Actual_RPM_R;PWM_R;Error_R"));
-  }
+  Serial.println(F("# PENGUJIAN : STEP RESPON 60 RPM (TRIAL & ERROR);;;;;;;;"));
+  Serial.println(F("# MOTOR_LEFT : Kp=2.5000; Ki=18.0000; Kd=0.0000;;;;;;"));
+  Serial.println(F("# MOTOR_RIGHT: Kp=2.8000; Ki=18.0000; Kd=0.0000;;;;;;"));
+  Serial.println(F("# TARGET_RPM : 60.0; DURASI: 6.5s;;;;;;;"));
+  Serial.println(F("Time_s;Target_RPM_L;Actual_RPM_L;PWM_L;Error_L;Target_RPM_R;Actual_RPM_R;PWM_R;Error_R"));
 }
 
 // ====================== 11. SETUP SISTEM =================================
@@ -355,25 +320,23 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(PIN_ENCA_R), isrR, FALLING);
 
   driveMotors(0, 0);
-  delay(1000);
+  delay(1000); // Waktu inisialisasi awal 1 detik
 
-  // Otomatis mulai Mode 4 (Multi-Step 60 -> 80 -> 100 RPM)
-  mulaiPengujianBaru(4);
+  // Otomatis langsung memulai pengujian 60 RPM
+  mulaiPengujian60RPM();
 }
 
 // ====================== 12. LOOP KENDALI 50 HZ ===========================
 void loop() {
-  // Pilihan Menu dari Serial
+  // Input Serial (jika ingin mengulang atau stop)
   while (Serial.available() > 0) {
     char c = Serial.read();
-    if (c == '1')      mulaiPengujianBaru(1); // 60 RPM
-    else if (c == '2') mulaiPengujianBaru(2); // 80 RPM
-    else if (c == '3') mulaiPengujianBaru(3); // 100 RPM
-    else if (c == '4' || c == 'r' || c == 'R') mulaiPengujianBaru(4); // Multi-Step
-    else if (c == '0') {
+    if (c == '1' || c == 'r' || c == 'R') {
+      mulaiPengujian60RPM(); // Ulangi tes 60 RPM
+    } else if (c == '0') {
       sedangUji = false;
       driveMotors(0, 0);
-      Serial.println(F("# [STOP] Pengujian Dihentikan."));
+      Serial.println(F("# [STOP] Pengujian Dihentikan Darurat."));
     }
   }
 
@@ -384,53 +347,23 @@ void loop() {
     waktuSebelumnya = waktuSekarang;
     float t = (waktuSekarang - waktuMulaiTes) / 1000.0;
 
+    // TARGET STEP: 0 RPM selama 0.5s baseline, lalu 60.0 RPM sampai 6.5s
     float target_rpm = 0.0;
-    float durasi_habis = 6.5;
-    int idx_tahap = 0;
-
-    if (modeUji == 1) {
-      target_rpm = (t < 0.5) ? 0.0 : (t <= 6.5 ? 60.0 : 0.0);
-      durasi_habis = 6.5;
-      idx_tahap = 0;
-    } else if (modeUji == 2) {
-      target_rpm = (t < 0.5) ? 0.0 : (t <= 6.5 ? 80.0 : 0.0);
-      durasi_habis = 6.5;
-      idx_tahap = 0;
-    } else if (modeUji == 3) {
-      target_rpm = (t < 0.5) ? 0.0 : (t <= 6.5 ? 100.0 : 0.0);
-      durasi_habis = 6.5;
-      idx_tahap = 0;
-    } else if (modeUji == 4) {
-      if (t < 1.0) {
-        target_rpm = 0.0;
-        idx_tahap = -1;
-      } else if (t < 5.0) {
-        target_rpm = 60.0;
-        idx_tahap = 0;
-      } else if (t < 9.0) {
-        target_rpm = 80.0;
-        idx_tahap = 1;
-      } else if (t < 13.0) {
-        target_rpm = 100.0;
-        idx_tahap = 2;
-      } else {
-        target_rpm = 0.0;
-        idx_tahap = -1;
+    if (t >= T_STEP_MULAI && t <= DURASI_TOTAL) {
+      target_rpm = TARGET_STEP_RPM;
+      if (!stepAktif) {
+        stepAktif = true;
+        perf_L.reset(TARGET_STEP_RPM, t);
+        perf_R.reset(TARGET_STEP_RPM, t);
       }
-      durasi_habis = 13.5;
-    }
-
-    // Inisialisasi tracker jika berpindah tahap kecepatan
-    if (idx_tahap >= 0 && idx_tahap != tahap_aktif) {
-      tahap_aktif = idx_tahap;
-      perf_L[tahap_aktif].reset(target_rpm, t);
-      perf_R[tahap_aktif].reset(target_rpm, t);
+    } else {
+      target_rpm = 0.0;
     }
 
     setpoint_L = target_rpm;
     setpoint_R = target_rpm;
 
-    // Salin Pulsa Atomik
+    // Salin Pulsa Encoder secara Atomik
     noInterrupts();
     long dC_L = deltaPulsa_L; deltaPulsa_L = 0;
     long dC_R = deltaPulsa_R; deltaPulsa_R = 0;
@@ -473,13 +406,13 @@ void loop() {
     // Output ke Driver BTS7960
     driveMotors(pwm_L, pwm_R);
 
-    // Update akumulator 5 parameter performa secara real-time
-    if (tahap_aktif >= 0) {
-      perf_L[tahap_aktif].update(rpm_L, pwm_L, t);
-      perf_R[tahap_aktif].update(rpm_R, pwm_R, t);
+    // Update akumulator 5 parameter performa (selama step aktif)
+    if (stepAktif && target_rpm > 1.0) {
+      perf_L.update(rpm_L, pwm_L, t);
+      perf_R.update(rpm_R, pwm_R, t);
     }
 
-    // Cetak Baris Data CSV
+    // Cetak Baris Data CSV ke Serial Monitor
     Serial.print(t, 3);          Serial.print(";");
     Serial.print(setpoint_L, 2); Serial.print(";");
     Serial.print(rpm_L, 2);      Serial.print(";");
@@ -490,8 +423,8 @@ void loop() {
     Serial.print((int)pwm_R);    Serial.print(";");
     Serial.println(error_R, 2);
 
-    // Saat Selesai: Stop Motor & Cetak Rangkuman Lengkap 5 Parameter
-    if (t >= durasi_habis) {
+    // Saat Pengujian Selesai (t >= 6.5s)
+    if (t >= DURASI_TOTAL) {
       driveMotors(0, 0);
       sedangUji = false;
       cetakRangkumanPerforma();
