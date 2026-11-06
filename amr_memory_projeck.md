@@ -1085,23 +1085,101 @@ Mengimplementasikan mekanisme "detak jantung" hening berkala langsung pada [`tes
 
 ## 📌 30. Mekanisme Human-Aware: Safe Stop -> Suara Peringatan (5 Detik) -> Manuver Menghindar (15 Detik)
 
-### 1. Deskripsi Fitur & Alur Kerja:
+### 1. Deskripsi Fitur & Alur Kerja 4-Fase:
+Untuk meningkatkan etika dan keselamatan interaksi robot dengan manusia di area gudang/lorong operasional, diterapkan skema adaptif bertahap:
 1. **Fase 1 (Detik 0–5, Henti Total)**:
    - Manusia masuk koridor/zona dekat (`Zone.NEAR`) kamera AI $\to$ status beralih ke `SAFE_STOP`.
    - Robot berhenti penuh (`ceiling = 0.0`, `angular.z = 0.0`) untuk memberi ruang dan waktu jika manusia hanya numpang lewat melintas.
-2. **Fase 2 (Detik 5, Suara Peringatan Permisi)**:
-   - Setelah tertahan selama 5 detik (`obstacle_voice_delay_s: 5`), node [`test_robot_voice.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/test_robot_voice.py) membunyikan suara:
+2. **Fase 2 (Detik 5, Peringatan Suara Audio Permisi)**:
+   - Setelah robot tertahan selama 5 detik (`obstacle_voice_delay_s: 5`), node [`test_robot_voice.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/test_robot_voice.py) membunyikan suara:
      *"Permisi, saya mau lewat. Mohon beri jalan."*
-   - Kalimat ini berdurasi $\approx 3.5\text{ detik}$, memberi peringatan audio yang ramah dan jelas.
+   - Kalimat ini berdurasi $\approx 3.5\text{ detik}$, memberikan notifikasi suara yang ramah dan jelas melalui speaker Bluetooth Acome A1.
 3. **Fase 3 (Detik 5–15, Toleransi Waktu Reaksi Manusia)**:
-   - Robot tetap diam di tempat selama $\approx 6.5\text{ detik}$ setelah suara selesai, memberi kesempatan bagi manusia untuk melangkah minggir.
+   - Robot tetap diam di tempat selama $\approx 6.5\text{ detik}$ setelah kalimat selesai diucapkan, memberi kesempatan wajar bagi manusia untuk mendengar dan melangkah minggir.
 4. **Fase 4 (Detik >15, Manuver Menghindar Berkecepatan Aman)**:
    - Jika manusia tetap diam dan tidak berpindah tempat setelah $\ge 15\text{ detik}$ (`safe_stop_wait_duration: 15.0`), robot tidak lagi diam membeku.
-   - Kecepatan linier dibuka pada batas aman `reduced_max_linear: 0.20 m/s`, dan kemudi `angular.z` diaktifkan kembali.
-   - Nav2 DWB Local Planner (`dwb_core::DWBLocalPlanner`) membaca rintangan kaki manusia di `local_costmap` dan memandu robot bermanuver memutari manusia secara otonom.
+   - Kecepatan linier dibuka pada batas kecepatan aman `reduced_max_linear: 0.20 m/s`, dan kemudi `angular.z` diaktifkan kembali.
+   - Nav2 DWB Local Planner (`dwb_core::DWBLocalPlanner`) membaca pindaian LiDAR kaki manusia di `local_costmap` dan memandu robot bermanuver memutari manusia secara otonom via rute yang aman.
+5. **Kembali ke Kecepatan Normal**:
+   - Begitu manusia melangkah keluar dari koridor (`NORMAL`), robot otomatis kembali berakselerasi halus ke `normal_max_linear: 0.45 m/s`.
 
 ### 2. Bug Kritis yang Diperbaiki di [`adaptive_velocity_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/adaptive_velocity_node.py):
-- **Akar Masalah**: Node kamera mem-publish topik `/human_state` pada frekuensi $15 - 30\text{ Hz}$. Variabel `self.last_state_change_time = now` sebelumnya dipanggil pada setiap frame incoming pesan, sehingga timer durasi `safe_stop_duration` terus-menerus ter-reset kembali ke $0.05\text{ detik}$ dan tidak pernah mencapai $15\text{ detik}$ (robot membeku selamanya).
-- **Perbaikan**: Menambahkan pelacak waktu masuk terpisah `self.safe_stop_enter_time` yang hanya di-set satu kali saat transisi pertama masuk ke `SAFE_STOP`, dan di-reset saat keluar dari `SAFE_STOP`. Durasi kini dihitung presisi dan robot dapat bertransisi ke manuver menghindar secara andal.
+- **Akar Masalah**:
+  - Node kamera AI (`human_awareness_node`) mem-publish status `/human_state` secara berkesinambungan setiap frame ($15 - 30\text{ Hz}$).
+  - Di dalam `state_callback`, baris `self.last_state_change_time = now` sebelumnya dipanggil pada setiap frame incoming pesan bernilai `SAFE_STOP`.
+  - Akibatnya, `safe_stop_duration = (now - self.last_state_change_time)` **selalu ter-reset kembali ke $0.01 - 0.05\text{ detik}$ dan tidak pernah bisa mencapai $15\text{ detik}$**, sehingga robot membeku selamanya di lapangan.
+- **Perbaikan**:
+  - Menambahkan variabel pelacak waktu masuk terpisah: `self.safe_stop_enter_time`.
+  - Waktu masuk hanya dicatat **satu kali pada awal transisi masuk ke `SAFE_STOP`**, dan di-reset ke `None` saat status beralih keluar dari `SAFE_STOP`.
+  - Menambahkan parameter ROS 2 `safe_stop_wait_duration: 15.0` agar nilai ambang batas waktu tunggu mudah dikonfigurasi.
+
+### 3. Sinkronisasi & Proteksi di [`waypoint_manager.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/waypoint_manager.py):
+- Pesan log disinkronkan ke 15 detik: `'🚶 [HUMAN AWARE] Manusia diam > 15 detik: AMR beralih menghindar via local costmap...'`.
+- Menambahkan proteksi pada evaluasi hasil navigasi: `if self.nav_result_status != 'succeeded' and (...)` agar ketika robot selesai bermanuver menghindar dan sukses tiba di titik waypoint (`succeeded`), sistem tidak mengulang pengiriman goal secara redundan.
+
+---
+
+## 📌 31. Peningkatan Peta Dispatch: Zoom Interaktif, Pan (Drag), HUD Koordinat, & Mode Layar Penuh (Fullscreen)
+
+### 1. Latar Belakang & Masalah:
+- Pada tab **Dispatch / Pengiriman**, operator kesulitan memilih titik koordinat secara akurat (Pickup, Delivery, Initial Pose AMCL, Save Point) karena ukuran kanvas peta yang relatif kecil dan tetap (*fixed resolution*).
+- Menentukan titik di lorong sempit gudang atau di dekat dinding membutuhkan pembesaran kanvas agar posisi waypoint tidak melenceng ke area rintangan (*lethal costmap*).
+
+### 2. Solusi Teknis & Implementasi:
+1. **Viewport Transformasi Kanvas HTML5 2D ([`map.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/map.js))**:
+   - Memperkenalkan objek `DELIVERY_VIEWPORT = { zoom: 1.0, panX: 0, panY: 0, isFullscreen: false }`.
+   - Pada fungsi `drawMap()`, seluruh rendering layer (grid peta okupansi, jalur global path, pose robot, penanda waypoint) dibungkus menggunakan transformasi matriks kanvas:
+     ```javascript
+     ctx.save();
+     ctx.translate(viewport.panX, viewport.panY);
+     ctx.scale(viewport.zoom, viewport.zoom);
+     // ... render peta dan elemen visual ...
+     ctx.restore();
+     ```
+2. **Inversi Transformasi Presisi Tinggi (`screenToWorld()`)**:
+   - Ketika operator mengklik titik di atas kanvas yang sedang di-zoom dan digeser (*panned*), koordinat piksel layar dikonversi kembali secara terbalik ke koordinat dunia nyata ($X, Y\text{ meter}$):
+     $$wx = \text{originX} + \frac{(clientX - \text{rect.left} - panX) \cdot \text{scaleX}}{zoom \cdot \text{mapScale}}$$
+     $$wy = \text{originY} + \frac{\text{canvasHeight} - \frac{clientY - \text{rect.top} - panY}{zoom} \cdot \text{scaleY}}{\text{mapScale}}$$
+   - Memberikan akurasi pemilihan titik hingga tingkat sentimeter.
+3. **Zoom Berpusat pada Kursor (*Cursor-Centered Wheel Zoom*)**:
+   - Memutar *mouse wheel* memperbesar/memperkecil kanvas secara proporsional berpusat tepat pada posisi kursor mouse saat itu.
+4. **Panning Seret Mouse (*Drag Pan*)**:
+   - Klik dan seret kanvas untuk menggeser sudut pandang. Diberikan ambang batas pergeseran $\ge 4\text{ piksel}$ untuk membedakan antara aksi menggeser (*drag*) dan aksi memilih titik (*click picking*).
+5. **HUD Koordinat & Zoom Real-Time**:
+   - Menampilkan bar status mengambang di bawah kanvas:
+     `📍 X = 1.25 m, Y = -0.42 m | 🔍 Zoom: 180%`
+6. **Overlay Kontrol & Mode Layar Penuh (*Fullscreen*)**:
+   - Tombol mengambang: `＋` (Zoom In), `－` (Zoom Out), `⟲` (Reset Tampilan), dan `⛶ Layar Penuh`.
+   - CSS `.map-container.map-fullscreen`: mengubah kanvas menjadi modal `fixed` memenuhi seluruh layar monitor ($z\text{-index}: 5000$).
+   - Dialog pemilihan aksi modal (`#modal-overlay`) dinaikkan menjadi $z\text{-index}: 10000$ agar dialog tetap muncul di atas peta layar penuh.
+
+---
+
+## 📌 32. Perbaikan Kendali Teleop: Mode Analog Bebas (Laptop) & Solusi Freezing Gestur Sentuh (Smartphone)
+
+### 1. Masalah Lapangan:
+- **Di Laptop / PC**: Ketika operator mengklik dan menggeser analog joystick, tarikan kursor mouse yang keluar melampaui lingkaran kanvas menyebabkan analog langsung terlepas (*release/stop*). Hal ini menyulitkan manuver berkecepatan konstan.
+- **Di Smartphone / Tablet**: Joystick sering tersendat, membeku, atau hanya bisa ditahan di satu titik. Begitu jari digeser, analog langsung kembali ke tengah dan robot berhenti.
+
+### 2. Akar Masalah Fisik & Browser:
+- Pada perangkat layar sentuh ponsel (Chrome Mobile / Safari), gerakan jari sekecil apa pun di atas elemen HTML yang tidak diproteksi akan diinterpretasikan oleh browser sebagai **gestur menggulir (*scroll/pan*) halaman web**.
+- Saat gestur *scroll* terdeteksi, browser secara otomatis mengirimkan event pembatalan `pointercancel` atau memutus pelacakan pointer, memicu fungsi penghenti (`endTouch()`) yang mengembalikan analog ke titik nol ($x=0, y=0$).
+
+### 3. Solusi & Implementasi:
+1. **Pencegahan Gestur Scroll di CSS ([`style.css`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/css/style.css))**:
+   - Menerapkan aturan protektif pada `.joystick-container`, `.joystick-canvas-wrap`, dan kanvas:
+     ```css
+     touch-action: none !important;
+     user-select: none !important;
+     -webkit-touch-callout: none !important;
+     ```
+   - Menginstruksikan browser bahwa area joystick tidak boleh diinterupsi oleh gestur gulir layar halaman.
+2. **Pemisahan Native Touch Events khusus Smartphone ([`joystick.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/joystick.js))**:
+   - Menggunakan event sentuh bawaan: `touchstart`, `touchmove`, `touchend`, dan `touchcancel` dengan opsi `{ passive: false }` dan `e.preventDefault()`.
+   - Menambahkan listener sentuh cadangan pada `window` agar saat jari meluncur keluar dari radius kanvas, pelacakan sudut dan kecepatan tetap terbaca mulus dan stabil.
+3. **Pengalaman Analog Gamepad di Laptop**:
+   - Mengikat event gerakan mouse desktop ke `window.addEventListener('mousemove')` dan `mouseup` pada saat klik kiri mouse sedang ditekan.
+   - Operator laptop bebas menarik kursor ke sudut layar mana pun tanpa khawatir joystick terlepas.
+
 
 
