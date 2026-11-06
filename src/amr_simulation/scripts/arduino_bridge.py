@@ -92,7 +92,7 @@ class ArduinoBridgeNode(Node):
         # --- VERIFIKASI ENCODER ---
         # Encoder dianggap SIAP setelah N paket ENC valid berturut-turut diterima.
         self.declare_parameter('ready_packet_count', 5)        # 5 paket @50Hz = 0.1 detik
-        self.declare_parameter('enc_stream_timeout', 2.0)      # >2.0s tanpa ENC -> stream hilang (toleran terhadap glitch sesaat)
+        self.declare_parameter('enc_stream_timeout', 0.8)      # >0.8s tanpa ENC -> stream hilang
         self.declare_parameter('enc_startup_timeout', 7.0)     # >7.0s tanpa ENC -> auto-recovery
         self.declare_parameter('max_ticks_per_packet', 500)    # lompatan tick tak wajar -> resync baseline
         self.ready_packet_count = int(self.get_parameter('ready_packet_count').value)

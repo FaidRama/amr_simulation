@@ -49,14 +49,12 @@ FALLBACK_CACHE_DIR = os.path.expanduser('~/.cache/amr_voice')
 CONFIG_FILE_PATH = os.path.join(WS_DIR, 'src', 'amr_simulation', 'config', 'voice_config.json')
 
 CHIME_WAV_PATH = '/tmp/amr_chime.wav'
-SILENCE_WAV_PATH = '/tmp/amr_silence.wav'
 
 DEFAULT_CONFIG = {
     "target_mac": "0E:21:D5:E9:AB:5F",
     "target_name": "Acome A1",
     "auto_reconnect": True,
     "reconnect_interval_s": 5,
-    "keepalive_interval_s": 45,
     "obstacle_voice_delay_s": 10,
     "obstacle_voice_repeat_s": 12,
     "obstacle_phrase": "Permisi, robot mau lewat. Mohon beri jalan.",
@@ -134,24 +132,6 @@ def generate_chime_wav(filepath=CHIME_WAV_PATH):
     return filepath
 
 
-def generate_silence_wav(filepath=SILENCE_WAV_PATH, duration_s=0.2):
-    """Sintesis file WAV hening murni (amplitudo 0) untuk heartbeat keep-alive speaker."""
-    if os.path.exists(filepath) and os.path.getsize(filepath) > 44:
-        return filepath
-    sample_rate = 44100
-    n_samples = int(sample_rate * duration_s)
-    raw_data = b'\x00\x00' * n_samples
-    try:
-        with wave.open(filepath, 'w') as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(sample_rate)
-            wf.writeframes(raw_data)
-    except Exception:
-        pass
-    return filepath
-
-
 def get_pulse_env():
     """Environment untuk berkomunikasi dengan PulseAudio user jetson (UID 1000)."""
     env = dict(os.environ)
@@ -204,28 +184,6 @@ def route_audio_to_bluetooth(mac_address=None):
     except Exception:
         pass
     return None
-
-
-def send_keepalive_pulse(mac_address=None):
-    """Kirim pulsa audio hening singkat ke speaker agar timer auto-off di dalam speaker ter-reset."""
-    try:
-        silence_path = generate_silence_wav()
-        target_sink = route_audio_to_bluetooth(mac_address)
-        env = get_pulse_env()
-        if target_sink:
-            # Pastikan sink tidak tersuspensi oleh idle power saving PulseAudio
-            subprocess.run(['pactl', 'suspend-sink', target_sink, '0'],
-                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1)
-        if shutil.which('paplay') and os.path.exists(silence_path):
-            cmd = ['paplay']
-            if target_sink:
-                cmd += ['-d', target_sink]
-            cmd.append(silence_path)
-            res = subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
-            return res.returncode == 0
-    except Exception:
-        pass
-    return False
 
 
 def check_pulseaudio_status():
@@ -457,14 +415,13 @@ def speak(text, play_chime_first=True, config=None):
 # BLUETOOTH WATCHDOG THREAD (Auto-Reconnect)
 # =============================================================================
 class BluetoothWatchdog(threading.Thread):
-    """Thread latar belakang yang memantau, mengkoneksikan ulang, dan menjaga speaker Bluetooth tetap aktif (Keep-Alive)."""
+    """Thread latar belakang yang memantau dan mengkoneksikan ulang speaker Bluetooth otomatis."""
     def __init__(self, config_getter):
         super().__init__(daemon=True)
         self.config_getter = config_getter
         self.running = True
         self.last_status = False
         self.connected_mac = None
-        self.last_keepalive_time = 0.0
 
     def run(self):
         while self.running:
@@ -485,7 +442,6 @@ class BluetoothWatchdog(threading.Thread):
                         if 'Connection successful' in res.stdout or 'Connected: yes' in res.stdout:
                             self.last_status = True
                             self.connected_mac = target_mac
-                            self.last_keepalive_time = time.time()
                             print(f"\n[BluetoothWatchdog] 🔵 Speaker {target_mac} BERHASIL terkoneksi otomatis! ✅")
                             # Set default sink
                             self._set_default_sink(target_mac)
@@ -494,14 +450,6 @@ class BluetoothWatchdog(threading.Thread):
                 else:
                     self.connected_mac = target_mac
                     self._set_default_sink(target_mac)
-
-                    # Keep-Alive Heartbeat: kirim sinyal hening 0 dB berkala
-                    # agar speaker portable (Acome A1, dll) tidak auto-power-off / mati sendiri saat idle.
-                    now = time.time()
-                    keepalive_interval = float(cfg.get('keepalive_interval_s', 45.0))
-                    if (now - self.last_keepalive_time) >= keepalive_interval:
-                        self.last_keepalive_time = now
-                        send_keepalive_pulse(target_mac)
 
             time.sleep(max(2, interval))
 
@@ -694,13 +642,12 @@ def interactive_menu():
         print("  6. 📊 Periksa Status Bluetooth & Audio Sink")
         print("  7. 🔗 Hubungkan Ulang Bluetooth Speaker Manual")
         print("  8. ❌ Putuskan Koneksi Bluetooth Speaker")
-        print("  9. 💓 Kirim Heartbeat Keep-Alive (Cegah Speaker Mati Sendiri)")
-        print("  10. 🤖 Jalankan sebagai ROS 2 Voice & Watchdog Node")
+        print("  9. 🤖 Jalankan sebagai ROS 2 Voice & Watchdog Node")
         print("  q. Keluar")
         print("=" * 58)
 
         try:
-            choice = input("👉 Pilih menu (1-10 / q): ").strip().lower()
+            choice = input("👉 Pilih menu (1-9 / q): ").strip().lower()
         except (KeyboardInterrupt, EOFError):
             print("\nKeluar.")
             break
@@ -739,14 +686,6 @@ def interactive_menu():
             print(f"🔌 Memutuskan koneksi {target_mac}...")
             disconnect_bluetooth_device(target_mac)
         elif choice == '9':
-            target_mac = config.get('target_mac', '')
-            print(f"💓 Mengirim Keep-Alive Silence Pulse ke speaker ({target_mac})...")
-            ok = send_keepalive_pulse(target_mac)
-            if ok:
-                print("✅ Heartbeat terkirim! Timer auto-sleep speaker berhasil di-reset.")
-            else:
-                print("⚠️ Gagal mengirim heartbeat. Pastikan speaker terhubung.")
-        elif choice == '10':
             print("🤖 Memulai ROS 2 Node Voice & Watchdog...")
             run_ros2_node()
         elif choice in ('q', 'exit', 'quit'):
@@ -763,7 +702,6 @@ def main():
     parser.add_argument('--pickup', action='store_true', help="Bunyikan suara tiba di pickup")
     parser.add_argument('--obstacle', action='store_true', help="Bunyikan suara permisi robot mau lewat")
     parser.add_argument('--chime', action='store_true', help="Bunyikan ding-dong chime saja")
-    parser.add_argument('--keepalive', action='store_true', help="Kirim pulsa keep-alive hening ke speaker sekarang")
     parser.add_argument('--status', action='store_true', help="Cek status bluetooth audio sink")
     parser.add_argument('--node', action='store_true', help="Jalankan sebagai ROS 2 Voice & Watchdog Node")
     parser.add_argument('--connect', type=str, help="Koneksikan ke MAC address bluetooth tertentu")
@@ -778,10 +716,6 @@ def main():
         print(f"Status Speaker {config.get('target_mac')}: {'TERHUBUNG ✅' if conn else 'TERPUTUS ❌'}")
     elif args.chime:
         play_audio_file(generate_chime_wav())
-    elif args.keepalive:
-        target_mac = config.get('target_mac', '')
-        ok = send_keepalive_pulse(target_mac)
-        print(f"Keep-Alive pulse ke {target_mac}: {'BERHASIL ✅' if ok else 'GAGAL ❌'}")
     elif args.arrival:
         speak(config.get('arrival_phrase', DEFAULT_CONFIG['arrival_phrase']), config=config)
     elif args.pickup:

@@ -113,7 +113,7 @@ class AdaptiveVelocityNode(Node):
     def encoder_ok(self, wall_now: float) -> bool:
         if not self.require_encoder:
             return True
-        return self.arduino_ready and (wall_now - self.last_odom_wall_time) < 2.0
+        return self.arduino_ready and (wall_now - self.last_odom_wall_time) < 1.0
 
     def on_amcl_pose(self, msg: PoseWithCovarianceStamped):
         self.last_amcl_tf_wall = time.time()
@@ -305,7 +305,7 @@ class AdaptiveVelocityNode(Node):
         #    dan aktifkan setir (angular) agar Nav2 DWB membelok menghindar!
         is_safe_stop_active = False
         if self.effective_state == "SAFE_STOP":
-            if safe_stop_duration < 5.0:
+            if safe_stop_duration < 15.0:
                 ceiling = 0.0
                 is_safe_stop_active = True
             else:
