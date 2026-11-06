@@ -305,7 +305,7 @@ class AdaptiveVelocityNode(Node):
         #    dan aktifkan setir (angular) agar Nav2 DWB membelok menghindar!
         is_safe_stop_active = False
         if self.effective_state == "SAFE_STOP":
-            if safe_stop_duration < 5.0:
+            if safe_stop_duration < 15.0:
                 ceiling = 0.0
                 is_safe_stop_active = True
             else:

@@ -609,7 +609,7 @@ class WaypointManager(Node):
                 if self.human_state == 'SAFE_STOP':
                     if safe_stop_since is None:
                         safe_stop_since = time.time()
-                    elif (time.time() - safe_stop_since) >= 5.0 and safe_stop_since != 0:
+                    elif (time.time() - safe_stop_since) >= 15.0 and safe_stop_since != 0:
                         self.log('info', '🚶 [HUMAN AWARE] Manusia diam > 5 detik: AMR beralih menghindar via local costmap...')
                         safe_stop_since = 0  # Tandai sudah log agar tidak berulang-ulang
                 else:
