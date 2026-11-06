@@ -3,6 +3,7 @@
   "target_name": "Acome A1",
   "auto_reconnect": true,
   "reconnect_interval_s": 5,
+  "keepalive_interval_s": 45,
   "obstacle_voice_delay_s": 10,
   "obstacle_voice_repeat_s": 12,
   "obstacle_phrase": "Permisi, saya mau lewat. Mohon beri jalan.",

@@ -1049,3 +1049,35 @@ Setelah itu, status AMCL tertahan di `AMCL ⏳` selamanya, dan percobaan auto-in
   2. `max_beams`: Dinaikkan dari `60` ke **`120` sinar** (pencocokan kontur dinding 2x lebih rapat).
   3. `laser_max_range`: Dibatasi dari `12.0` ke **`8.0` m** (mengeliminasi noise pantulan jauh RPLiDAR A1).
   4. `sigma_hit`: Disesuaikan dari `0.15` ke **`0.20` m** untuk memperluas area tangkap *likelihood field*.
+
+---
+
+## 📌 29. Solusi Speaker Bluetooth Acome A1 Terputus & Mati Sendiri Saat Idle (Keep-Alive Heartbeat)
+
+### 1. Gejala & Keluhan Lapangan:
+- Speaker Bluetooth Acome A1 (`0E:21:D5:E9:AB:5F`) dapat terhubung normal dan mengeluarkan suara ucapan/chime dengan baik saat dipicu.
+- Namun jika robot sedang standby atau bernavigasi tanpa bersuara selama 5–10 menit, **speaker tiba-tiba berbunyi nada 'power-off' dan mati sendiri secara fisik**.
+- Setelah speaker mati secara fisik, koneksi Bluetooth terputus dan skrip auto-reconnect tidak bisa menghubungkannya kembali (karena mikrokontroler Bluetooth pada speaker sudah dalam kondisi *shut down* / mati total, sehingga harus ditekan tombol fisiknya secara manual).
+
+### 2. Akar Masalah Fisik & Protokol:
+1. **Firmware Auto Power-Off / Sleep Timer pada Speaker Komersial (Acome A1)**:
+   - Speaker Bluetooth portabel komersial dirancang dengan proteksi hemat baterai internal (*power saving mode*).
+   - Di dalam mikrokontroler/DSP speaker tertanam timer otomatis: jika dalam waktu 5 hingga 10 menit tidak ada aliran paket audio (profil A2DP) yang diterima, sirkuit amplifier dan modul RF Bluetooth dimatikan secara permanen (*Deep Sleep / Power Off*).
+2. **PulseAudio Suspend-on-Idle di Linux (Ubuntu Jetson)**:
+   - Secara default, sistem audio Ubuntu (PulseAudio) mengaktifkan `module-suspend-on-idle` dengan batas waktu ~5 detik.
+   - Jika tidak ada aplikasi yang sedang memutar suara, PulseAudio menidurkan sink (`SUSPENDED`).
+   - Akibatnya, Jetson berhenti mentransmisikan *A2DP audio frames*. Kondisi ketiadaan paket data inilah yang memicu hitung mundur timer auto-off di dalam speaker hingga habis.
+
+### 3. Solusi: Inaudible Keep-Alive Audio Heartbeat:
+Mengimplementasikan mekanisme "detak jantung" hening berkala langsung pada [`test_robot_voice.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/test_robot_voice.py):
+1. **Sintesis Audio Hening Digital Murni (`generate_silence_wav()`)**:
+   - Menghasilkan file audio WAV 16-bit mono 44.1 kHz berdurasi 0.2 detik dengan amplitudo persis 0 (`b'\x00\x00'`).
+   - Karena amplitudonya 0, telinga manusia **sama sekali tidak mendengar suara apa pun** (tanpa klik, tanpa pop, dan tanpa dengung).
+2. **Pengiriman Berkala oleh `BluetoothWatchdog`**:
+   - Di dalam thread background `BluetoothWatchdog`, jika speaker terdeteksi `connected`, skrip secara berkala (default setiap 45 detik) mengirimkan pulsa audio hening ini langsung ke sink Bluetooth via `paplay` dan membangunkan sink (`pactl suspend-sink <sink> 0`).
+   - Aliran data frame A2DP yang masuk ke speaker secara otomatis **mereset counter sleep timer di dalam firmware Acome A1 kembali ke 0**.
+   - Hasil: Speaker Acome A1 tetap terjaga (*Always-On*), koneksi stabil, dan tidak pernah mati sendiri selama sistem robot menyala.
+3. **Konfigurasi & CLI**:
+   - Ditambahkan opsi `"keepalive_interval_s": 45` pada [`voice_config.json`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/voice_config.json).
+   - Ditambahkan pengujian manual `--keepalive` dan Menu 9 pada `interactive_menu()` di CLI.
+
