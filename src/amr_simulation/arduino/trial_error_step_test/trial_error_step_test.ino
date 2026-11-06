@@ -51,7 +51,7 @@ const float KD_R = 0.0000;
 const unsigned long SAMPLING_MS = 20;
 const float DT = SAMPLING_MS / 1000.0; // 0.02 s (50 Hz)
 
-// TARGET STEP RPM & DURASI
+// TARGET STEP RPM & DURASI KHUSUS 60 RPM
 const float TARGET_STEP_RPM = 60.0;
 const float T_STEP_MULAI    = 0.5;   // Detik ke-0.5 step diaktifkan
 const float DURASI_TOTAL    = 6.5;   // Total durasi pengujian (detik)
