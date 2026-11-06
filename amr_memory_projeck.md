@@ -1181,5 +1181,33 @@ Untuk meningkatkan etika dan keselamatan interaksi robot dengan manusia di area 
    - Mengikat event gerakan mouse desktop ke `window.addEventListener('mousemove')` dan `mouseup` pada saat klik kiri mouse sedang ditekan.
    - Operator laptop bebas menarik kursor ke sudut layar mana pun tanpa khawatir joystick terlepas.
 
+---
+
+## 📌 33. Skenario 3: Evaluasi Komparatif Perencana Global ($A^*$ vs Dijkstra) Sesuai Bab 3.5.3 Proposal
+
+### 1. Tujuan & Variabel Terkendali:
+Membuktikan efisiensi komputasi algoritma $A^*$ terhadap algoritma baseline Dijkstra pada matriks biaya global identik:
+- Matriks peta: Peta gudang tersimpan (`peta_l1_ddc.yaml`).
+- Resolusi grid: $0.05\text{ m}$ ($5\text{ cm/sel}$).
+- Radius sasis robot: $0.29\text{ m}$.
+- Lapisan inflasi: $0.55\text{ m}$ (`cost_scaling_factor: 10.0`).
+
+### 2. Dataset 15 Pasang Titik Start-Goal (Tabel 7 Proposal):
+- **Kompleksitas Rendah (SG-01 s/d SG-05)**: Jarak $1.50 - 3.00\text{ m}$ (koridor lurus bebas hambatan).
+- **Kompleksitas Sedang (SG-06 s/d SG-10)**: Jarak $3.53 - 6.51\text{ m}$ (belokan $90^\circ$, perempatan T, memutari rak tengah).
+- **Kompleksitas Tinggi (SG-11 s/d SG-15)**: Jarak $7.15 - 10.29\text{ m}$ (koridor zig-zag, partisi boks, diagonal lintas gudang).
+
+### 3. Implementasi Skrip Otomasi Pengujian ([`uji_astar_dijkstra_skripsi.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/uji_astar_dijkstra_skripsi.py)):
+- Mendukung pengujian otomatis 150 run ($15\text{ pasang} \times 5\text{ repetisi} \times 2\text{ algoritma}$).
+- Menghitung 4 metrik ilmiah secara otomatis:
+  1. **Planning Time ($T_{\text{plan}}$)** dalam ms via `time.perf_counter()`.
+  2. **Path Length ($L_{\text{path}}$)** dalam meter via akumulasi jarak Euklidean titik rute `/plan`.
+  3. **Path Cost ($C_{\text{path}}$)** via akumulasi biaya sel dari `/global_costmap/costmap`.
+  4. **Collision-Free**: Verifikasi seluruh titik rute memiliki $\text{cost} < 253$.
+- Uji hipotesis otomatis: Memvalidasi pemangkasan waktu komputasi $\Delta T \ge 40\%$ pada kompleksitas Sedang dan Tinggi.
+- Hasil tersimpan otomatis di `~/hasil_pengujian_skripsi/skenario3_evaluasi_astar_dijkstra.csv` dan `~/hasil_pengujian_skripsi/skenario3_summary_komparasi.csv`.
+- Panduan SOP lengkap tersedia di artifact [`panduan_skenario3_astar_vs_dijkstra.md`](file:///home/faid/.gemini/antigravity/brain/a3af2b69-fd73-41ee-8f16-8f2155ff7489/panduan_skenario3_astar_vs_dijkstra.md).
+
+
 
 
