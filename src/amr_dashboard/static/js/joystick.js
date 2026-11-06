@@ -203,24 +203,52 @@ function initJoystick() {
     function startTouch(e) {
         e.preventDefault();
         touching = true;
+
+        if (e.pointerId !== undefined && canvas.setPointerCapture) {
+            try {
+                canvas.setPointerCapture(e.pointerId);
+            } catch (err) {}
+        }
+
         const pos = getRelativePos(e);
         updateKnob(pos.x, pos.y);
 
         if (joystickSendTimer) clearInterval(joystickSendTimer);
         sendVelocity(true);
         joystickSendTimer = setInterval(() => sendVelocity(false), 120);
+
+        // Pasang window listener untuk menjamin deteksi gerakan di seluruh layar laptop/HP
+        window.addEventListener('pointermove', moveTouch, { passive: false });
+        window.addEventListener('pointerup', endTouch, { passive: false });
+        window.addEventListener('pointercancel', endTouch, { passive: false });
+        window.addEventListener('mousemove', moveTouch);
+        window.addEventListener('mouseup', endTouch);
     }
 
     function moveTouch(e) {
-        e.preventDefault();
         if (!touching) return;
+        if (e.cancelable) e.preventDefault();
         const pos = getRelativePos(e);
         updateKnob(pos.x, pos.y);
     }
 
     function endTouch(e) {
-        e.preventDefault();
+        if (!touching) return;
+        if (e && e.cancelable) e.preventDefault();
         touching = false;
+
+        if (e && e.pointerId !== undefined && canvas.releasePointerCapture) {
+            try {
+                canvas.releasePointerCapture(e.pointerId);
+            } catch (err) {}
+        }
+
+        window.removeEventListener('pointermove', moveTouch);
+        window.removeEventListener('pointerup', endTouch);
+        window.removeEventListener('pointercancel', endTouch);
+        window.removeEventListener('mousemove', moveTouch);
+        window.removeEventListener('mouseup', endTouch);
+
         knobX = center;
         knobY = center;
 
@@ -242,15 +270,18 @@ function initJoystick() {
         draw();
     }
 
-    canvas.addEventListener('touchstart', startTouch, { passive: false });
-    canvas.addEventListener('touchmove', moveTouch, { passive: false });
-    canvas.addEventListener('touchend', endTouch, { passive: false });
-    canvas.addEventListener('touchcancel', endTouch, { passive: false });
-
-    canvas.addEventListener('mousedown', startTouch);
-    canvas.addEventListener('mousemove', moveTouch);
-    canvas.addEventListener('mouseup', endTouch);
-    canvas.addEventListener('mouseleave', endTouch);
+    if (window.PointerEvent) {
+        canvas.addEventListener('pointerdown', startTouch, { passive: false });
+        canvas.addEventListener('pointermove', moveTouch, { passive: false });
+        canvas.addEventListener('pointerup', endTouch, { passive: false });
+        canvas.addEventListener('pointercancel', endTouch, { passive: false });
+    } else {
+        canvas.addEventListener('touchstart', startTouch, { passive: false });
+        canvas.addEventListener('touchmove', moveTouch, { passive: false });
+        canvas.addEventListener('touchend', endTouch, { passive: false });
+        canvas.addEventListener('touchcancel', endTouch, { passive: false });
+        canvas.addEventListener('mousedown', startTouch);
+    }
 
     draw();
 }

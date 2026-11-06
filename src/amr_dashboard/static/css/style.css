@@ -1219,6 +1219,114 @@ body::before {
     height: auto;
 }
 
+.map-container.map-fullscreen {
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    max-height: 100vh !important;
+    z-index: 5000 !important;
+    border-radius: 0 !important;
+    border: none !important;
+    margin: 0 !important;
+    background: #090d14 !important;
+}
+
+.map-container.map-fullscreen canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.map-overlay-controls {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    z-index: 20;
+}
+
+.map-ctrl-btn {
+    width: 34px;
+    height: 34px;
+    border-radius: var(--radius-xs);
+    background: rgba(17, 21, 31, 0.88);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--transition);
+    user-select: none;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+.map-ctrl-btn:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--accent);
+    color: var(--accent-bright);
+    transform: translateY(-1px);
+}
+
+.map-ctrl-btn:active {
+    transform: scale(0.95);
+}
+
+.map-hud-bar {
+    position: absolute;
+    bottom: 10px;
+    right: 10px;
+    padding: 5px 12px;
+    background: rgba(17, 21, 31, 0.88);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-radius: var(--radius-xs);
+    border: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+    pointer-events: none;
+    z-index: 10;
+}
+
+.map-fullscreen-exit-banner {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(15, 23, 42, 0.94);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    padding: 6px 16px;
+    color: var(--accent-bright);
+    font-size: 0.76rem;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    z-index: 25;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
+    user-select: none;
+    transition: var(--transition);
+}
+
+.map-fullscreen-exit-banner:hover {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent-bright);
+    transform: translateX(-50%) translateY(-1px);
+}
+
 .map-legend {
     position: absolute;
     bottom: 10px;
@@ -1942,7 +2050,7 @@ select.input-field {
     inset: 0;
     background: rgba(0, 0, 0, 0.65);
     backdrop-filter: blur(4px);
-    z-index: 150;
+    z-index: 10000;
     display: flex;
     align-items: center;
     justify-content: center;

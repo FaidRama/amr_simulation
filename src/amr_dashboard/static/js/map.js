@@ -114,6 +114,23 @@ function pixelToWorld(px, py) {
     return { wx: Math.round(wx * 100) / 100, wy: Math.round(wy * 100) / 100 };
 }
 
+function screenToWorld(clientX, clientY, canvas, viewport = null) {
+    if (!canvas || !MAP_STATE.metadata) return { wx: 0, wy: 0 };
+    const rect = canvas.getBoundingClientRect();
+    const canvasPx = (clientX - rect.left) * (canvas.width / (rect.width || 1));
+    const canvasPy = (clientY - rect.top) * (canvas.height / (rect.height || 1));
+
+    let basePx = canvasPx;
+    let basePy = canvasPy;
+
+    if (viewport) {
+        basePx = (canvasPx - viewport.panX) / viewport.zoom;
+        basePy = (canvasPy - viewport.panY) / viewport.zoom;
+    }
+
+    return pixelToWorld(basePx, basePy);
+}
+
 // ====================== DRAW FUNCTIONS ======================
 function drawMap(canvas, ctx, options = {}) {
     if (!MAP_STATE.loaded || !canvas || !canvas.parentElement) return;
@@ -130,25 +147,37 @@ function drawMap(canvas, ctx, options = {}) {
         showRobot = true,
         showWaypoints = false,
         showTaskQueue = false,
+        viewport = null,
     } = options;
 
     const container = canvas.parentElement;
-    const containerWidth = container.clientWidth || 400;
+    const isFs = container && container.classList.contains('map-fullscreen');
+    const containerWidth = isFs ? window.innerWidth : (container ? (container.clientWidth || 400) : 400);
+    const containerHeight = isFs ? window.innerHeight : Math.round(MAP_STATE.imgHeight * (containerWidth / MAP_STATE.imgWidth));
+
     MAP_STATE.scale = containerWidth / MAP_STATE.imgWidth;
     MAP_STATE.canvasWidth = containerWidth;
-    MAP_STATE.canvasHeight = Math.round(MAP_STATE.imgHeight * MAP_STATE.scale);
+    MAP_STATE.canvasHeight = isFs ? containerHeight : Math.round(MAP_STATE.imgHeight * MAP_STATE.scale);
 
     if (canvas.width !== MAP_STATE.canvasWidth || canvas.height !== MAP_STATE.canvasHeight) {
         canvas.width = MAP_STATE.canvasWidth;
         canvas.height = MAP_STATE.canvasHeight;
     }
 
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.save();
+    if (viewport) {
+        ctx.translate(viewport.panX, viewport.panY);
+        ctx.scale(viewport.zoom, viewport.zoom);
+    }
+
     // Draw SLAM occupancy grid image
-    ctx.drawImage(MAP_STATE.image, 0, 0, MAP_STATE.canvasWidth, MAP_STATE.canvasHeight);
+    ctx.drawImage(MAP_STATE.image, 0, 0, MAP_STATE.canvasWidth, Math.round(MAP_STATE.imgHeight * MAP_STATE.scale));
 
     // Apply subtle studio dark contrast overlay
     ctx.fillStyle = 'rgba(9, 9, 11, 0.22)';
-    ctx.fillRect(0, 0, MAP_STATE.canvasWidth, MAP_STATE.canvasHeight);
+    ctx.fillRect(0, 0, MAP_STATE.canvasWidth, Math.round(MAP_STATE.imgHeight * MAP_STATE.scale));
 
     // Draw Home / Docking Station marker
     if (showWaypoints && APP.homePosition) {
@@ -230,6 +259,8 @@ function drawMap(canvas, ctx, options = {}) {
         const { px, py } = worldToPixel(APP.pose.x, APP.pose.y);
         drawRobot(ctx, px, py, APP.pose.yaw);
     }
+
+    ctx.restore();
 }
 
 function drawHomeMarker(ctx, x, y) {
@@ -362,7 +393,136 @@ function drawRobot(ctx, x, y, yaw) {
     ctx.restore();
 }
 
-// ====================== DELIVERY MAP ======================
+// ====================== DELIVERY MAP (ZOOM, PAN & FULLSCREEN) ======================
+const DELIVERY_VIEWPORT = {
+    zoom: 1.0,
+    panX: 0,
+    panY: 0,
+    isFullscreen: false,
+};
+
+function updateDeliveryMapHud(extraText = '') {
+    const hud = document.getElementById('delivery-map-cursor-hud');
+    if (!hud) return;
+    const zoomPct = Math.round(DELIVERY_VIEWPORT.zoom * 100);
+    if (extraText) {
+        hud.innerHTML = extraText;
+    } else {
+        hud.innerHTML = `🔍 Zoom: <strong>${zoomPct}%</strong> | Scroll: Zoom, Drag: Geser, Klik: Pilih Titik`;
+    }
+}
+
+function zoomDeliveryMap(factor) {
+    const canvas = document.getElementById('delivery-map-canvas');
+    if (!canvas) return;
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    const oldZoom = DELIVERY_VIEWPORT.zoom;
+    const newZoom = Math.max(0.6, Math.min(6.0, oldZoom * factor));
+    const baseX = (cx - DELIVERY_VIEWPORT.panX) / oldZoom;
+    const baseY = (cy - DELIVERY_VIEWPORT.panY) / oldZoom;
+    DELIVERY_VIEWPORT.zoom = newZoom;
+    DELIVERY_VIEWPORT.panX = cx - baseX * newZoom;
+    DELIVERY_VIEWPORT.panY = cy - baseY * newZoom;
+    updateDeliveryMapHud();
+}
+
+function resetDeliveryMapView() {
+    DELIVERY_VIEWPORT.zoom = 1.0;
+    DELIVERY_VIEWPORT.panX = 0;
+    DELIVERY_VIEWPORT.panY = 0;
+    updateDeliveryMapHud();
+    if (typeof showToast === 'function') {
+        showToast('Tampilan peta di-reset (100%)', 'info');
+    }
+}
+
+function toggleDeliveryMapFullscreen() {
+    const container = document.getElementById('delivery-map-container');
+    if (!container) return;
+    const isFs = container.classList.toggle('map-fullscreen');
+    DELIVERY_VIEWPORT.isFullscreen = isFs;
+
+    const fsBtn = document.getElementById('btn-delivery-fullscreen');
+    if (fsBtn) {
+        fsBtn.innerHTML = isFs ? '✕' : '⛶';
+        fsBtn.title = isFs ? 'Keluar Layar Penuh (Esc)' : 'Layar Penuh (Full Screen)';
+    }
+
+    let exitBanner = document.getElementById('delivery-map-exit-banner');
+    if (isFs) {
+        if (!exitBanner) {
+            exitBanner = document.createElement('div');
+            exitBanner.id = 'delivery-map-exit-banner';
+            exitBanner.className = 'map-fullscreen-exit-banner';
+            exitBanner.innerHTML = '<span>✕ KELUAR LAYAR PENUH (Esc)</span>';
+            exitBanner.onclick = () => toggleDeliveryMapFullscreen();
+            container.appendChild(exitBanner);
+        }
+        exitBanner.style.display = 'flex';
+        if (typeof showToast === 'function') {
+            showToast('Mode Layar Penuh Aktif — Tekan Esc untuk keluar', 'info');
+        }
+    } else {
+        if (exitBanner) exitBanner.style.display = 'none';
+    }
+}
+
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        const container = document.getElementById('delivery-map-container');
+        if (container && container.classList.contains('map-fullscreen')) {
+            toggleDeliveryMapFullscreen();
+        }
+    }
+});
+
+function openPointModal(wx, wy) {
+    showModal(
+        'Tetapkan Koordinat Peta',
+        `<span class="mono">POSISI KLIK: <strong>X=${wx.toFixed(2)}m, Y=${wy.toFixed(2)}m</strong></span><br>
+         Pilih tindakan untuk titik koordinat ini:`,
+        [
+            {
+                label: 'Set Pickup', class: 'btn-primary',
+                action: () => {
+                    APP.pendingPickup = { name: `Map (${wx.toFixed(2)}, ${wy.toFixed(2)})`, x: wx, y: wy };
+                    const el = document.getElementById('pickup-selected');
+                    if (el) el.innerHTML = `${getIcon('check', 13)} Pickup: [${wx.toFixed(2)}, ${wy.toFixed(2)}]`;
+                    showToast(`Pickup ditetapkan: (${wx.toFixed(2)}, ${wy.toFixed(2)})`, 'info');
+                }
+            },
+            {
+                label: 'Set Delivery', class: 'btn-success',
+                action: () => {
+                    APP.pendingDelivery = { name: `Map (${wx.toFixed(2)}, ${wy.toFixed(2)})`, x: wx, y: wy };
+                    const el = document.getElementById('delivery-selected');
+                    if (el) el.innerHTML = `${getIcon('check', 13)} Delivery: [${wx.toFixed(2)}, ${wy.toFixed(2)}]`;
+                    showToast(`Delivery ditetapkan: (${wx.toFixed(2)}, ${wy.toFixed(2)})`, 'info');
+                }
+            },
+            {
+                label: '📍 Set Posisi Awal Robot (AMCL)', class: 'btn-warning',
+                action: () => {
+                    if (typeof openInitialPoseModal === 'function') {
+                        openInitialPoseModal(wx, wy);
+                    } else if (typeof sendInitialPoseToRobot === 'function') {
+                        sendInitialPoseToRobot(wx, wy, 0.0, false);
+                    }
+                }
+            },
+            {
+                label: '💾 Simpan ke Daftar Lokasi', class: 'btn-secondary',
+                action: () => {
+                    if (typeof openSavePointFromMapModal === 'function') {
+                        openSavePointFromMapModal(wx, wy);
+                    }
+                }
+            }
+        ]
+    );
+}
+
 async function initDeliveryMap() {
     const canvas = document.getElementById('delivery-map-canvas');
     if (!canvas) return;
@@ -377,57 +537,99 @@ async function initDeliveryMap() {
     }
 
     const ctx = canvas.getContext('2d');
+    canvas.style.cursor = 'crosshair';
 
-    canvas.onclick = (e) => {
-        const rect = canvas.getBoundingClientRect();
-        const px = e.clientX - rect.left;
-        const py = e.clientY - rect.top;
-        const { wx, wy } = pixelToWorld(px, py);
+    if (!canvas._deliveryListenersAttached) {
+        canvas._deliveryListenersAttached = true;
 
-        showModal(
-            'Tetapkan Koordinat Peta',
-            `<span class="mono">POSISI KLIK: <strong>X=${wx}m, Y=${wy}m</strong></span><br>
-             Pilih tindakan untuk titik koordinat ini:`,
-            [
-                {
-                    label: 'Set Pickup', class: 'btn-primary',
-                    action: () => {
-                        APP.pendingPickup = { name: `Map (${wx}, ${wy})`, x: wx, y: wy };
-                        const el = document.getElementById('pickup-selected');
-                        if (el) el.innerHTML = `${getIcon('check', 13)} Pickup: [${wx}, ${wy}]`;
-                        showToast(`Pickup ditetapkan: (${wx}, ${wy})`, 'info');
-                    }
-                },
-                {
-                    label: 'Set Delivery', class: 'btn-success',
-                    action: () => {
-                        APP.pendingDelivery = { name: `Map (${wx}, ${wy})`, x: wx, y: wy };
-                        const el = document.getElementById('delivery-selected');
-                        if (el) el.innerHTML = `${getIcon('check', 13)} Delivery: [${wx}, ${wy}]`;
-                        showToast(`Delivery ditetapkan: (${wx}, ${wy})`, 'info');
-                    }
-                },
-                {
-                    label: '📍 Set Posisi Awal Robot (AMCL)', class: 'btn-warning',
-                    action: () => {
-                        if (typeof openInitialPoseModal === 'function') {
-                            openInitialPoseModal(wx, wy);
-                        } else if (typeof sendInitialPoseToRobot === 'function') {
-                            sendInitialPoseToRobot(wx, wy, 0.0, false);
-                        }
-                    }
-                },
-                {
-                    label: '💾 Simpan ke Daftar Lokasi', class: 'btn-secondary',
-                    action: () => {
-                        if (typeof openSavePointFromMapModal === 'function') {
-                            openSavePointFromMapModal(wx, wy);
-                        }
-                    }
+        // Zoom via Mouse Wheel
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const cursorX = (e.clientX - rect.left) * (canvas.width / (rect.width || 1));
+            const cursorY = (e.clientY - rect.top) * (canvas.height / (rect.height || 1));
+
+            const zoomFactor = e.deltaY < 0 ? 1.2 : (1 / 1.2);
+            const oldZoom = DELIVERY_VIEWPORT.zoom;
+            const newZoom = Math.max(0.6, Math.min(6.0, oldZoom * zoomFactor));
+
+            if (newZoom !== oldZoom) {
+                const baseX = (cursorX - DELIVERY_VIEWPORT.panX) / oldZoom;
+                const baseY = (cursorY - DELIVERY_VIEWPORT.panY) / oldZoom;
+                DELIVERY_VIEWPORT.zoom = newZoom;
+                DELIVERY_VIEWPORT.panX = cursorX - baseX * newZoom;
+                DELIVERY_VIEWPORT.panY = cursorY - baseY * newZoom;
+
+                const { wx, wy } = screenToWorld(e.clientX, e.clientY, canvas, DELIVERY_VIEWPORT);
+                updateDeliveryMapHud(`📍 <strong>X=${wx.toFixed(2)}m, Y=${wy.toFixed(2)}m</strong> | 🔍 Zoom: <strong>${Math.round(newZoom * 100)}%</strong>`);
+            }
+        }, { passive: false });
+
+        // Hover Coordinate Display
+        canvas.addEventListener('pointermove', (e) => {
+            if (isPointerDown) return;
+            const { wx, wy } = screenToWorld(e.clientX, e.clientY, canvas, DELIVERY_VIEWPORT);
+            const zoomPct = Math.round(DELIVERY_VIEWPORT.zoom * 100);
+            updateDeliveryMapHud(`📍 Kursor: <strong>X=${wx.toFixed(2)}m, Y=${wy.toFixed(2)}m</strong> | 🔍 Zoom: <strong>${zoomPct}%</strong>`);
+        });
+
+        canvas.addEventListener('pointerleave', () => {
+            if (!isPointerDown) updateDeliveryMapHud();
+        });
+
+        // Pan Drag vs Click Selection
+        let isPointerDown = false;
+        let isDragging = false;
+        let startX = 0;
+        let startY = 0;
+        let lastX = 0;
+        let lastY = 0;
+
+        canvas.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0 && e.pointerType === 'mouse') return;
+            isPointerDown = true;
+            isDragging = false;
+            startX = e.clientX;
+            startY = e.clientY;
+            lastX = e.clientX;
+            lastY = e.clientY;
+            canvas.style.cursor = 'grabbing';
+        });
+
+        window.addEventListener('pointermove', (e) => {
+            if (!isPointerDown) return;
+            const dx = e.clientX - lastX;
+            const dy = e.clientY - lastY;
+            const dist = Math.hypot(e.clientX - startX, e.clientY - startY);
+
+            if (dist > 4) {
+                isDragging = true;
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / (rect.width || 1);
+                const scaleY = canvas.height / (rect.height || 1);
+                DELIVERY_VIEWPORT.panX += dx * scaleX;
+                DELIVERY_VIEWPORT.panY += dy * scaleY;
+            }
+            lastX = e.clientX;
+            lastY = e.clientY;
+        });
+
+        window.addEventListener('pointerup', (e) => {
+            if (!isPointerDown) return;
+            isPointerDown = false;
+            canvas.style.cursor = 'crosshair';
+
+            if (!isDragging) {
+                const rect = canvas.getBoundingClientRect();
+                if (e.clientX >= rect.left && e.clientX <= rect.right &&
+                    e.clientY >= rect.top && e.clientY <= rect.bottom) {
+                    const { wx, wy } = screenToWorld(e.clientX, e.clientY, canvas, DELIVERY_VIEWPORT);
+                    openPointModal(wx, wy);
                 }
-            ]
-        );
-    };
+            }
+            isDragging = false;
+        });
+    }
 
     function animate() {
         if (!document.getElementById('delivery-map-canvas')) return;
@@ -435,6 +637,7 @@ async function initDeliveryMap() {
             showRobot: true,
             showWaypoints: true,
             showTaskQueue: true,
+            viewport: DELIVERY_VIEWPORT,
         });
         deliveryMapAnimFrame = requestAnimationFrame(animate);
     }
@@ -774,5 +977,9 @@ window.reloadMapData = reloadMapData;
 window.initMappingMap = initMappingMap;
 window.loadLiveSlamMapData = loadLiveSlamMapData;
 window.clearRobotTrail = clearRobotTrail;
+window.zoomDeliveryMap = zoomDeliveryMap;
+window.resetDeliveryMapView = resetDeliveryMapView;
+window.toggleDeliveryMapFullscreen = toggleDeliveryMapFullscreen;
+window.screenToWorld = screenToWorld;
 
 

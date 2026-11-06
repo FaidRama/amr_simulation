@@ -592,11 +592,23 @@ function renderDelivery() {
                             <button class="btn btn-outline btn-sm" style="padding:4px 9px; font-size:0.7rem;" onclick="clearRobotTrail()" title="Hapus jejak lintasan hijau robot pada peta">
                                 🧹 Reset Jejak
                             </button>
+                            <button class="btn btn-primary btn-sm" style="padding:4px 10px; font-size:0.7rem; font-weight:600;" onclick="toggleDeliveryMapFullscreen()" title="Buka peta mode layar penuh (Full Screen) agar akurat memilih titik">
+                                ⛶ Layar Penuh
+                            </button>
                         </div>
                     </div>
 
                     <div class="map-container" id="delivery-map-container">
                         <canvas id="delivery-map-canvas"></canvas>
+                        <div class="map-overlay-controls">
+                            <button type="button" class="map-ctrl-btn" onclick="zoomDeliveryMap(1.3)" title="Perbesar (Zoom In)">＋</button>
+                            <button type="button" class="map-ctrl-btn" onclick="zoomDeliveryMap(0.77)" title="Perkecil (Zoom Out)">－</button>
+                            <button type="button" class="map-ctrl-btn" onclick="resetDeliveryMapView()" title="Reset Tampilan (Fit Peta)">⟲</button>
+                            <button type="button" class="map-ctrl-btn" id="btn-delivery-fullscreen" onclick="toggleDeliveryMapFullscreen()" title="Layar Penuh (Full Screen)">⛶</button>
+                        </div>
+                        <div class="map-hud-bar" id="delivery-map-cursor-hud">
+                            🔍 Zoom: 100% | Scroll: Zoom, Drag: Geser, Klik: Pilih Titik
+                        </div>
                         <div class="map-legend">
                             <span class="legend-pickup">Pickup</span>
                             <span class="legend-delivery">Delivery</span>
