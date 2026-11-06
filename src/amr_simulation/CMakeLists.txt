@@ -50,6 +50,7 @@ install(PROGRAMS
   scripts/test_robot_voice.py
   scripts/uji_amcl_skripsi.py
   scripts/uji_astar_dijkstra_skripsi.py
+  scripts/uji_replanning_skripsi.py
   scripts/evaluasi_navigasi_skripsi.py
   DESTINATION lib/${PROJECT_NAME}
 )
