@@ -1014,3 +1014,70 @@ Setelah itu, status AMCL tertahan di `AMCL ⏳` selamanya, dan percobaan auto-in
   - Dapat membandingkan kurva dari beberapa file pengujian (misal step 100, 120, 140, 160, 180) dalam satu kanvas gambar 3-subplot (PWM, RPM Motor Kiri, RPM Motor Kanan).
   - Menghasilkan tabel perbandingan $ dan $\tau$ lintas variasi step untuk lampiran dokumen skripsi/laporan.
 
+---
+
+## 📌 28. Solusi Posisi Robot Meleset di Peta: Analisis "Nyerempet", Selip Odometri, & Tuning Responsivitas AMCL
+
+### 1. Gejala & Observasi Lapangan:
+- Robot berhasil menjalankan misi *pickup* dan *deliver*.
+- Namun saat bermanuver putar arah atau mendekati belokan, robot terkadang **menyerempet (*scraping*) dinding/sudut**, lalu maju lagi.
+- Setelah menyerempet atau putar arah:
+  - Arah hadap (*heading/yaw*) robot di peta sering terlihat "lumayan benar".
+  - Tetapi **posisi koordinat ($x, y$) di peta tertinggal atau bergeser jauh dari posisi fisik aslinya**, yang berujung pada salah belok di persimpangan berikutnya.
+
+### 2. Rantai Kausalitas Fisik (Akar Masalah):
+1. **Pemicu Awal (Nyerempet Dinding/Sudut Saat Belok)**:
+   - Sasis robot memiliki jarak antar roda `wheel_separation: 0.458 m`. Ditambah lebar ban dan sasis, radius diagonal terluar robot mencapai $\approx 0.36 - 0.38\text{ m}$.
+   - Sebelumnya, parameter `robot_radius: 0.30` di Costmap terlalu kecil (Nav2 mengasumsikan robot silinder $30\text{ cm}$).
+   - Ditambah bobot `BaseObstacle.scale: 0.05` pada DWB Local Planner sangat rendah, sehingga DWB memotong jalur sangat dekat dengan tepi sudut.
+   - Saat robot berputar di dekat sudut, sudut terluar sasis mengayun keluar (*tail swing*) dan menyenggol dinding ("nyerempet").
+2. **Lonjakan Galat Odometri Akibat Selip Ban (*Wheel Slip*)**:
+   - Ketika sasis robot tersangkut/menyerempet dinding, bodi tertahan sesaat.
+   - Namun motor roda PG36 tetap berputar, menyebabkan ban karet selip di lantai.
+   - Enkoder membaca pulsa tick dan odometri menghitung seolah-olah robot sudah maju $30 - 40\text{ cm}$ atau berputar penuh, padahal secara fisik robot terhenti.
+   - Terjadi **lonjakan galat odometri mendadak**.
+3. **Mengapa Arah Hadap Benar tapi Posisi Meleset?**:
+   - Dinding lorong lurus memberikan petunjuk sudut yang sangat kuat pada pindaian LiDAR, sehingga AMCL dapat mengoreksi sudut hadap (*yaw*) dengan cepat.
+   - Namun di sepanjang dinding yang rata, pindaian LiDAR pada posisi $x$ dan $x + 30\text{ cm}$ tampak identik (*perceptual aliasing*).
+   - Di sisi lain, parameter `alpha1` s/d `alpha4: 0.1` sebelumnya membuat AMCL terlalu percaya pada odometri, sehingga AMCL tidak leluasa menggeser posisi kembali ke titik fisik sebenarnya.
+
+### 3. Solusi Terfokus pada AMCL di [`nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml):
+- **Lingkup Tanggung Jawab Skripsi Pengguna**: SLAM, AMCL, dan Global Planner A\*.
+  - Parameter DWB Controller (`BaseObstacle.scale: 0.05`) dan Costmap (`robot_radius: 0.30`, `inflation_radius: 0.52`) tetap dipertahankan sesuai kebutuhan lorong sempit dan modul rekan tim.
+- **Tuning Peningkatan Responsivitas AMCL (Monte Carlo Localization)**:
+  1. `alpha1`, `alpha2`, `alpha3`, `alpha4`: Dinaikkan dari `0.1` ke **`0.20`** (toleransi noise odometri saat putar/maju lebih fleksibel, sehingga saat terjadi selip/gesekan ringan, sebaran partikel cukup lebar untuk memberi kuasa bagi LiDAR menarik posisi robot).
+  2. `max_beams`: Dinaikkan dari `60` ke **`120` sinar** (pencocokan kontur dinding 2x lebih rapat).
+  3. `laser_max_range`: Dibatasi dari `12.0` ke **`8.0` m** (mengeliminasi noise pantulan jauh RPLiDAR A1).
+  4. `sigma_hit`: Disesuaikan dari `0.15` ke **`0.20` m** untuk memperluas area tangkap *likelihood field*.
+
+---
+
+## 📌 29. Solusi Speaker Bluetooth Acome A1 Terputus & Mati Sendiri Saat Idle (Keep-Alive Heartbeat)
+
+### 1. Gejala & Keluhan Lapangan:
+- Speaker Bluetooth Acome A1 (`0E:21:D5:E9:AB:5F`) dapat terhubung normal dan mengeluarkan suara ucapan/chime dengan baik saat dipicu.
+- Namun jika robot sedang standby atau bernavigasi tanpa bersuara selama 5–10 menit, **speaker tiba-tiba berbunyi nada 'power-off' dan mati sendiri secara fisik**.
+- Setelah speaker mati secara fisik, koneksi Bluetooth terputus dan skrip auto-reconnect tidak bisa menghubungkannya kembali (karena mikrokontroler Bluetooth pada speaker sudah dalam kondisi *shut down* / mati total, sehingga harus ditekan tombol fisiknya secara manual).
+
+### 2. Akar Masalah Fisik & Protokol:
+1. **Firmware Auto Power-Off / Sleep Timer pada Speaker Komersial (Acome A1)**:
+   - Speaker Bluetooth portabel komersial dirancang dengan proteksi hemat baterai internal (*power saving mode*).
+   - Di dalam mikrokontroler/DSP speaker tertanam timer otomatis: jika dalam waktu 5 hingga 10 menit tidak ada aliran paket audio (profil A2DP) yang diterima, sirkuit amplifier dan modul RF Bluetooth dimatikan secara permanen (*Deep Sleep / Power Off*).
+2. **PulseAudio Suspend-on-Idle di Linux (Ubuntu Jetson)**:
+   - Secara default, sistem audio Ubuntu (PulseAudio) mengaktifkan `module-suspend-on-idle` dengan batas waktu ~5 detik.
+   - Jika tidak ada aplikasi yang sedang memutar suara, PulseAudio menidurkan sink (`SUSPENDED`).
+   - Akibatnya, Jetson berhenti mentransmisikan *A2DP audio frames*. Kondisi ketiadaan paket data inilah yang memicu hitung mundur timer auto-off di dalam speaker hingga habis.
+
+### 3. Solusi: Inaudible Keep-Alive Audio Heartbeat:
+Mengimplementasikan mekanisme "detak jantung" hening berkala langsung pada [`test_robot_voice.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/test_robot_voice.py):
+1. **Sintesis Audio Hening Digital Murni (`generate_silence_wav()`)**:
+   - Menghasilkan file audio WAV 16-bit mono 44.1 kHz berdurasi 0.2 detik dengan amplitudo persis 0 (`b'\x00\x00'`).
+   - Karena amplitudonya 0, telinga manusia **sama sekali tidak mendengar suara apa pun** (tanpa klik, tanpa pop, dan tanpa dengung).
+2. **Pengiriman Berkala oleh `BluetoothWatchdog`**:
+   - Di dalam thread background `BluetoothWatchdog`, jika speaker terdeteksi `connected`, skrip secara berkala (default setiap 45 detik) mengirimkan pulsa audio hening ini langsung ke sink Bluetooth via `paplay` dan membangunkan sink (`pactl suspend-sink <sink> 0`).
+   - Aliran data frame A2DP yang masuk ke speaker secara otomatis **mereset counter sleep timer di dalam firmware Acome A1 kembali ke 0**.
+   - Hasil: Speaker Acome A1 tetap terjaga (*Always-On*), koneksi stabil, dan tidak pernah mati sendiri selama sistem robot menyala.
+3. **Konfigurasi & CLI**:
+   - Ditambahkan opsi `"keepalive_interval_s": 45` pada [`voice_config.json`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/voice_config.json).
+   - Ditambahkan pengujian manual `--keepalive` dan Menu 9 pada `interactive_menu()` di CLI.
+

@@ -113,7 +113,7 @@ class AdaptiveVelocityNode(Node):
     def encoder_ok(self, wall_now: float) -> bool:
         if not self.require_encoder:
             return True
-        return self.arduino_ready and (wall_now - self.last_odom_wall_time) < 1.0
+        return self.arduino_ready and (wall_now - self.last_odom_wall_time) < 2.0
 
     def on_amcl_pose(self, msg: PoseWithCovarianceStamped):
         self.last_amcl_tf_wall = time.time()
