@@ -255,7 +255,7 @@ async function quickDispatchTo(name, x, y, yaw) {
                 class: 'btn-primary',
                 action: async () => {
                     const tasks = [{
-                        pickup: { name: 'Posisi Saat Ini', x: APP.pose.x, y: APP.pose.y },
+                        type: 'direct',
                         delivery: { name: name, x: x, y: y, yaw: yaw }
                     }];
                     const res = await apiPost('/api/delivery/start', { tasks });

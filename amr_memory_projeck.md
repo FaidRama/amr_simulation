@@ -1232,5 +1232,30 @@ Memvalidasi keandalan integrasi subsistem navigasi otonom Nav2 saat menghadapi r
   - $T_{\text{latency}}$: Total latensi sistem dari deteksi laser hingga rute baru terbit di `/plan` ($\approx 80 - 95\text{ ms}$).
   - Keduanya terbukti jauh di bawah ambang batas $200\text{ ms}$.
 - **Penyimpanan Data Ilmiah**:
-  - Hasil tersimpan otomatis di `~/hasil_pengujian_skripsi/skenario4_evaluasi_replanning.csv`.
-- Panduan SOP lengkap dan analisis jawaban penguji tersedia di artifact [`panduan_skenario4_replanning.md`](file:///home/faid/.gemini/antigravity/brain/a3af2b69-fd73-41ee-8f16-8f2155ff7489/panduan_skenario4_replanning.md).
+  - Panduan SOP lengkap dan analisis jawaban penguji tersedia di artifact [`panduan_skenario4_replanning.md`](file:///home/faid/.gemini/antigravity/brain/a3af2b69-fd73-41ee-8f16-8f2155ff7489/panduan_skenario4_replanning.md).
+
+---
+
+## 📌 35. Fitur Mode Pengiriman Sekali Antar (*Direct / Single Destination Dispatch*) Tanpa Pickup
+
+### 1. Kebutuhan Operasional & Lapangan:
+- **Masalah Sebelumnya**: Pada alur bawaan sistem pengiriman, operator wajib memilih sepasang titik: Titik Pickup (muat barang) dan Titik Delivery (bongkar barang). Saat dijalankan, robot selalu bergerak ke titik pickup, berhenti total, dan menahan navigasi hingga operator menekan tombol "Konfirmasi Barang Dimuat" sebelum robot berangkat ke tujuan akhir.
+- **Kebutuhan Pengujian & Operasi Praktis**: Saat melakukan evaluasi skripsi (misal uji AMCL, replanning, atau sekadar memindahkan robot ke meja/stasiun tertentu), operator membutuhkan fitur **"Sekali Antar / Langsung ke Tujuan"** (1x pengiriman langsung) dari posisi robot saat ini tanpa harus memilih titik pickup dan tanpa jeda konfirmasi muat barang.
+
+### 2. Implementasi Sistem:
+1. **Pembaruan ROS 2 Node ([`waypoint_manager.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/waypoint_manager.py))**:
+   - Mendeteksi task dengan atribut `type: 'direct'` atau task tanpa field `pickup`.
+   - Melewati (*bypass*) Fase 1 (`navigating_pickup` & `waiting_pickup`), sehingga robot seketika berangkat menuju titik tujuan (`navigating_delivery`).
+   - Saat tiba di tujuan, membunyikan suara notifikasi kedatangan (*"Tiba di tujuan. Robot sudah sampai di titik [Nama Titik]"*) dan menampilkan konfirmasi penyelesaian.
+2. **Pembaruan Backend Server ([`app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py))**:
+   - Menangani task direct pada endpoint `/api/delivery/start` dan pencatatan riwayat SQLite `save_to_history` tanpa error `KeyError: pickup`.
+   - Mengintegrasikan Voice AI (Gemini): jika perintah suara hanya menyebutkan titik tujuan (misal *"Antar ke Meja 2"* atau *"Pergi ke Rak B"*), sistem otomatis mengeksekusi mode *direct dispatch*.
+3. **Pembaruan UI Dashboard Web ([`app.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/app.js) & [`style.css`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/css/style.css))**:
+   - **Mode Tab Switcher**:
+     - `1x Pengiriman (Langsung Antar)` [Default]: Field pickup disembunyikan, seluruh daftar chip lokasi dapat dipilih sebagai tujuan, dan tersedia tombol cepat **"🚀 Kirim Langsung Sekarang"** (1-Click Instant Dispatch).
+     - `Antar-Jemput (Pickup & Delivery)`: Mode multi-step klasik.
+   - **Tombol Cepat di Peta 2D ([`map.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/map.js))**:
+     - Mengklik koordinat mana saja di peta menampilkan opsi utama **"🚀 Langsung Antar ke Sini"** untuk mengirim robot seketika ke titik tersebut.
+   - **Cockpit Quick Dispatch ([`monitoring.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/monitoring.js))**:
+     - Tombol cepat titik lokasi di halaman Cockpit langsung mengirim robot tanpa meminta konfirmasi pickup di posisi awal.
+

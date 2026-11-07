@@ -144,6 +144,7 @@ const APP = {
     homePosition: { x: 0, y: 0, yaw: 0 },
     settings: {},
     taskQueue: [],
+    dispatchMode: 'direct', // 'direct' (1 titik tujuan) atau 'standard' (pickup -> delivery)
     selectingFor: null,
     pendingPickup: null,
     pendingDelivery: null,
@@ -663,43 +664,70 @@ function renderDelivery() {
             <!-- RIGHT COLUMN: Task Builder & Queue -->
             <div>
                 <div class="page-section">
-                    <div class="section-title">03 // KONFIGURASI TASK BARU</div>
+                    <div class="section-title">
+                        <span>03 // KONFIGURASI TASK PENGIRIMAN</span>
+                        <span class="mono" id="dispatch-mode-indicator" style="color:var(--accent-bright); font-size:0.7rem;">${APP.dispatchMode === 'direct' ? 'MODE: 1x PENGIRIMAN LANGSUNG' : 'MODE: ANTAR-JEMPUT'}</span>
+                    </div>
                     <div class="panel">
-                        <p style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:12px;">
-                            Pilih titik pickup & tujuan dari daftar waypoint (${APP.mode === 'sim' ? 'Profil Simulasi' : 'Profil Real Robot'}) atau klik langsung pada peta 2D.
+                        <!-- MODE SELECTOR: DIRECT (1 Titik) vs STANDARD (Pickup & Delivery) -->
+                        <div class="dispatch-mode-selector mb-12">
+                            <button type="button" class="dispatch-mode-tab ${APP.dispatchMode === 'direct' ? 'active' : ''}" id="tab-mode-direct" onclick="setDispatchMode('direct')">
+                                <span class="icon-inline">${getIcon('delivery_point', 14)} 1x Pengiriman (Langsung Antar)</span>
+                            </button>
+                            <button type="button" class="dispatch-mode-tab ${APP.dispatchMode === 'standard' ? 'active' : ''}" id="tab-mode-standard" onclick="setDispatchMode('standard')">
+                                <span class="icon-inline">${getIcon('pickup', 14)} Antar-Jemput (Pickup &amp; Delivery)</span>
+                            </button>
+                        </div>
+
+                        <!-- DESKRIPSI MODE -->
+                        <p id="dispatch-mode-desc" style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:12px; line-height:1.4;">
+                            ${APP.dispatchMode === 'direct'
+                                ? 'Cukup pilih 1 titik tujuan. Robot akan langsung bergerak dari posisi saat ini menuju tujuan tanpa mampir ke pickup.'
+                                : 'Pilih titik pengambilan (Pickup) dan titik tujuan akhir (Delivery). Robot akan meminta konfirmasi muat di pickup.'}
                         </p>
 
-                        <div class="mb-12">
-                            <div class="input-label mb-8 icon-inline">${getIcon('pickup', 14)} Titik Pickup</div>
+                        <!-- FIELD PICKUP (HANYA DITAMPILKAN JIKA MODE STANDARD) -->
+                        <div class="mb-12 ${APP.dispatchMode === 'direct' ? 'hidden' : ''}" id="pickup-field-group">
+                            <div class="input-label mb-8 icon-inline">${getIcon('pickup', 14)} Titik Pickup (Muat Barang)</div>
                             <div class="waypoint-chips" id="pickup-chips"></div>
                             <div id="pickup-selected" class="mono" style="font-size:0.75rem; color:var(--accent-bright); font-weight:600; min-height:18px;"></div>
                         </div>
 
-                        <div class="mb-12">
-                            <div class="input-label mb-8 icon-inline">${getIcon('delivery_point', 14)} Titik Delivery</div>
+                        <!-- FIELD DELIVERY / TUJUAN (SELALU TAMPIL) -->
+                        <div class="mb-12" id="delivery-field-group">
+                            <div class="input-label mb-8 icon-inline" id="delivery-field-label">
+                                ${getIcon('delivery_point', 14)} ${APP.dispatchMode === 'direct' ? 'Titik Tujuan Pengiriman' : 'Titik Delivery (Tujuan Akhir)'}
+                            </div>
                             <div class="waypoint-chips" id="delivery-chips"></div>
                             <div id="delivery-selected" class="mono" style="font-size:0.75rem; color:var(--success); font-weight:600; min-height:18px;"></div>
                         </div>
 
+                        <!-- INPUT MANUAL KOORDINAT -->
                         <div style="border-top:1px solid var(--border-subtle); padding-top:12px; margin-top:8px;">
                             <div class="input-label mb-8">Input Koordinat Manual (Meter)</div>
                             <div class="input-row mb-8">
                                 <div class="input-group" style="margin-bottom:0">
-                                    <input class="input-field" id="manual-x" type="number" step="0.1" placeholder="Koordinat X">
+                                    <input class="input-field" id="manual-x" type="number" step="0.05" placeholder="Koordinat X">
                                 </div>
                                 <div class="input-group" style="margin-bottom:0">
-                                    <input class="input-field" id="manual-y" type="number" step="0.1" placeholder="Koordinat Y">
+                                    <input class="input-field" id="manual-y" type="number" step="0.05" placeholder="Koordinat Y">
                                 </div>
                             </div>
                             <div class="btn-group mb-8">
-                                <button class="btn btn-outline btn-sm" onclick="setManualAsPickup()">Set Pickup</button>
-                                <button class="btn btn-outline btn-sm" onclick="setManualAsDelivery()">Set Delivery</button>
+                                <button class="btn btn-outline btn-sm ${APP.dispatchMode === 'direct' ? 'hidden' : ''}" id="btn-manual-pickup" onclick="setManualAsPickup()">Set Pickup</button>
+                                <button class="btn btn-outline btn-sm" id="btn-manual-delivery" onclick="setManualAsDelivery()">${APP.dispatchMode === 'direct' ? 'Set Tujuan' : 'Set Delivery'}</button>
                             </div>
                         </div>
 
-                        <button class="btn btn-primary btn-block mt-8" onclick="addTaskToQueue()">
-                            ${getIcon('plus', 15)} Tambah ke Antrean
-                        </button>
+                        <!-- TOMBOL EKSEKUSI TASK -->
+                        <div style="display:flex; flex-direction:column; gap:8px; margin-top:10px;">
+                            <button class="btn btn-success btn-block" onclick="quickDirectDispatchSelected()" id="btn-quick-dispatch" style="${APP.dispatchMode === 'direct' ? '' : 'display:none;'} font-weight:700; padding:10px; font-size:0.82rem;">
+                                🚀 Kirim Langsung Sekarang
+                            </button>
+                            <button class="btn btn-primary btn-block" onclick="addTaskToQueue()">
+                                ${getIcon('plus', 15)} Tambah ke Antrean Misi
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -733,38 +761,90 @@ function renderDelivery() {
     return div;
 }
 
+function setDispatchMode(mode) {
+    APP.dispatchMode = mode;
+    const tabDirect = document.getElementById('tab-mode-direct');
+    const tabStandard = document.getElementById('tab-mode-standard');
+    const pickupGroup = document.getElementById('pickup-field-group');
+    const btnManualPickup = document.getElementById('btn-manual-pickup');
+    const btnQuickDispatch = document.getElementById('btn-quick-dispatch');
+    const modeDesc = document.getElementById('dispatch-mode-desc');
+    const modeIndicator = document.getElementById('dispatch-mode-indicator');
+    const deliveryLabel = document.getElementById('delivery-field-label');
+    const btnManualDelivery = document.getElementById('btn-manual-delivery');
+
+    if (tabDirect) tabDirect.classList.toggle('active', mode === 'direct');
+    if (tabStandard) tabStandard.classList.toggle('active', mode === 'standard');
+
+    if (pickupGroup) pickupGroup.classList.toggle('hidden', mode === 'direct');
+    if (btnManualPickup) btnManualPickup.classList.toggle('hidden', mode === 'direct');
+    if (btnQuickDispatch) btnQuickDispatch.style.display = (mode === 'direct') ? 'block' : 'none';
+
+    if (modeIndicator) {
+        modeIndicator.textContent = (mode === 'direct') ? 'MODE: 1x PENGIRIMAN LANGSUNG' : 'MODE: ANTAR-JEMPUT';
+    }
+
+    if (modeDesc) {
+        modeDesc.textContent = (mode === 'direct')
+            ? 'Cukup pilih 1 titik tujuan. Robot akan langsung bergerak dari posisi saat ini menuju tujuan tanpa mampir ke pickup.'
+            : 'Pilih titik pengambilan (Pickup) dan titik tujuan akhir (Delivery). Robot akan meminta konfirmasi muat di pickup.';
+    }
+
+    if (deliveryLabel) {
+        deliveryLabel.innerHTML = `${getIcon('delivery_point', 14)} ${(mode === 'direct') ? 'Titik Tujuan Pengiriman' : 'Titik Delivery (Tujuan Akhir)'}`;
+    }
+
+    if (btnManualDelivery) {
+        btnManualDelivery.textContent = (mode === 'direct') ? 'Set Tujuan' : 'Set Delivery';
+    }
+
+    renderWaypointChips();
+}
+
 function renderWaypointChips() {
     const pickupContainer = document.getElementById('pickup-chips');
     const deliveryContainer = document.getElementById('delivery-chips');
-    if (!pickupContainer || !deliveryContainer) return;
+    if (!deliveryContainer) return;
 
-    pickupContainer.innerHTML = '';
+    if (pickupContainer) pickupContainer.innerHTML = '';
     deliveryContainer.innerHTML = '';
+
+    const isDirect = (APP.dispatchMode === 'direct');
 
     APP.savedPoints.forEach(p => {
         const chip = document.createElement('span');
         chip.className = `wp-chip type-${p.type}`;
         chip.textContent = p.name;
 
-        if (p.type === 'pickup') {
-            chip.onclick = () => selectPredefinedPoint(p, 'pickup');
-            pickupContainer.appendChild(chip);
-        } else {
+        if (isDirect) {
+            // Mode Sekali Antar: semua titik bisa dipilih sebagai tujuan
             chip.onclick = () => selectPredefinedPoint(p, 'delivery');
             deliveryContainer.appendChild(chip);
+        } else {
+            // Mode Standar Antar-Jemput: pisahkan pickup dan delivery
+            if (p.type === 'pickup' && pickupContainer) {
+                chip.onclick = () => selectPredefinedPoint(p, 'pickup');
+                pickupContainer.appendChild(chip);
+            } else {
+                chip.onclick = () => selectPredefinedPoint(p, 'delivery');
+                deliveryContainer.appendChild(chip);
+            }
         }
     });
 }
 
 function selectPredefinedPoint(point, role) {
     if (role === 'pickup') {
-        APP.pendingPickup = { name: point.name, x: point.x, y: point.y };
-        document.getElementById('pickup-selected').innerHTML = `${getIcon('check', 13)} ${point.name} [${point.x}, ${point.y}]`;
+        APP.pendingPickup = { name: point.name, x: point.x, y: point.y, yaw: point.yaw || 0.0 };
+        const selEl = document.getElementById('pickup-selected');
+        if (selEl) selEl.innerHTML = `${getIcon('check', 13)} ${point.name} [${point.x}, ${point.y}]`;
         document.querySelectorAll('#pickup-chips .wp-chip').forEach(c =>
             c.classList.toggle('selected', c.textContent === point.name));
     } else {
-        APP.pendingDelivery = { name: point.name, x: point.x, y: point.y };
-        document.getElementById('delivery-selected').innerHTML = `${getIcon('check', 13)} ${point.name} [${point.x}, ${point.y}]`;
+        APP.pendingDelivery = { name: point.name, x: point.x, y: point.y, yaw: point.yaw || 0.0 };
+        const selEl = document.getElementById('delivery-selected');
+        const roleLabel = (APP.dispatchMode === 'direct') ? 'Tujuan' : 'Delivery';
+        if (selEl) selEl.innerHTML = `${getIcon('check', 13)} ${roleLabel}: ${point.name} [${point.x}, ${point.y}]`;
         document.querySelectorAll('#delivery-chips .wp-chip').forEach(c =>
             c.classList.toggle('selected', c.textContent === point.name));
     }
@@ -774,8 +854,9 @@ function setManualAsPickup() {
     const x = parseFloat(document.getElementById('manual-x').value);
     const y = parseFloat(document.getElementById('manual-y').value);
     if (isNaN(x) || isNaN(y)) { showToast('Masukkan koordinat X dan Y', 'error'); return; }
-    APP.pendingPickup = { name: `(${x}, ${y})`, x, y };
-    document.getElementById('pickup-selected').innerHTML = `${getIcon('check', 13)} Pickup: [${x}, ${y}]`;
+    APP.pendingPickup = { name: `Manual (${x.toFixed(2)}, ${y.toFixed(2)})`, x, y, yaw: 0.0 };
+    const selEl = document.getElementById('pickup-selected');
+    if (selEl) selEl.innerHTML = `${getIcon('check', 13)} Pickup: [${x.toFixed(2)}, ${y.toFixed(2)}]`;
     showToast('Pickup di-set ke koordinat manual', 'info');
 }
 
@@ -783,16 +864,48 @@ function setManualAsDelivery() {
     const x = parseFloat(document.getElementById('manual-x').value);
     const y = parseFloat(document.getElementById('manual-y').value);
     if (isNaN(x) || isNaN(y)) { showToast('Masukkan koordinat X dan Y', 'error'); return; }
-    APP.pendingDelivery = { name: `(${x}, ${y})`, x, y };
-    document.getElementById('delivery-selected').innerHTML = `${getIcon('check', 13)} Delivery: [${x}, ${y}]`;
-    showToast('Delivery di-set ke koordinat manual', 'info');
+    const roleLabel = (APP.dispatchMode === 'direct') ? 'Tujuan' : 'Delivery';
+    APP.pendingDelivery = { name: `Manual (${x.toFixed(2)}, ${y.toFixed(2)})`, x, y, yaw: 0.0 };
+    const selEl = document.getElementById('delivery-selected');
+    if (selEl) selEl.innerHTML = `${getIcon('check', 13)} ${roleLabel}: [${x.toFixed(2)}, ${y.toFixed(2)}]`;
+    showToast(`${roleLabel} di-set ke koordinat manual`, 'info');
 }
 
 function addTaskToQueue() {
+    if (APP.dispatchMode === 'direct') {
+        if (!APP.pendingDelivery) {
+            // Cek jika ada input koordinat manual yang belum di-klik set
+            const mx = parseFloat(document.getElementById('manual-x')?.value);
+            const my = parseFloat(document.getElementById('manual-y')?.value);
+            if (!isNaN(mx) && !isNaN(my)) {
+                APP.pendingDelivery = { name: `Manual (${mx.toFixed(2)}, ${my.toFixed(2)})`, x: mx, y: my, yaw: 0.0 };
+            } else {
+                showToast('Pilih titik tujuan terlebih dahulu', 'error');
+                return;
+            }
+        }
+
+        APP.taskQueue.push({
+            type: 'direct',
+            delivery: { ...APP.pendingDelivery }
+        });
+
+        APP.pendingDelivery = null;
+        const delEl = document.getElementById('delivery-selected');
+        if (delEl) delEl.textContent = '';
+        document.querySelectorAll('.wp-chip').forEach(c => c.classList.remove('selected'));
+
+        renderTaskList();
+        showToast(`Task langsung ditambahkan (${APP.taskQueue.length} dalam antrean)`, 'success');
+        return;
+    }
+
+    // Mode Standar (Pickup & Delivery)
     if (!APP.pendingPickup) { showToast('Pilih titik pickup terlebih dahulu', 'error'); return; }
     if (!APP.pendingDelivery) { showToast('Pilih titik delivery terlebih dahulu', 'error'); return; }
 
     APP.taskQueue.push({
+        type: 'standard',
         pickup: { ...APP.pendingPickup },
         delivery: { ...APP.pendingDelivery }
     });
@@ -800,12 +913,76 @@ function addTaskToQueue() {
     APP.pendingPickup = null;
     APP.pendingDelivery = null;
 
-    document.getElementById('pickup-selected').textContent = '';
-    document.getElementById('delivery-selected').textContent = '';
+    const picEl = document.getElementById('pickup-selected');
+    const delEl = document.getElementById('delivery-selected');
+    if (picEl) picEl.textContent = '';
+    if (delEl) delEl.textContent = '';
     document.querySelectorAll('.wp-chip').forEach(c => c.classList.remove('selected'));
 
     renderTaskList();
     showToast(`Task ditambahkan (${APP.taskQueue.length} dalam antrean)`, 'success');
+}
+
+async function quickDirectDispatchSelected() {
+    let target = APP.pendingDelivery;
+    if (!target) {
+        const mx = parseFloat(document.getElementById('manual-x')?.value);
+        const my = parseFloat(document.getElementById('manual-y')?.value);
+        if (!isNaN(mx) && !isNaN(my)) {
+            target = { name: `Manual (${mx.toFixed(2)}, ${my.toFixed(2)})`, x: mx, y: my, yaw: 0.0 };
+        }
+    }
+
+    if (!target) {
+        showToast('Pilih atau masukkan titik tujuan terlebih dahulu', 'error');
+        return;
+    }
+
+    await directDispatchToPoint(target);
+}
+
+async function directDispatchToPoint(point) {
+    if (!point || isNaN(point.x) || isNaN(point.y)) {
+        showToast('Koordinat titik tujuan tidak valid', 'error');
+        return;
+    }
+
+    showModal(
+        '🚀 Konfirmasi Pengiriman Langsung',
+        `<p>Unit AMR-01 akan langsung diberangkatkan dari posisi saat ini menuju:</p>
+         <div style="background:rgba(255,255,255,0.05); padding:10px 14px; border-radius:6px; margin:10px 0; border-left:3px solid var(--accent-bright);">
+             <strong style="color:var(--accent-bright); font-size:0.95rem;">${point.name}</strong><br>
+             <span class="mono" style="font-size:0.75rem; color:var(--text-muted);">Koordinat: X = ${Number(point.x).toFixed(2)} m, Y = ${Number(point.y).toFixed(2)} m</span>
+         </div>
+         <p style="font-size:0.75rem; color:var(--text-secondary);">
+             Robot akan bernavigasi langsung ke titik tersebut tanpa mampir ke titik pickup.
+         </p>`,
+        [
+            { label: 'Batal', class: 'btn-outline' },
+            {
+                label: '🚀 Berangkatkan Sekarang',
+                class: 'btn-success',
+                action: async () => {
+                    const task = {
+                        type: 'direct',
+                        delivery: {
+                            name: point.name,
+                            x: parseFloat(point.x),
+                            y: parseFloat(point.y),
+                            yaw: parseFloat(point.yaw || 0.0)
+                        }
+                    };
+                    const result = await apiPost('/api/delivery/start', { tasks: [task] });
+                    if (result && result.success) {
+                        showToast(`AMR-01 berangkat menuju ${point.name}!`, 'success');
+                        updateMissionControlVisibility();
+                    } else {
+                        showToast(result?.error || 'Gagal memulai pengiriman', 'error');
+                    }
+                }
+            }
+        ]
+    );
 }
 
 function removeTask(index) {
@@ -826,20 +1003,26 @@ function renderTaskList() {
     if (countEl) countEl.textContent = `${APP.taskQueue.length} TASK`;
 
     if (APP.taskQueue.length === 0) {
-        list.innerHTML = '<li class="history-empty">Antrean kosong. Tambahkan pasangan titik pickup & delivery.</li>';
+        list.innerHTML = '<li class="history-empty">Antrean kosong. Pilih titik tujuan dan tambahkan task.</li>';
         return;
     }
 
-    list.innerHTML = APP.taskQueue.map((task, i) => `
-        <li class="task-item">
-            <span class="task-number">${String(i + 1).padStart(2, '0')}</span>
-            <div class="task-info">
-                <div class="task-route">${task.pickup.name} → ${task.delivery.name}</div>
-                <div class="task-status-text">QUEUED // MENUNGGU EKSEKUSI</div>
-            </div>
-            <button class="task-remove" onclick="removeTask(${i})">${getIcon('x', 14)}</button>
-        </li>
-    `).join('');
+    list.innerHTML = APP.taskQueue.map((task, i) => {
+        const isDirect = !task.pickup || task.type === 'direct';
+        const routeHtml = isDirect
+            ? `<span class="task-route-direct">[Langsung Antar]</span> → ${task.delivery.name}`
+            : `${task.pickup.name} → ${task.delivery.name}`;
+        return `
+            <li class="task-item">
+                <span class="task-number">${String(i + 1).padStart(2, '0')}</span>
+                <div class="task-info">
+                    <div class="task-route">${routeHtml}</div>
+                    <div class="task-status-text">QUEUED // MENUNGGU EKSEKUSI</div>
+                </div>
+                <button class="task-remove" onclick="removeTask(${i})">${getIcon('x', 14)}</button>
+            </li>
+        `;
+    }).join('');
 }
 
 async function toggleNavigation() {
@@ -1058,6 +1241,7 @@ function showArrivalModal(d) {
     const isPickup = (d.current_phase === 'waiting_pickup');
     const taskIdx = d.current_task_index || 0;
     const taskInfo = d.tasks && d.tasks[taskIdx] ? d.tasks[taskIdx] : null;
+    const isDirect = taskInfo ? (!taskInfo.pickup || taskInfo.type === 'direct') : false;
     const pointName = isPickup
         ? (taskInfo && taskInfo.pickup ? taskInfo.pickup.name : 'Titik Pickup')
         : (taskInfo && taskInfo.delivery ? taskInfo.delivery.name : 'Titik Tujuan');
@@ -1074,11 +1258,13 @@ function showArrivalModal(d) {
     if (descEl) {
         descEl.textContent = isPickup
             ? 'Unit AMR-01 telah tiba di titik pickup dan siap dimuat. Muat barang ke kompartemen lalu tekan konfirmasi.'
-            : 'Unit AMR-01 telah tiba di titik tujuan. Silakan ambil barang lalu tekan konfirmasi penyelesaian.';
+            : (isDirect
+                ? 'Unit AMR-01 telah tiba di titik tujuan pengiriman. Tekan tombol konfirmasi di bawah untuk menyelesaikan misi.'
+                : 'Unit AMR-01 telah tiba di titik tujuan. Silakan ambil barang lalu tekan konfirmasi penyelesaian.');
     }
 
     const cmd = isPickup ? 'confirm_pickup' : 'confirm_delivery';
-    const btnLabel = isPickup ? 'Konfirmasi Barang Dimuat' : 'Konfirmasi Barang Diambil';
+    const btnLabel = isPickup ? 'Konfirmasi Barang Dimuat' : (isDirect ? 'Selesai / Konfirmasi Sampai' : 'Konfirmasi Barang Diambil');
     const btnClass = isPickup ? 'btn-confirm-pickup' : 'btn-confirm-delivery';
 
     if (actionsEl) {
@@ -1125,16 +1311,21 @@ function updateGlobalMissionBanner(d) {
     const isPickup = (d.current_phase === 'waiting_pickup');
     const taskIdx = d.current_task_index || 0;
     const taskInfo = d.tasks && d.tasks[taskIdx] ? d.tasks[taskIdx] : null;
+    const isDirect = taskInfo ? (!taskInfo.pickup || taskInfo.type === 'direct') : false;
     const pointName = isPickup
         ? (taskInfo && taskInfo.pickup ? taskInfo.pickup.name : 'Pickup')
-        : (taskInfo && taskInfo.delivery ? taskInfo.delivery.name : 'Delivery');
+        : (taskInfo && taskInfo.delivery ? taskInfo.delivery.name : 'Tujuan');
 
     banner.className = isPickup ? 'banner-pickup' : 'banner-delivery';
     if (iconEl) iconEl.innerHTML = isPickup ? getIcon('box', 20) : getIcon('checkCircle', 20);
     if (titleEl) titleEl.textContent = `AMR-01 Tiba di ${pointName}`;
-    if (subtitleEl) subtitleEl.textContent = isPickup ? 'WAITING_PICKUP // Konfirmasi muat barang' : 'WAITING_DELIVERY // Konfirmasi ambil barang';
+    if (subtitleEl) {
+        subtitleEl.textContent = isPickup 
+            ? 'WAITING_PICKUP // Konfirmasi muat barang' 
+            : (isDirect ? 'WAITING_CONFIRM // Tiba di tujuan pengiriman' : 'WAITING_DELIVERY // Konfirmasi ambil barang');
+    }
     if (btnEl) {
-        btnEl.innerHTML = `${getIcon('check', 14)} ${isPickup ? 'Konfirmasi Muat' : 'Konfirmasi Ambil'}`;
+        btnEl.innerHTML = `${getIcon('check', 14)} ${isPickup ? 'Konfirmasi Muat' : (isDirect ? 'Konfirmasi Sampai' : 'Konfirmasi Ambil')}`;
     }
 
     banner.classList.remove('hidden');
@@ -1178,6 +1369,7 @@ function updateInPageConfirmCard(d) {
     const isPickup = (d.current_phase === 'waiting_pickup');
     const taskIdx = d.current_task_index || 0;
     const taskInfo = d.tasks && d.tasks[taskIdx] ? d.tasks[taskIdx] : null;
+    const isDirect = taskInfo ? (!taskInfo.pickup || taskInfo.type === 'direct') : false;
 
     if (isPickup) {
         const pickupName = taskInfo && taskInfo.pickup ? taskInfo.pickup.name : 'Pickup';
@@ -1193,15 +1385,15 @@ function updateInPageConfirmCard(d) {
             </div>
         `;
     } else {
-        const deliveryName = taskInfo && taskInfo.delivery ? taskInfo.delivery.name : 'Delivery';
+        const deliveryName = taskInfo && taskInfo.delivery ? taskInfo.delivery.name : 'Tujuan';
         confirmSection.classList.remove('hidden');
         confirmSection.innerHTML = `
             <div class="confirm-card confirm-delivery">
                 <div class="confirm-icon">${getIcon('checkCircle', 32)}</div>
                 <div class="confirm-title">AMR-01 Tiba di ${deliveryName}</div>
-                <div class="confirm-desc">Silakan ambil barang dari unit robot, kemudian tekan tombol konfirmasi untuk menyelesaikan task.</div>
+                <div class="confirm-desc">${isDirect ? 'Unit AMR-01 telah tiba di titik tujuan pengiriman. Tekan tombol konfirmasi di bawah untuk menyelesaikan misi.' : 'Silakan ambil barang dari unit robot, kemudian tekan tombol konfirmasi untuk menyelesaikan task.'}</div>
                 <button class="btn btn-confirm btn-confirm-delivery" onclick="confirmAction('confirm_delivery')">
-                    ${getIcon('check', 18)} Konfirmasi Barang Diambil
+                    ${getIcon('check', 18)} ${isDirect ? 'Selesai / Konfirmasi Sampai' : 'Konfirmasi Barang Diambil'}
                 </button>
             </div>
         `;

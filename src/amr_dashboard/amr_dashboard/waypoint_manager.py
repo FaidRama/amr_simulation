@@ -204,9 +204,15 @@ class WaypointManager(Node):
             
             self.log('info', f'🚀 MISI BARU DITERIMA: {len(tasks)} task')
             for i, t in enumerate(tasks):
-                self.log('info',
-                    f'   • Task {i+1}: Pickup [{t["pickup"]["name"]}] ({t["pickup"]["x"]:.2f}, {t["pickup"]["y"]:.2f}) → '
-                    f'Delivery [{t["delivery"]["name"]}] ({t["delivery"]["x"]:.2f}, {t["delivery"]["y"]:.2f})')
+                pk = t.get('pickup')
+                dl = t.get('delivery') or t.get('destination') or {}
+                if pk:
+                    self.log('info',
+                        f'   • Task {i+1}: Pickup [{pk.get("name","Pickup")}] ({pk.get("x",0):.2f}, {pk.get("y",0):.2f}) → '
+                        f'Delivery [{dl.get("name","Delivery")}] ({dl.get("x",0):.2f}, {dl.get("y",0):.2f})')
+                else:
+                    self.log('info',
+                        f'   • Task {i+1} [SEKALI ANTAR]: Langsung menuju [{dl.get("name","Tujuan")}] ({dl.get("x",0):.2f}, {dl.get("y",0):.2f})')
             
             # Mulai eksekusi di thread terpisah agar tidak blocking
             mission_thread = threading.Thread(target=self.execute_mission, daemon=True)
@@ -329,51 +335,55 @@ class WaypointManager(Node):
             self.mission['status'] = 'running'
             self.mission['current_task_index'] = i
             
-            pickup = task['pickup']
-            delivery = task['delivery']
+            pickup = task.get('pickup')
+            delivery = task.get('delivery') or task.get('destination')
+            is_direct = (pickup is None) or (task.get('type') == 'direct')
             
-            # === FASE 1: Navigasi ke titik PICKUP ===
-            self.log('info', f'--- Task {i+1}/{len(tasks)}: Menuju pickup [{pickup["name"]}] ({pickup["x"]:.2f}, {pickup["y"]:.2f}) ---')
-            self.mission['current_phase'] = 'navigating_pickup'
-            self.publish_status()
+            # === FASE 1: Navigasi ke titik PICKUP (Hanya jika mode Antar-Jemput standar) ===
+            if not is_direct:
+                self.log('info', f'--- Task {i+1}/{len(tasks)}: Menuju pickup [{pickup["name"]}] ({pickup["x"]:.2f}, {pickup["y"]:.2f}) ---')
+                self.mission['current_phase'] = 'navigating_pickup'
+                self.publish_status()
+                
+                success = self.navigate_to_point(
+                    pickup['x'], pickup['y'], pickup.get('yaw', 0.0))
+                
+                if self.is_cancelled:
+                    break
+                
+                if not success:
+                    self.log('error', f'❌ Gagal mencapai pickup [{pickup["name"]}]. Melewati task ini.')
+                    task['status'] = 'failed'
+                    continue
+                
+                # Sampai di pickup — tunggu konfirmasi dari operator
+                self.mission['current_phase'] = 'waiting_pickup'
+                self.confirm_received = False
+                self.publish_status()
+                self.log('info', f'📍 SAMPAI di titik pickup [{pickup["name"]}]. Menunggu konfirmasi: "Barang Sudah Dimuat"...')
+                self.notify_voice('pickup', f"Pickup tiba. Robot sudah sampai di titik {pickup['name']}. Silakan muat barang.")
+                
+                # Tunggu operator tekan tombol "Barang Sudah Dimuat"
+                while not self.confirm_received and not self.is_cancelled:
+                    time.sleep(0.3)
+                
+                if self.is_cancelled:
+                    break
+                
+                self.log('info', f'✅ Konfirmasi pickup diterima! Lanjut menuju delivery [{delivery["name"]}] ({delivery["x"]:.2f}, {delivery["y"]:.2f})')
+                
+                # Tunggu jika di-pause
+                while self.is_paused and not self.is_cancelled:
+                    time.sleep(0.5)
+                
+                if self.is_cancelled:
+                    break
+            else:
+                self.log('info', f'--- Task {i+1}/{len(tasks)} [SEKALI ANTAR]: Langsung menuju tujuan [{delivery["name"]}] ({delivery["x"]:.2f}, {delivery["y"]:.2f}) ---')
             
-            success = self.navigate_to_point(
-                pickup['x'], pickup['y'], pickup.get('yaw', 0.0))
-            
-            if self.is_cancelled:
-                break
-            
-            if not success:
-                self.log('error', f'❌ Gagal mencapai pickup [{pickup["name"]}]. Melewati task ini.')
-                task['status'] = 'failed'
-                continue
-            
-            # Sampai di pickup — tunggu konfirmasi dari operator
-            self.mission['current_phase'] = 'waiting_pickup'
-            self.confirm_received = False
-            self.publish_status()
-            self.log('info', f'📍 SAMPAI di titik pickup [{pickup["name"]}]. Menunggu konfirmasi: "Barang Sudah Dimuat"...')
-            self.notify_voice('pickup', f"Pickup tiba. Robot sudah sampai di titik {pickup['name']}. Silakan muat barang.")
-            
-            # Tunggu operator tekan tombol "Barang Sudah Dimuat"
-            while not self.confirm_received and not self.is_cancelled:
-                time.sleep(0.3)
-            
-            if self.is_cancelled:
-                break
-            
-            self.log('info', f'✅ Konfirmasi pickup diterima! Lanjut menuju delivery [{delivery["name"]}] ({delivery["x"]:.2f}, {delivery["y"]:.2f})')
-            
-            # Tunggu jika di-pause
-            while self.is_paused and not self.is_cancelled:
-                time.sleep(0.5)
-            
-            if self.is_cancelled:
-                break
-            
-            # === FASE 2: Navigasi ke titik DELIVERY ===
-            self.log('info', f'--- Task {i+1}/{len(tasks)}: Menuju delivery [{delivery["name"]}] ({delivery["x"]:.2f}, {delivery["y"]:.2f}) ---')
-            self.mission['current_phase'] = 'navigating_delivery'
+            # === FASE 2: Navigasi ke titik DELIVERY / TUJUAN ===
+            phase_label = 'navigating_delivery'
+            self.mission['current_phase'] = phase_label
             self.publish_status()
             
             success = self.navigate_to_point(
@@ -383,28 +393,35 @@ class WaypointManager(Node):
                 break
             
             if not success:
-                self.log('error', f'❌ Gagal mencapai delivery [{delivery["name"]}].')
+                self.log('error', f'❌ Gagal mencapai tujuan [{delivery["name"]}].')
                 task['status'] = 'failed'
                 continue
             
-            # Sampai di delivery — tunggu konfirmasi dari operator
+            # Sampai di tujuan — tunggu konfirmasi dari operator
             self.mission['current_phase'] = 'waiting_delivery'
             self.confirm_received = False
             self.publish_status()
-            self.log('info', f'📍 SAMPAI di titik delivery [{delivery["name"]}]. Menunggu konfirmasi: "Barang Sudah Diambil"...')
-            self.notify_voice('arrival', f"Deliver tiba. Robot sudah sampai di titik {delivery['name']}. Silakan ambil barang.")
+            if is_direct:
+                self.log('info', f'📍 SAMPAI di titik tujuan [{delivery["name"]}]. Menunggu konfirmasi: "Selesai / Konfirmasi Sampai"...')
+                self.notify_voice('arrival', f"Tiba di tujuan. Robot sudah sampai di titik {delivery['name']}.")
+            else:
+                self.log('info', f'📍 SAMPAI di titik delivery [{delivery["name"]}]. Menunggu konfirmasi: "Barang Sudah Diambil"...')
+                self.notify_voice('arrival', f"Deliver tiba. Robot sudah sampai di titik {delivery['name']}. Silakan ambil barang.")
             
-            # Tunggu operator tekan tombol "Barang Sudah Diambil"
+            # Tunggu operator tekan tombol konfirmasi
             while not self.confirm_received and not self.is_cancelled:
                 time.sleep(0.3)
             
             if self.is_cancelled:
                 break
             
-            self.log('info', f'✅ Konfirmasi delivery [{delivery["name"]}] diterima!')
+            self.log('info', f'✅ Konfirmasi tujuan [{delivery["name"]}] diterima!')
             task['status'] = 'completed'
             self.mission['completed_tasks'] = i + 1
-            self.log('info', f'✓ Task {i+1}/{len(tasks)} SELESAI: {pickup["name"]} → {delivery["name"]}')
+            if is_direct:
+                self.log('info', f'✓ Task {i+1}/{len(tasks)} SELESAI: Langsung ke {delivery["name"]}')
+            else:
+                self.log('info', f'✓ Task {i+1}/{len(tasks)} SELESAI: {pickup["name"]} → {delivery["name"]}')
         
         # === PROSES SETELAH TASK SELESAI ATAU DIBATALKAN ===
         if self.is_cancelled:

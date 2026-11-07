@@ -297,6 +297,8 @@ def save_to_history(mission_data):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         for task in mission_data.get('tasks', []):
+            pk = task.get('pickup') or {}
+            dl = task.get('delivery') or task.get('destination') or {}
             c.execute('''INSERT INTO delivery_history 
                 (mission_id, pickup_name, pickup_x, pickup_y, 
                  delivery_name, delivery_x, delivery_y, 
@@ -304,12 +306,12 @@ def save_to_history(mission_data):
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (
                     mission_data.get('mission_id', ''),
-                    task['pickup']['name'],
-                    task['pickup']['x'],
-                    task['pickup']['y'],
-                    task['delivery']['name'],
-                    task['delivery']['x'],
-                    task['delivery']['y'],
+                    pk.get('name', 'Direct / Sekali Antar'),
+                    float(pk.get('x', 0.0)),
+                    float(pk.get('y', 0.0)),
+                    dl.get('name', 'Tujuan'),
+                    float(dl.get('x', 0.0)),
+                    float(dl.get('y', 0.0)),
                     task.get('status', 'unknown'),
                     mission_data.get('elapsed_time', 0),
                     datetime.now().isoformat()
@@ -2232,9 +2234,12 @@ def api_delivery_start():
     ros_node.send_delivery_tasks(tasks)
     _append_navigation_log(f'🚀 [DISPATCH] Memulai eksekusi misi ({len(tasks)} task dikirim ke waypoint_manager).')
     for idx, t in enumerate(tasks):
-        pk = t.get('pickup', {})
-        dl = t.get('delivery', {})
-        _append_navigation_log(f'   - Task {idx+1}: [{pk.get("name","Pickup")}] ({pk.get("x",0):.2f}, {pk.get("y",0):.2f}) → [{dl.get("name","Delivery")}] ({dl.get("x",0):.2f}, {dl.get("y",0):.2f})')
+        pk = t.get('pickup')
+        dl = t.get('delivery') or t.get('destination') or {}
+        if pk:
+            _append_navigation_log(f'   - Task {idx+1}: [{pk.get("name","Pickup")}] ({pk.get("x",0):.2f}, {pk.get("y",0):.2f}) → [{dl.get("name","Delivery")}] ({dl.get("x",0):.2f}, {dl.get("y",0):.2f})')
+        else:
+            _append_navigation_log(f'   - Task {idx+1} [DIRECT / SEKALI ANTAR]: Langsung menuju [{dl.get("name","Tujuan")}] ({dl.get("x",0):.2f}, {dl.get("y",0):.2f})')
     return jsonify({'message': f'Misi dikirim: {len(tasks)} task', 'success': True})
 
 
@@ -3078,8 +3083,22 @@ PANDUAN:
             if not delivery_pt:
                 delivery_pt = next((p for p in points if p.get('type') == 'delivery'), None)
 
-            if pickup_pt and delivery_pt and ros_node:
+            # Jika operator hanya menyebutkan titik tujuan tanpa pickup (Pengiriman Langsung / Direct Dispatch)
+            if delivery_pt and not pickup_name and ros_node:
                 task = {
+                    'type': 'direct',
+                    'delivery': {
+                        'name': delivery_pt.get('name'),
+                        'x': float(delivery_pt.get('x', 0)),
+                        'y': float(delivery_pt.get('y', 0)),
+                        'yaw': float(delivery_pt.get('yaw', 0.0))
+                    }
+                }
+                ros_node.send_delivery_tasks([task])
+                execution_info = {'task': task, 'executed': True}
+            elif pickup_pt and delivery_pt and ros_node:
+                task = {
+                    'type': 'standard',
                     'pickup': {
                         'name': pickup_pt.get('name'),
                         'x': float(pickup_pt.get('x', 0)),
