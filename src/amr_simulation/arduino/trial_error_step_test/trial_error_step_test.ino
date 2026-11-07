@@ -1,8 +1,7 @@
 /* =========================================================================
  * FIRMWARE AMR DIFFERENTIAL DRIVE - PENGUJIAN STEP RESPON 80 RPM (TRIAL & ERROR)
- * KHUSUS PENGUJIAN TUNGGAL: STEP 80 RPM (DURASI 6.5 DETIK)
+ * MODE: STANDBY DIAM SAAT UPLOAD (MENUNGGU SINYAL '1' DARI PYTHON)
  * FITUR: MENCETAK DATA CSV 50 HZ + MENGHITUNG OTOMATIS 5 PARAMETER PERFORMA
- *        (RMSE, Overshoot, Rise Time, Settling Time, Steady-State Error)
  * PARAMETER : Motor Kiri  (Kp = 2.5000 | Ki = 18.0000 | Kd = 0.0000)
  *             Motor Kanan (Kp = 2.8000 | Ki = 18.0000 | Kd = 0.0000)
  * SKRIPSI   : DIVALA ZAHRA OKTAVIA (TEKNIK KOMPUTER UNNES 2026)
@@ -68,7 +67,7 @@ float error_R = 0.0, prev_error_R = 0.0, integral_R = 0.0, pwm_R = 0.0;
 
 unsigned long waktuSebelumnya = 0;
 unsigned long waktuMulaiTes   = 0;
-bool sedangUji = false;
+bool sedangUji = false; // STANDBY: Default tidak bergerak saat pertama kali nyala
 bool stepAktif = false;
 
 // =========================================================================
@@ -110,10 +109,8 @@ struct PerformaTracker {
     if (target <= 1.0) return;
     float t_rel = t_now - t_step_start;
 
-    // 1. Puncak Overshoot
     if (rpm > ymax) ymax = rpm;
 
-    // 2. Rise Time (10% s.d 90%)
     if (!reached_10 && rpm >= (0.10 * target)) {
       t_10 = t_rel;
       reached_10 = true;
@@ -123,7 +120,6 @@ struct PerformaTracker {
       reached_90 = true;
     }
 
-    // 3. Settling Time (+-5%)
     float band = 0.05 * target;
     if (abs(rpm - target) <= band) {
       if (!settled && t_rel >= 0.15) {
@@ -134,7 +130,6 @@ struct PerformaTracker {
       if (t_rel < 1.0) settled = false;
     }
 
-    // 4 & 5. Steady-State Accumulation (t_rel >= 1.0s)
     if (t_rel >= 1.0) {
       float err = target - rpm;
       sum_error_sq += (err * err);
@@ -229,32 +224,26 @@ void cetakRangkumanPerforma() {
   Serial.println(F("# Parameter Evaluasi              | Motor Kiri     | Motor Kanan    | Satuan"));
   Serial.println(F("# ----------------------------------------------------------------------------"));
   
-  // 1. RMSE
   Serial.print(F("# 1. RMSE (Ketepatan Setpoint)   | "));
   Serial.print(perf_L.getRMSE(), 3); Serial.print(F("          | "));
   Serial.print(perf_R.getRMSE(), 3); Serial.println(F("          | RPM"));
 
-  // 2. Overshoot
   Serial.print(F("# 2. Overshoot (Lonjakan Puncak) | "));
   Serial.print(perf_L.getOvershoot(), 2); Serial.print(F("%        | "));
   Serial.print(perf_R.getOvershoot(), 2); Serial.println(F("%        | %"));
 
-  // 3. Rise Time
   Serial.print(F("# 3. Rise Time (Waktu Naik)      | "));
   Serial.print(perf_L.getRiseTime(), 3); Serial.print(F("        | "));
   Serial.print(perf_R.getRiseTime(), 3); Serial.println(F("        | detik"));
 
-  // 4. Settling Time
   Serial.print(F("# 4. Settling Time (Waktu Mantap)| "));
   Serial.print(perf_L.getSettlingTime(), 3); Serial.print(F("        | "));
   Serial.print(perf_R.getSettlingTime(), 3); Serial.println(F("        | detik"));
 
-  // 5. Steady-State Error
   Serial.print(F("# 5. Steady-State Error (Ess)    | "));
   Serial.print(perf_L.getEss(), 3); Serial.print(F("          | "));
   Serial.print(perf_R.getEss(), 3); Serial.println(F("          | RPM"));
 
-  // Info Pendukung
   Serial.print(F("#    Kecepatan Rata-rata Stabil  | "));
   Serial.print(perf_L.getSteadyRPM(), 2); Serial.print(F("        | "));
   Serial.print(perf_R.getSteadyRPM(), 2); Serial.println(F("        | RPM"));
@@ -318,10 +307,7 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(PIN_ENCA_L), isrL, FALLING);
   attachInterrupt(digitalPinToInterrupt(PIN_ENCA_R), isrR, FALLING);
 
-  driveMotors(0, 0);
-  delay(1000); // Waktu inisialisasi awal 1 detik
-
-  // Standby diam: motor mati, menunggu sinyal trigger '1' dari Python / Serial Monitor
+  // Standby diam: motor mati, menunggu sinyal trigger '1' dari Python
   driveMotors(0, 0);
   sedangUji = false;
   stepAktif = false;
@@ -330,11 +316,11 @@ void setup() {
 
 // ====================== 12. LOOP KENDALI 50 HZ ===========================
 void loop() {
-  // Input Serial (jika ingin mengulang atau stop)
+  // Input Serial: hanya mulai saat Python mengirim '1'
   while (Serial.available() > 0) {
     char c = Serial.read();
     if (c == '1' || c == 'r' || c == 'R') {
-      mulaiPengujian80RPM(); // Ulangi tes 80 RPM
+      mulaiPengujian80RPM(); // Mulai tes 80 RPM
     } else if (c == '0') {
       sedangUji = false;
       driveMotors(0, 0);
@@ -380,9 +366,7 @@ void loop() {
     rpm_L = rpm_ctrl_L;
     rpm_R = rpm_ctrl_R;
 
-    // ---------------------------------------------------------------------
-    // PERHITUNGAN KONTROL PI TRIAL & ERROR
-    // ---------------------------------------------------------------------
+    // Kendali PI
     // Motor Kiri
     if (fabs(setpoint_L) < 0.05) {
       rpm_ctrl_L = 0.0; rpm_L = 0.0; pwm_L = 0.0;
@@ -408,13 +392,13 @@ void loop() {
     // Output ke Driver BTS7960
     driveMotors(pwm_L, pwm_R);
 
-    // Update akumulator 5 parameter performa (selama step aktif)
+    // Update akumulator 5 parameter performa
     if (stepAktif && target_rpm > 1.0) {
       perf_L.update(rpm_L, pwm_L, t);
       perf_R.update(rpm_R, pwm_R, t);
     }
 
-    // Cetak Baris Data CSV ke Serial Monitor
+    // Cetak Baris CSV
     Serial.print(t, 3);          Serial.print(";");
     Serial.print(setpoint_L, 2); Serial.print(";");
     Serial.print(rpm_L, 2);      Serial.print(";");
