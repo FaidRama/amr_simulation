@@ -1,6 +1,6 @@
 /* =========================================================================
- * FIRMWARE AMR DIFFERENTIAL DRIVE - PENGUJIAN STEP RESPON 100 RPM (TRIAL & ERROR)
- * KHUSUS PENGUJIAN TUNGGAL: STEP 100 RPM (DURASI 6.5 DETIK)
+ * FIRMWARE AMR DIFFERENTIAL DRIVE - PENGUJIAN STEP RESPON 80 RPM (TRIAL & ERROR)
+ * KHUSUS PENGUJIAN TUNGGAL: STEP 80 RPM (DURASI 6.5 DETIK)
  * MODE: STANDBY DIAM SAAT UPLOAD (MENUNGGU PERINTAH DARI PYTHON)
  * FITUR: MENCETAK DATA CSV 50 HZ + MENGHITUNG OTOMATIS 5 PARAMETER PERFORMA
  *        (RMSE, Overshoot, Rise Time, Settling Time, Steady-State Error)
@@ -52,8 +52,8 @@ const float KD_R = 0.0000;
 const unsigned long SAMPLING_MS = 20;
 const float DT = SAMPLING_MS / 1000.0; // 0.02 s (50 Hz)
 
-// TARGET STEP RPM & DURASI KHUSUS 100 RPM
-const float TARGET_STEP_RPM = 100.0;
+// TARGET STEP RPM & DURASI KHUSUS 80 RPM
+const float TARGET_STEP_RPM = 80.0;
 const float T_STEP_MULAI    = 0.5;   // Detik ke-0.5 step diaktifkan
 const float DURASI_TOTAL    = 6.5;   // Total durasi pengujian (detik)
 
@@ -221,7 +221,7 @@ void driveMotors(float pwmL, float pwmR) {
 // ====================== 9. CETAK REKAP HASIL 5 PARAMETER ==================
 void cetakRangkumanPerforma() {
   Serial.println(F("\n# ============================================================================"));
-  Serial.println(F("# RANGKUMAN 5 PARAMETER EVALUASI PERFORMA STEP RESPON 100 RPM (TRIAL & ERROR)"));
+  Serial.println(F("# RANGKUMAN 5 PARAMETER EVALUASI PERFORMA STEP RESPON 80 RPM (TRIAL & ERROR)"));
   Serial.println(F("# ============================================================================"));
   Serial.println(F("# Parameter Evaluasi              | Motor Kiri     | Motor Kanan    | Satuan"));
   Serial.println(F("# ----------------------------------------------------------------------------"));
@@ -254,11 +254,11 @@ void cetakRangkumanPerforma() {
   Serial.print(perf_L.getSteadyPWM(), 1); Serial.print(F("        | "));
   Serial.print(perf_R.getSteadyPWM(), 1); Serial.println(F("        | PWM (0-255)"));
   Serial.println(F("# ============================================================================"));
-  Serial.println(F("# PENGUJIAN 100 RPM SELESAI. Silakan copy data CSV atau tabel di atas."));
+  Serial.println(F("# PENGUJIAN 80 RPM SELESAI. Silakan copy data CSV atau tabel di atas."));
 }
 
 // ====================== 10. CETAK HEADER CSV & RESET =====================
-void mulaiPengujian100RPM() {
+void mulaiPengujian80RPM() {
   noInterrupts();
   totalPulsa_L = 0; totalPulsa_R = 0;
   deltaPulsa_L = 0; deltaPulsa_R = 0;
@@ -276,10 +276,10 @@ void mulaiPengujian100RPM() {
   waktuMulaiTes = millis();
   waktuSebelumnya = millis();
 
-  Serial.println(F("# PENGUJIAN : STEP RESPON 100 RPM (TRIAL & ERROR);;;;;;;;"));
+  Serial.println(F("# PENGUJIAN : STEP RESPON 80 RPM (TRIAL & ERROR);;;;;;;;"));
   Serial.println(F("# MOTOR_LEFT : Kp=2.5000; Ki=18.0000; Kd=0.0000;;;;;;"));
   Serial.println(F("# MOTOR_RIGHT: Kp=2.8000; Ki=18.0000; Kd=0.0000;;;;;;"));
-  Serial.println(F("# TARGET_RPM : 100.0; DURASI: 6.5s;;;;;;;"));
+  Serial.println(F("# TARGET_RPM : 80.0; DURASI: 6.5s;;;;;;;"));
   Serial.println(F("Time_s;Target_RPM_L;Actual_RPM_L;PWM_L;Error_L;Target_RPM_R;Actual_RPM_R;PWM_R;Error_R"));
 }
 
@@ -313,7 +313,7 @@ void setup() {
   driveMotors(0, 0);
   sedangUji = false;
   stepAktif = false;
-  Serial.println(F("# [STANDBY] Robot siap. Menunggu perintah '1' untuk memulai pengujian 100 RPM."));
+  Serial.println(F("# [STANDBY] Robot siap. Menunggu perintah '1' untuk memulai pengujian 80 RPM."));
 }
 
 // ====================== 12. LOOP KENDALI 50 HZ ===========================
@@ -321,7 +321,7 @@ void loop() {
   while (Serial.available() > 0) {
     char c = Serial.read();
     if (c == '1' || c == 'r' || c == 'R') {
-      mulaiPengujian100RPM(); // Mulai tes 100 RPM
+      mulaiPengujian80RPM(); // Mulai tes 80 RPM
     } else if (c == '0') {
       sedangUji = false;
       driveMotors(0, 0);
