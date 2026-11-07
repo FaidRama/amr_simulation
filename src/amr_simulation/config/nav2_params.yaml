@@ -118,16 +118,16 @@ controller_server:
       min_vel_y: 0.0
       max_vel_x: 0.45
       max_vel_y: 0.0
-      max_vel_theta: 0.60
+      max_vel_theta: 0.80
       min_speed_xy: 0.0
       max_speed_xy: 0.45
-      min_speed_theta: 0.20
+      min_speed_theta: 0.28
       acc_lim_x: 0.8
       acc_lim_y: 0.0
-      acc_lim_theta: 2.0
+      acc_lim_theta: 2.5
       decel_lim_x: -0.9
       decel_lim_y: 0.0
-      decel_lim_theta: -1.5
+      decel_lim_theta: -2.0
       vx_samples: 14
       vy_samples: 1
       vtheta_samples: 18
@@ -142,7 +142,6 @@ controller_server:
       critics:
         [
           "RotateToGoal",
-          "Oscillation",
           "BaseObstacle",
           "PathAlign",
           "GoalAlign",
@@ -151,16 +150,14 @@ controller_server:
         ]
 
       BaseObstacle.scale: 0.05
-      GoalAlign.scale: 24.0
-      PathAlign.scale: 16.0
+      GoalAlign.scale: 0.0
+      PathAlign.scale: 4.0
       PathAlign.forward_point_distance: 0.30
-      PathDist.scale: 32.0
-      GoalDist.scale: 24.0
+      PathDist.scale: 24.0
+      GoalDist.scale: 20.0
       RotateToGoal.scale: 32.0
       RotateToGoal.slowing_factor: 3.0
       RotateToGoal.lookahead_time: -1.0
-      Oscillation.scale: 1.0
-      Oscillation.oscillation_reset_dist: 0.05
 
 controller_server_rclcpp_node:
   ros__parameters:
