@@ -484,21 +484,35 @@ function openPointModal(wx, wy) {
          Pilih tindakan untuk titik koordinat ini:`,
         [
             {
-                label: 'Set Pickup', class: 'btn-primary',
+                label: '🚀 Langsung Antar ke Sini', class: 'btn-success',
+                action: () => {
+                    const point = { name: `Peta (${wx.toFixed(2)}, ${wy.toFixed(2)})`, x: wx, y: wy };
+                    if (typeof directDispatchToPoint === 'function') {
+                        directDispatchToPoint(point);
+                    } else {
+                        APP.pendingDelivery = point;
+                        const el = document.getElementById('delivery-selected');
+                        if (el) el.innerHTML = `${getIcon('check', 13)} Tujuan: [${wx.toFixed(2)}, ${wy.toFixed(2)}]`;
+                        showToast(`Tujuan ditetapkan: (${wx.toFixed(2)}, ${wy.toFixed(2)})`, 'info');
+                    }
+                }
+            },
+            {
+                label: 'Set Tujuan (Delivery)', class: 'btn-primary',
+                action: () => {
+                    APP.pendingDelivery = { name: `Map (${wx.toFixed(2)}, ${wy.toFixed(2)})`, x: wx, y: wy };
+                    const el = document.getElementById('delivery-selected');
+                    if (el) el.innerHTML = `${getIcon('check', 13)} Tujuan: [${wx.toFixed(2)}, ${wy.toFixed(2)}]`;
+                    showToast(`Tujuan ditetapkan: (${wx.toFixed(2)}, ${wy.toFixed(2)})`, 'info');
+                }
+            },
+            {
+                label: 'Set Pickup', class: 'btn-outline',
                 action: () => {
                     APP.pendingPickup = { name: `Map (${wx.toFixed(2)}, ${wy.toFixed(2)})`, x: wx, y: wy };
                     const el = document.getElementById('pickup-selected');
                     if (el) el.innerHTML = `${getIcon('check', 13)} Pickup: [${wx.toFixed(2)}, ${wy.toFixed(2)}]`;
                     showToast(`Pickup ditetapkan: (${wx.toFixed(2)}, ${wy.toFixed(2)})`, 'info');
-                }
-            },
-            {
-                label: 'Set Delivery', class: 'btn-success',
-                action: () => {
-                    APP.pendingDelivery = { name: `Map (${wx.toFixed(2)}, ${wy.toFixed(2)})`, x: wx, y: wy };
-                    const el = document.getElementById('delivery-selected');
-                    if (el) el.innerHTML = `${getIcon('check', 13)} Delivery: [${wx.toFixed(2)}, ${wy.toFixed(2)}]`;
-                    showToast(`Delivery ditetapkan: (${wx.toFixed(2)}, ${wy.toFixed(2)})`, 'info');
                 }
             },
             {
