@@ -700,7 +700,7 @@ class DashboardNode(Node):
                             'cancelled': 'Misi Pengantaran DIBATALKAN.'
                         }
                         desc = phase_names.get(cur_phase, f'Fase: {cur_phase}')
-                        _append_navigation_log(f'📦 [WAYPOINT] {desc}')
+                        _append_navigation_log(f'[WAYPOINT] {desc}')
 
                     # Simpan ke history jika misi selesai (hanya sekali per misi)
                     mission_id = data['mission'].get('mission_id', '')
@@ -1250,7 +1250,7 @@ def stop_slam_process():
         ['pkill', '-9', '-f', '(real_mapping\\.launch\\.py|async_slam_toolbox_node|rplidar_bridge\\.py|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py|static_transform_publisher)'],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
-    _append_mapping_log('🛑 Proses SLAM Mapping dihentikan.')
+    _append_mapping_log('[STOP] Proses SLAM Mapping dihentikan.')
 
 
 # =====================================================================
@@ -1370,7 +1370,7 @@ def stop_navigation_process():
         ['pkill', '-9', '-f', '(real_navigation\\.launch\\.py|localization_launch\\.py|navigation_launch\\.py|map_server|amcl|bt_navigator|controller_server|planner_server|recoveries_server|waypoint_follower|lifecycle_manager|adaptive_velocity_node|rplidar_bridge\\.py|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py|static_transform_publisher)'],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
-    _append_navigation_log('🛑 Proses Navigasi (Nav2) dihentikan.')
+    _append_navigation_log('[STOP] Proses Navigasi (Nav2) dihentikan.')
 
 
 # =====================================================================
@@ -1639,7 +1639,7 @@ def api_mapping_start():
     try:
         with MAPPING_LOCK:
             MAPPING_LOGS.clear()
-            _append_mapping_log('🚀 Meluncurkan: ros2 launch amr_simulation real_mapping.launch.py ...')
+            _append_mapping_log('[START] Meluncurkan: ros2 launch amr_simulation real_mapping.launch.py ...')
             MAPPING_PROC = subprocess.Popen(
                 ['/bin/bash', '-c', full_cmd],
                 stdout=subprocess.PIPE,
@@ -1803,7 +1803,7 @@ def api_navigation_start():
             NAVIGATION_READY = False
             RUNTIME_CACHE['nav_ready'] = False
             NAVIGATION_LOGS.clear()
-            _append_navigation_log(f'🚀 Meluncurkan Navigasi dengan peta: {os.path.basename(map_to_use or "default")} ...')
+            _append_navigation_log(f'[START] Meluncurkan Navigasi dengan peta: {os.path.basename(map_to_use or "default")} ...')
             NAVIGATION_PROC = subprocess.Popen(
                 ['/bin/bash', '-c', full_cmd],
                 stdout=subprocess.PIPE,
@@ -1918,7 +1918,7 @@ def api_mapping_save():
             return jsonify({'success': False, 'error': 'Gagal menulis file peta ke disk'}), 500
 
         yaml_filename = f"{clean_name}.yaml"
-        _append_mapping_log(f'💾 Peta berhasil disimpan: {yaml_filename} ({width}x{height} px)')
+        _append_mapping_log(f'[SAVED] Peta berhasil disimpan: {yaml_filename} ({width}x{height} px)')
 
         if set_active:
             if 'profiles' in waypoints_config and 'real' in waypoints_config['profiles']:
@@ -2128,7 +2128,7 @@ def api_initialpose():
     set_as_home = bool(data.get('set_as_home', False))
 
     ros_node.send_initial_pose(x, y, yaw)
-    _append_navigation_log(f'📍 [AMCL] Initial Pose dikirim: X={x:.2f}m, Y={y:.2f}m, Yaw={math.degrees(yaw):.1f}°{" (disimpan sebagai Home)" if set_as_home else ""}')
+    _append_navigation_log(f'[AMCL] Initial Pose dikirim: X={x:.2f}m, Y={y:.2f}m, Yaw={math.degrees(yaw):.1f}°{" (disimpan sebagai Home)" if set_as_home else ""}')
 
     if set_as_home:
         home_obj = {'x': round(x, 3), 'y': round(y, 3), 'yaw': round(yaw, 3)}
@@ -2232,7 +2232,7 @@ def api_delivery_start():
         return jsonify({'error': 'Daftar task kosong'}), 400
     
     ros_node.send_delivery_tasks(tasks)
-    _append_navigation_log(f'🚀 [DISPATCH] Memulai eksekusi misi ({len(tasks)} task dikirim ke waypoint_manager).')
+    _append_navigation_log(f'[DISPATCH] Memulai eksekusi misi ({len(tasks)} task dikirim ke waypoint_manager).')
     for idx, t in enumerate(tasks):
         pk = t.get('pickup')
         dl = t.get('delivery') or t.get('destination') or {}
@@ -2256,7 +2256,7 @@ def api_delivery_control():
         return jsonify({'error': f'Perintah tidak valid: {command}'}), 400
     
     ros_node.send_control(command)
-    _append_navigation_log(f'🎮 [DISPATCH] Perintah operator: {command.upper()}')
+    _append_navigation_log(f'[DISPATCH] Perintah operator: {command.upper()}')
     return jsonify({'message': f'Perintah [{command}] terkirim', 'success': True})
 
 
@@ -2437,9 +2437,10 @@ DEFAULT_VOICE_CONFIG = {
     "target_name": "Acome A1",
     "auto_reconnect": True,
     "reconnect_interval_s": 5,
-    "obstacle_voice_delay_s": 10,
-    "obstacle_voice_repeat_s": 12,
-    "obstacle_phrase": "Permisi, robot mau lewat. Mohon beri jalan.",
+    "keepalive_interval_s": 25,
+    "obstacle_voice_delay_s": 5,
+    "obstacle_voice_repeat_s": 20,
+    "obstacle_phrase": "Permisi, saya mau lewat. Mohon beri jalan.",
     "arrival_phrase": "Deliver tiba. Robot sudah sampai di titik tujuan, silakan ambil barang.",
     "pickup_phrase": "Pickup tiba. Robot sudah sampai di titik pickup, silakan muat barang.",
     "home_phrase": "Misi selesai. Robot kembali ke stasiun pangkalan."
@@ -2551,16 +2552,23 @@ def is_bluetooth_device_connected(mac_address):
 
 
 _last_bt_check_time = 0.0
+_last_bt_ensure_time = 0.0
+_last_bt_fallback_ka_time = 0.0
 _cached_bt_status = {'connected': False, 'target_mac': '', 'target_name': ''}
 
 
 def get_voice_telemetry_status():
     """Dapatkan status Bluetooth riil untuk telemetri dashboard (akurat & realtime)."""
-    global _last_bt_check_time, _cached_bt_status
+    global _last_bt_check_time, _last_bt_ensure_time, _last_bt_fallback_ka_time, _cached_bt_status
     now = time.time()
     # Jika ada update dari topic /robot_voice/status dalam 3 detik terakhir, gunakan itu
     if ros_node and hasattr(ros_node, 'last_voice_status_time') and (now - getattr(ros_node, 'last_voice_status_time', 0) < 3.0):
         return ros_node.voice_status
+
+    # Pastikan node watchdog berjalan jika belum ada update ROS 2
+    if now - _last_bt_ensure_time > 15.0:
+        _last_bt_ensure_time = now
+        ensure_voice_node_running()
 
     # Jika tidak ada update ROS 2 node, periksa status fisik BlueZ langsung setiap 2.5 detik
     if now - _last_bt_check_time > 2.5:
@@ -2575,6 +2583,21 @@ def get_voice_telemetry_status():
                 'target_mac': target_mac,
                 'target_name': target_name
             }
+            # Fallback keep-alive langsung dari app.py jika node ROS 2 sedang tidak mengirim status
+            if conn and (now - _last_bt_fallback_ka_time >= 25.0):
+                _last_bt_fallback_ka_time = now
+                def _run_ka():
+                    for wr in get_workspace_roots():
+                        script = os.path.join(wr, 'src', 'amr_simulation', 'scripts', 'test_robot_voice.py')
+                        if os.path.exists(script):
+                            try:
+                                subprocess.run(['python3', script, '--keepalive'],
+                                               env=get_pulse_env(),
+                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=4)
+                            except Exception:
+                                pass
+                            break
+                threading.Thread(target=_run_ka, daemon=True).start()
         except Exception:
             pass
     return _cached_bt_status
@@ -3398,6 +3421,7 @@ def main(args=None):
     
     ros_thread = threading.Thread(target=ros_spin, daemon=True)
     ros_thread.start()
+    ensure_voice_node_running()
     
     print(f'\n[SERVER] Templates: {TEMPLATE_DIR}')
     print(f'[SERVER] Static: {STATIC_DIR}')

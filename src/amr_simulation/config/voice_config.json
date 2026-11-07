@@ -9,5 +9,5 @@
   "arrival_phrase": "Deliver tiba. Robot sudah sampai di titik tujuan, silakan ambil barang.",
   "pickup_phrase": "Pickup tiba. Robot sudah sampai di titik pickup, silakan muat barang.",
   "home_phrase": "Misi selesai. Robot kembali ke stasiun pangkalan.",
-  "keepalive_interval_s": 45
+  "keepalive_interval_s": 25
 }

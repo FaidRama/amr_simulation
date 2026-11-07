@@ -408,7 +408,7 @@ function updateDeliveryMapHud(extraText = '') {
     if (extraText) {
         hud.innerHTML = extraText;
     } else {
-        hud.innerHTML = `🔍 Zoom: <strong>${zoomPct}%</strong> | Scroll: Zoom, Drag: Geser, Klik: Pilih Titik`;
+        hud.innerHTML = `${getIcon('search', 12)} Zoom: <strong>${zoomPct}%</strong> | Scroll: Zoom, Drag: Geser, Klik: Pilih Titik`;
     }
 }
 
@@ -445,7 +445,7 @@ function toggleDeliveryMapFullscreen() {
 
     const fsBtn = document.getElementById('btn-delivery-fullscreen');
     if (fsBtn) {
-        fsBtn.innerHTML = isFs ? '✕' : '⛶';
+        fsBtn.innerHTML = isFs ? getIcon('minimize', 14) : getIcon('maximize', 14);
         fsBtn.title = isFs ? 'Keluar Layar Penuh (Esc)' : 'Layar Penuh (Full Screen)';
     }
 
@@ -455,7 +455,7 @@ function toggleDeliveryMapFullscreen() {
             exitBanner = document.createElement('div');
             exitBanner.id = 'delivery-map-exit-banner';
             exitBanner.className = 'map-fullscreen-exit-banner';
-            exitBanner.innerHTML = '<span>✕ KELUAR LAYAR PENUH (Esc)</span>';
+            exitBanner.innerHTML = `<span style="display:inline-flex;align-items:center;gap:6px;">${getIcon('x', 14)} KELUAR LAYAR PENUH (Esc)</span>`;
             exitBanner.onclick = () => toggleDeliveryMapFullscreen();
             container.appendChild(exitBanner);
         }
@@ -484,7 +484,7 @@ function openPointModal(wx, wy) {
          Pilih tindakan untuk titik koordinat ini:`,
         [
             {
-                label: '🚀 Langsung Antar ke Sini', class: 'btn-success',
+                label: `${getIcon('send', 14)} Langsung Antar ke Sini`, class: 'btn-success',
                 action: () => {
                     const point = { name: `Peta (${wx.toFixed(2)}, ${wy.toFixed(2)})`, x: wx, y: wy };
                     if (typeof directDispatchToPoint === 'function') {
@@ -498,7 +498,7 @@ function openPointModal(wx, wy) {
                 }
             },
             {
-                label: 'Set Tujuan (Delivery)', class: 'btn-primary',
+                label: `${getIcon('delivery_point', 14)} Set Tujuan (Delivery)`, class: 'btn-primary',
                 action: () => {
                     APP.pendingDelivery = { name: `Map (${wx.toFixed(2)}, ${wy.toFixed(2)})`, x: wx, y: wy };
                     const el = document.getElementById('delivery-selected');
@@ -507,7 +507,7 @@ function openPointModal(wx, wy) {
                 }
             },
             {
-                label: 'Set Pickup', class: 'btn-outline',
+                label: `${getIcon('pickup', 14)} Set Pickup`, class: 'btn-outline',
                 action: () => {
                     APP.pendingPickup = { name: `Map (${wx.toFixed(2)}, ${wy.toFixed(2)})`, x: wx, y: wy };
                     const el = document.getElementById('pickup-selected');
@@ -516,7 +516,7 @@ function openPointModal(wx, wy) {
                 }
             },
             {
-                label: '📍 Set Posisi Awal Robot (AMCL)', class: 'btn-warning',
+                label: `${getIcon('crosshair', 14)} Set Posisi Awal Robot (AMCL)`, class: 'btn-warning',
                 action: () => {
                     if (typeof openInitialPoseModal === 'function') {
                         openInitialPoseModal(wx, wy);
@@ -526,7 +526,7 @@ function openPointModal(wx, wy) {
                 }
             },
             {
-                label: '💾 Simpan ke Daftar Lokasi', class: 'btn-secondary',
+                label: `${getIcon('save', 14)} Simpan ke Daftar Lokasi`, class: 'btn-secondary',
                 action: () => {
                     if (typeof openSavePointFromMapModal === 'function') {
                         openSavePointFromMapModal(wx, wy);
@@ -575,7 +575,7 @@ async function initDeliveryMap() {
                 DELIVERY_VIEWPORT.panY = cursorY - baseY * newZoom;
 
                 const { wx, wy } = screenToWorld(e.clientX, e.clientY, canvas, DELIVERY_VIEWPORT);
-                updateDeliveryMapHud(`📍 <strong>X=${wx.toFixed(2)}m, Y=${wy.toFixed(2)}m</strong> | 🔍 Zoom: <strong>${Math.round(newZoom * 100)}%</strong>`);
+                updateDeliveryMapHud(`${getIcon('pickup', 12)} <strong>X=${wx.toFixed(2)}m, Y=${wy.toFixed(2)}m</strong> | ${getIcon('search', 12)} Zoom: <strong>${Math.round(newZoom * 100)}%</strong>`);
             }
         }, { passive: false });
 
@@ -584,7 +584,7 @@ async function initDeliveryMap() {
             if (isPointerDown) return;
             const { wx, wy } = screenToWorld(e.clientX, e.clientY, canvas, DELIVERY_VIEWPORT);
             const zoomPct = Math.round(DELIVERY_VIEWPORT.zoom * 100);
-            updateDeliveryMapHud(`📍 Kursor: <strong>X=${wx.toFixed(2)}m, Y=${wy.toFixed(2)}m</strong> | 🔍 Zoom: <strong>${zoomPct}%</strong>`);
+            updateDeliveryMapHud(`${getIcon('pickup', 12)} Kursor: <strong>X=${wx.toFixed(2)}m, Y=${wy.toFixed(2)}m</strong> | ${getIcon('search', 12)} Zoom: <strong>${zoomPct}%</strong>`);
         });
 
         canvas.addEventListener('pointerleave', () => {
@@ -965,8 +965,8 @@ function drawLiveSlamMap(canvas, ctx) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const msg = APP.mappingActive
-        ? '⏳ MENUNGGU FRAME PERTAMA /map DARI SLAM TOOLBOX...'
-        : '📡 SLAM STANDBY — Klik [Mulai SLAM Mapping] untuk membangun peta baru';
+        ? '[MENUNGGU] MENUNGGU FRAME PERTAMA /map DARI SLAM TOOLBOX...'
+        : '[STANDBY] SLAM STANDBY — Klik [Mulai SLAM Mapping] untuk membangun peta baru';
     ctx.fillText(msg, canvasW / 2, 31);
     ctx.textBaseline = 'alphabetic';
 }

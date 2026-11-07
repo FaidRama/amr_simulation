@@ -201,14 +201,14 @@ function showToast(message, type = 'info') {
 
 // ====================== MODAL ======================
 function showModal(title, body, actions) {
-    document.getElementById('modal-title').textContent = title;
+    document.getElementById('modal-title').innerHTML = title;
     document.getElementById('modal-body').innerHTML = body;
     const actionsEl = document.getElementById('modal-actions');
     actionsEl.innerHTML = '';
     actions.forEach(a => {
         const btn = document.createElement('button');
         btn.className = `btn ${a.class || 'btn-outline'}`;
-        btn.textContent = a.label;
+        btn.innerHTML = a.label;
         btn.onclick = () => {
             document.getElementById('modal-overlay').classList.add('hidden');
             if (a.action) a.action();
@@ -322,7 +322,7 @@ function renderHome() {
         waiting_delivery: 'Menunggu Ambil Barang',
         at_delivery: 'Tiba di Tujuan',
         returning_home: 'Kembali ke Home Base',
-        waiting_human: '🚶 Menunggu Manusia Lewat'
+        waiting_human: 'Menunggu Manusia Lewat'
     };
 
     const yawDeg = ((APP.pose.yaw || 0) * 180 / Math.PI).toFixed(1);
@@ -533,14 +533,16 @@ function renderDelivery() {
     const div = document.createElement('div');
     div.className = 'page-enter';
 
-    const modeBadgeText = APP.mode === 'sim' ? '🎮 MODE SIMULASI (GAZEBO)' : '🤖 MODE REAL ROBOT';
+    const modeBadgeText = APP.mode === 'sim'
+        ? `${getIcon('gamepad', 13)} MODE SIMULASI (GAZEBO)`
+        : `${getIcon('bot', 13)} MODE REAL ROBOT`;
     const mapOptionsHtml = [
-        `<option value="live" ${APP.mapFile === 'live' ? 'selected' : ''}>📡 Live ROS /map Topic (SLAM / Nav2)</option>`,
+        `<option value="live" ${APP.mapFile === 'live' ? 'selected' : ''}>Live ROS /map Topic (SLAM / Nav2)</option>`,
         ...(APP.availableMaps || []).map(m => {
             const mapId = (typeof m === 'object' && m.id) ? m.id : (typeof m === 'object' ? m.name : m);
             const mapLabel = (typeof m === 'object' && m.name) ? m.name : mapId;
             const isSelected = APP.mapFile === mapId || APP.mapFile === mapLabel;
-            return `<option value="${mapId}" ${isSelected ? 'selected' : ''}>🗺️ ${mapLabel}</option>`;
+            return `<option value="${mapId}" ${isSelected ? 'selected' : ''}>${mapLabel}</option>`;
         })
     ].join('');
 
@@ -551,7 +553,7 @@ function renderDelivery() {
                 <div class="page-section">
                     <div class="section-title">
                         <span>01 // PETA SLAM & TITIK TUJUAN</span>
-                        <span class="mono" style="color:var(--accent-bright);">${modeBadgeText}</span>
+                        <span class="mono" style="color:var(--accent-bright); display:inline-flex; align-items:center; gap:5px;">${modeBadgeText}</span>
                     </div>
 
                     <!-- NAV2 NAVIGATION RUNTIME CONTROLLER -->
@@ -560,15 +562,15 @@ function renderDelivery() {
                             <span id="nav-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.navActive ? (APP.navReady ? 'var(--success)' : 'var(--warning)') : 'var(--danger)'}; box-shadow:${APP.navActive ? (APP.navReady ? '0 0 8px var(--success)' : '0 0 10px var(--warning)') : 'none'}; display:inline-block; ${APP.navActive && !APP.navReady ? 'animation: pulse-dot 1s infinite;' : ''}"></span>
                             <div>
                                 <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="nav-status-text">
-                                    NAV2 NAVIGATION: ${APP.navActive ? (APP.navReady ? '<span style="color:var(--success)">🟢 AMR SIAP NAVIGASI &amp; MENGANTAR!</span>' : '<span style="color:var(--warning)">⏳ MENYIAPKAN SENSOR, AMCL &amp; NAV2...</span>') : '<span style="color:var(--danger)">OFFLINE</span>'}
+                                    NAV2 NAVIGATION: ${APP.navActive ? (APP.navReady ? `<span style="color:var(--success)">${getIcon('checkCircle', 13)} AMR SIAP NAVIGASI &amp; MENGANTAR!</span>` : `<span style="color:var(--warning)">${getIcon('loader', 13)} MENYIAPKAN SENSOR, AMCL &amp; NAV2...</span>`) : '<span style="color:var(--danger)">OFFLINE</span>'}
                                 </div>
                                 <div style="font-size:0.68rem; color:var(--text-muted);" id="nav-sub-text">
-                                    ${APP.navActive ? (APP.navReady ? '✅ Peta, LiDAR, AMCL & Nav2 Action Server aktif — siap menerima perintah pengantaran' : 'Mohon tunggu hingga sensor & Nav2 selesai diinisialisasi...') : 'Nyalakan Nav2 sebelum memulai misi pengantaran'}
+                                    ${APP.navActive ? (APP.navReady ? 'Peta, LiDAR, AMCL & Nav2 Action Server aktif — siap menerima perintah pengantaran' : 'Mohon tunggu hingga sensor & Nav2 selesai diinisialisasi...') : 'Nyalakan Nav2 sebelum memulai misi pengantaran'}
                                 </div>
                             </div>
                         </div>
                         <button type="button" id="nav-toggle-btn" class="btn btn-sm ${APP.navActive ? (APP.navReady ? 'btn-danger' : 'btn-warning') : 'btn-success'}" onclick="toggleNavigation()" style="min-width:130px; font-weight:600; border-radius:6px;">
-                            ${APP.navActive ? (APP.navReady ? '🛑 Stop Navigasi' : '⏳ Menyiapkan Nav2...') : '🚀 Jalankan Navigasi'}
+                            ${APP.navActive ? (APP.navReady ? `${getIcon('stopCircle', 14)} Stop Navigasi` : `${getIcon('loader', 14)} Menyiapkan Nav2...`) : `${getIcon('play', 13)} Jalankan Navigasi`}
                         </button>
                     </div>
 
@@ -580,21 +582,21 @@ function renderDelivery() {
                                 ${mapOptionsHtml}
                             </select>
                             <button class="btn btn-outline btn-sm" style="padding:4px 8px; font-size:0.7rem;" onclick="refreshActiveMap()" title="Muat Ulang Gambar Peta">
-                                🔄 Refresh Peta
+                                ${getIcon('refresh', 12)} Refresh Peta
                             </button>
                         </div>
                         <div class="map-toolbar-group">
                             <button class="btn btn-outline btn-sm" style="padding:4px 9px; font-size:0.7rem;" onclick="openInitialPoseModal()" title="Set 2D Pose Estimate (/initialpose) untuk lokalisasi AMCL">
-                                📍 Set Posisi Awal
+                                ${getIcon('crosshair', 12)} Set Posisi Awal
                             </button>
                             <button class="btn btn-outline btn-sm" style="padding:4px 9px; font-size:0.7rem;" onclick="openAutoRelocalizeModal()" title="Kalibrasi posisi otomatis dengan memutar robot 360° menggunakan AMCL & LiDAR">
-                                🔄 Relokalisasi (360°)
+                                ${getIcon('rotateCcw', 12)} Relokalisasi (360°)
                             </button>
                             <button class="btn btn-outline btn-sm" style="padding:4px 9px; font-size:0.7rem;" onclick="clearRobotTrail()" title="Hapus jejak lintasan hijau robot pada peta">
-                                🧹 Reset Jejak
+                                ${getIcon('eraser', 12)} Reset Jejak
                             </button>
                             <button class="btn btn-primary btn-sm" style="padding:4px 10px; font-size:0.7rem; font-weight:600;" onclick="toggleDeliveryMapFullscreen()" title="Buka peta mode layar penuh (Full Screen) agar akurat memilih titik">
-                                ⛶ Layar Penuh
+                                ${getIcon('maximize', 12)} Layar Penuh
                             </button>
                         </div>
                     </div>
@@ -604,11 +606,11 @@ function renderDelivery() {
                         <div class="map-overlay-controls">
                             <button type="button" class="map-ctrl-btn" onclick="zoomDeliveryMap(1.3)" title="Perbesar (Zoom In)">＋</button>
                             <button type="button" class="map-ctrl-btn" onclick="zoomDeliveryMap(0.77)" title="Perkecil (Zoom Out)">－</button>
-                            <button type="button" class="map-ctrl-btn" onclick="resetDeliveryMapView()" title="Reset Tampilan (Fit Peta)">⟲</button>
-                            <button type="button" class="map-ctrl-btn" id="btn-delivery-fullscreen" onclick="toggleDeliveryMapFullscreen()" title="Layar Penuh (Full Screen)">⛶</button>
+                            <button type="button" class="map-ctrl-btn" onclick="resetDeliveryMapView()" title="Reset Tampilan (Fit Peta)">${getIcon('rotateCcw', 14)}</button>
+                            <button type="button" class="map-ctrl-btn" id="btn-delivery-fullscreen" onclick="toggleDeliveryMapFullscreen()" title="Layar Penuh (Full Screen)">${getIcon('maximize', 14)}</button>
                         </div>
                         <div class="map-hud-bar" id="delivery-map-cursor-hud">
-                            🔍 Zoom: 100% | Scroll: Zoom, Drag: Geser, Klik: Pilih Titik
+                            ${getIcon('search', 12)} Zoom: 100% | Scroll: Zoom, Drag: Geser, Klik: Pilih Titik
                         </div>
                         <div class="map-legend">
                             <span class="legend-pickup">Pickup</span>
@@ -617,7 +619,7 @@ function renderDelivery() {
                         </div>
                     </div>
                     <div style="margin-top:6px; font-size:0.71rem; color:var(--text-muted); display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px;">
-                        <span>💡 Klik titik mana saja di peta untuk: <strong>Set Pickup / Delivery</strong>, <strong>Set Posisi Awal AMCL</strong>, atau <strong>Simpan Lokasi Baru</strong>.</span>
+                        <span style="display:inline-flex;align-items:center;gap:5px;">${getIcon('lightbulb', 13)} Klik titik mana saja di peta untuk: <strong>Set Pickup / Delivery</strong>, <strong>Set Posisi Awal AMCL</strong>, atau <strong>Simpan Lokasi Baru</strong>.</span>
                         <span class="mono">Home: (${(APP.homePosition?.x || 0).toFixed(2)}, ${(APP.homePosition?.y || 0).toFixed(2)})</span>
                     </div>
                 </div>
@@ -647,7 +649,7 @@ function renderDelivery() {
                 <div class="page-section" id="dispatch-terminal-section">
                     <div class="section-title">
                         <span>05 // PANTAUAN TERMINAL &amp; STATUS NAVIGASI</span>
-                        <span class="mono" id="dispatch-nav-status" style="font-size:0.7rem; color:${APP.navActive ? (APP.navReady ? 'var(--success)' : 'var(--warning)') : 'var(--text-muted)'};">${APP.navActive ? (APP.navReady ? '🟢 AMR SIAP MENGANTAR (READY)' : '⏳ MENYIAPKAN NAV2...') : 'NAV2 STANDBY'}</span>
+                        <span class="mono" id="dispatch-nav-status" style="font-size:0.7rem; color:${APP.navActive ? (APP.navReady ? 'var(--success)' : 'var(--warning)') : 'var(--text-muted)'};">${APP.navActive ? (APP.navReady ? 'AMR SIAP MENGANTAR (READY)' : 'MENYIAPKAN NAV2...') : 'NAV2 STANDBY'}</span>
                     </div>
                     <div class="panel" style="padding:10px;">
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; font-size:0.72rem; flex-wrap:wrap; gap:4px;">
@@ -722,7 +724,7 @@ function renderDelivery() {
                         <!-- TOMBOL EKSEKUSI TASK -->
                         <div style="display:flex; flex-direction:column; gap:8px; margin-top:10px;">
                             <button class="btn btn-success btn-block" onclick="quickDirectDispatchSelected()" id="btn-quick-dispatch" style="${APP.dispatchMode === 'direct' ? '' : 'display:none;'} font-weight:700; padding:10px; font-size:0.82rem;">
-                                🚀 Kirim Langsung Sekarang
+                                ${getIcon('send', 15)} Kirim Langsung Sekarang
                             </button>
                             <button class="btn btn-primary btn-block" onclick="addTaskToQueue()">
                                 ${getIcon('plus', 15)} Tambah ke Antrean Misi
@@ -948,7 +950,7 @@ async function directDispatchToPoint(point) {
     }
 
     showModal(
-        '🚀 Konfirmasi Pengiriman Langsung',
+        `${getIcon('send', 15)} Konfirmasi Pengiriman Langsung`,
         `<p>Unit AMR-01 akan langsung diberangkatkan dari posisi saat ini menuju:</p>
          <div style="background:rgba(255,255,255,0.05); padding:10px 14px; border-radius:6px; margin:10px 0; border-left:3px solid var(--accent-bright);">
              <strong style="color:var(--accent-bright); font-size:0.95rem;">${point.name}</strong><br>
@@ -960,7 +962,7 @@ async function directDispatchToPoint(point) {
         [
             { label: 'Batal', class: 'btn-outline' },
             {
-                label: '🚀 Berangkatkan Sekarang',
+                label: `${getIcon('send', 14)} Berangkatkan Sekarang`,
                 class: 'btn-success',
                 action: async () => {
                     const task = {
@@ -1079,26 +1081,26 @@ function updateNavigationUI(active, ready = APP.navReady) {
             ind.style.background = 'var(--success)';
             ind.style.boxShadow = '0 0 8px var(--success)';
             ind.style.animation = 'none';
-            text.innerHTML = 'NAV2 NAVIGATION: <span style="color:var(--success)">🟢 AMR SIAP NAVIGASI &amp; MENGANTAR!</span>';
-            if (sub) sub.textContent = '✅ Peta, LiDAR, AMCL & Nav2 Action Server aktif — siap menerima perintah pengantaran';
+            text.innerHTML = `NAV2 NAVIGATION: <span style="color:var(--success)">${getIcon('checkCircle', 13)} AMR SIAP NAVIGASI &amp; MENGANTAR!</span>`;
+            if (sub) sub.textContent = 'Peta, LiDAR, AMCL & Nav2 Action Server aktif — siap menerima perintah pengantaran';
             if (navStatusEl) {
-                navStatusEl.textContent = '🟢 AMR SIAP MENGANTAR (READY)';
+                navStatusEl.textContent = 'AMR SIAP MENGANTAR (READY)';
                 navStatusEl.style.color = 'var(--success)';
             }
             btn.className = 'btn btn-sm btn-danger';
-            btn.innerHTML = '🛑 Stop Navigasi';
+            btn.innerHTML = `${getIcon('stopCircle', 14)} Stop Navigasi`;
         } else {
             ind.style.background = 'var(--warning)';
             ind.style.boxShadow = '0 0 10px var(--warning)';
             ind.style.animation = 'pulse-dot 1s infinite';
-            text.innerHTML = 'NAV2 NAVIGATION: <span style="color:var(--warning)">⏳ MENYIAPKAN SENSOR, AMCL &amp; NAV2...</span>';
+            text.innerHTML = `NAV2 NAVIGATION: <span style="color:var(--warning)">${getIcon('loader', 13)} MENYIAPKAN SENSOR, AMCL &amp; NAV2...</span>`;
             if (sub) sub.textContent = 'Mohon tunggu hingga sensor & Nav2 selesai diinisialisasi...';
             if (navStatusEl) {
-                navStatusEl.textContent = '⏳ MENYIAPKAN NAV2...';
+                navStatusEl.textContent = 'MENYIAPKAN NAV2...';
                 navStatusEl.style.color = 'var(--warning)';
             }
             btn.className = 'btn btn-sm btn-warning';
-            btn.innerHTML = '⏳ Menyiapkan Nav2...';
+            btn.innerHTML = `${getIcon('loader', 14)} Menyiapkan Nav2...`;
         }
         if (startDelBtn) {
             startDelBtn.title = ready ? 'Mulai Eksekusi Misi' : 'Menunggu Nav2 siap sepenuhnya...';
@@ -1112,7 +1114,7 @@ function updateNavigationUI(active, ready = APP.navReady) {
         text.innerHTML = 'NAV2 NAVIGATION: <span style="color:var(--danger)">OFFLINE</span>';
         if (sub) sub.textContent = 'Nyalakan Nav2 sebelum memulai misi pengantaran';
         btn.className = 'btn btn-sm btn-success';
-        btn.innerHTML = '🚀 Jalankan Navigasi';
+        btn.innerHTML = `${getIcon('play', 13)} Jalankan Navigasi`;
         if (navStatusEl) {
             navStatusEl.textContent = 'NAV2 STANDBY';
             navStatusEl.style.color = 'var(--text-muted)';
@@ -1423,7 +1425,7 @@ function updateMissionUI() {
             at_delivery: 'Tiba di delivery',
             waiting_delivery: 'Menunggu barang diambil',
             returning_home: 'Kembali ke titik awal...',
-            waiting_human: '🚶 Menunggu manusia melintas...',
+            waiting_human: 'Menunggu manusia melintas...',
             idle: 'Selesai'
         };
         if (progressText) {
@@ -1634,10 +1636,10 @@ function updateDispatchLogs(data) {
             navStatusEl.textContent = 'NAV2 STANDBY';
             navStatusEl.style.color = 'var(--text-muted)';
         } else if (data.nav_ready) {
-            navStatusEl.textContent = '🟢 AMR SIAP MENGANTAR (READY)';
+            navStatusEl.textContent = 'AMR SIAP MENGANTAR (READY)';
             navStatusEl.style.color = 'var(--success)';
         } else {
-            navStatusEl.textContent = '⏳ MENYIAPKAN NAV2...';
+            navStatusEl.textContent = 'MENYIAPKAN NAV2...';
             navStatusEl.style.color = 'var(--warning)';
         }
     }
@@ -1978,7 +1980,7 @@ function renderCamera() {
                         <span id="cam-page-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.cameraActive ? (APP.cameraReady ? 'var(--success)' : 'var(--warning)') : 'var(--text-muted)'}; box-shadow:${APP.cameraActive ? (APP.cameraReady ? '0 0 8px var(--success)' : '0 0 10px var(--warning)') : 'none'}; display:inline-block; ${APP.cameraActive && !APP.cameraReady ? 'animation: pulse-dot 1s infinite;' : ''}"></span>
                         <div>
                             <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="cam-page-status-text">
-                                USB CAMERA: ${APP.cameraActive ? (APP.cameraReady ? '<span style="color:var(--success)">🟢 ONLINE (STREAMING)</span>' : '<span style="color:var(--warning)">⏳ MEMBUKA STREAM...</span>') : '<span style="color:var(--text-muted)">OFFLINE</span>'}
+                                USB CAMERA: ${APP.cameraActive ? (APP.cameraReady ? `<span style="color:var(--success)">${getIcon('checkCircle', 13)} ONLINE (STREAMING)</span>` : `<span style="color:var(--warning)">${getIcon('loader', 13)} MEMBUKA STREAM...</span>`) : '<span style="color:var(--text-muted)">OFFLINE</span>'}
                             </div>
                             <div style="font-size:0.68rem; color:var(--text-muted);" id="cam-page-sub-text">
                                 ${APP.cameraActive ? (APP.cameraReady ? 'Hardware kamera & publisher terhubung' : 'Menghubungkan device /dev/video0 & inisialisasi stream...') : 'Hardware kamera standby'}
@@ -1986,7 +1988,7 @@ function renderCamera() {
                         </div>
                     </div>
                     <button type="button" id="cam-page-toggle-btn" class="btn btn-sm ${APP.cameraActive ? (APP.cameraReady ? 'btn-danger' : 'btn-warning') : 'btn-success'}" onclick="toggleCamera()" style="min-width:120px; font-weight:600; border-radius:6px;">
-                        ${APP.cameraActive ? (APP.cameraReady ? '🛑 Stop Kamera' : '⏳ Menyiapkan...') : '📷 Start Kamera'}
+                        ${APP.cameraActive ? (APP.cameraReady ? `${getIcon('stopCircle', 14)} Stop Kamera` : `${getIcon('loader', 14)} Menyiapkan...`) : `${getIcon('camera', 14)} Start Kamera`}
                     </button>
                 </div>
 
@@ -1996,7 +1998,7 @@ function renderCamera() {
                         <span id="human-node-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.humanNodeActive ? (APP.humanNodeReady ? 'var(--success)' : 'var(--warning)') : 'var(--text-muted)'}; box-shadow:${APP.humanNodeActive ? (APP.humanNodeReady ? '0 0 8px var(--success)' : '0 0 10px var(--warning)') : 'none'}; display:inline-block; ${APP.humanNodeActive && !APP.humanNodeReady ? 'animation: pulse-dot 1s infinite;' : ''}"></span>
                         <div>
                             <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="human-node-status-text">
-                                HUMAN AI NODE: ${APP.humanNodeActive ? (APP.humanNodeReady ? '<span style="color:var(--success)">🟢 ACTIVE &amp; DETECTING</span>' : '<span style="color:var(--warning)">⏳ MEMUAT MODEL AI (YOLO)...</span>') : '<span style="color:var(--text-muted)">STOPPED</span>'}
+                                HUMAN AI NODE: ${APP.humanNodeActive ? (APP.humanNodeReady ? `<span style="color:var(--success)">${getIcon('checkCircle', 13)} ACTIVE &amp; DETECTING</span>` : `<span style="color:var(--warning)">${getIcon('loader', 13)} MEMUAT MODEL AI (YOLO)...</span>`) : '<span style="color:var(--text-muted)">STOPPED</span>'}
                             </div>
                             <div style="font-size:0.68rem; color:var(--text-muted);" id="human-node-sub-text">
                                 ${APP.humanNodeActive ? (APP.humanNodeReady ? 'Deteksi YOLO & estimasi jarak aktif (/human_info)' : 'Inisialisasi neural network ke GPU Jetson (~5-10 dtk)...') : 'Tes deteksi manusia mandiri tanpa perlu navigasi'}
@@ -2005,10 +2007,10 @@ function renderCamera() {
                     </div>
                     <div style="display:flex; gap:8px;">
                         <button type="button" id="bbox-toggle-btn" class="btn btn-sm ${APP.showBbox ? 'btn-accent' : 'btn-outline'}" onclick="toggleBboxOverlay()" style="font-weight:600; border-radius:6px;">
-                            ${APP.showBbox ? '👁️ Bbox HUD: ON' : '👁️ Bbox HUD: OFF'}
+                            ${APP.showBbox ? `${getIcon('eye', 14)} Bbox HUD: ON` : `${getIcon('eyeOff', 14)} Bbox HUD: OFF`}
                         </button>
                         <button type="button" id="human-node-toggle-btn" class="btn btn-sm ${APP.humanNodeActive ? (APP.humanNodeReady ? 'btn-danger' : 'btn-warning') : 'btn-primary'}" onclick="toggleHumanAwareness()" style="min-width:130px; font-weight:600; border-radius:6px;">
-                            ${APP.humanNodeActive ? (APP.humanNodeReady ? '🛑 Stop Human AI' : '⏳ Memuat YOLO...') : '🚀 Start Human AI'}
+                            ${APP.humanNodeActive ? (APP.humanNodeReady ? `${getIcon('stopCircle', 14)} Stop Human AI` : `${getIcon('loader', 14)} Memuat YOLO...`) : `${getIcon('play', 14)} Start Human AI`}
                         </button>
                     </div>
                 </div>
@@ -2360,10 +2362,10 @@ function renderMapping() {
                     <span class="badge-text" id="mapping-state-text">MENGECEK STATUS...</span>
                 </span>
                 <button class="btn btn-primary" id="btn-start-mapping" onclick="startSlamMapping()">
-                    🚀 Mulai SLAM Mapping
+                    ${getIcon('play', 14)} Mulai SLAM Mapping
                 </button>
                 <button class="btn btn-danger" id="btn-stop-mapping" onclick="stopSlamMapping()" disabled>
-                    🛑 Hentikan Mapping
+                    ${getIcon('stopCircle', 14)} Hentikan Mapping
                 </button>
             </div>
         </div>
@@ -2376,10 +2378,10 @@ function renderMapping() {
                         <span>01 // LIVE 2D SLAM OCCUPANCY GRID &amp; POSISI ROBOT</span>
                         <div style="display:flex; gap:6px;">
                             <button type="button" class="btn btn-outline btn-sm" style="padding:2px 8px; font-size:0.68rem;" onclick="clearRobotTrail()">
-                                🧹 Reset Jejak
+                                ${getIcon('eraser', 12)} Reset Jejak
                             </button>
                             <button type="button" class="btn btn-outline btn-sm" style="padding:2px 8px; font-size:0.68rem;" onclick="loadLiveSlamMapData()">
-                                🔄 Refresh Peta
+                                ${getIcon('refresh', 12)} Refresh Peta
                             </button>
                         </div>
                     </div>
@@ -2431,7 +2433,7 @@ function renderMapping() {
                                        value="peta_baru">
                             </div>
                             <button type="button" class="btn btn-primary" id="btn-save-slam-map" onclick="saveSlamMap()" style="height:38px; padding:0 18px; font-weight:700;">
-                                💾 Simpan Peta (.pgm &amp; .yaml)
+                                ${getIcon('save', 14)} Simpan Peta (.pgm &amp; .yaml)
                             </button>
                         </div>
 
@@ -2477,30 +2479,30 @@ function renderMapping() {
                                 <button type="button" class="btn btn-outline" style="padding:10px 0; font-weight:700;"
                                         onmousedown="startMappingStepHold(1, 0)" onmouseup="stopMappingStepHold(true)" onmouseleave="stopMappingStepHold(false)"
                                         ontouchstart="event.preventDefault(); startMappingStepHold(1, 0)" ontouchend="stopMappingStepHold(true)">
-                                    ⬆️ Maju (W)
+                                    ${getIcon('arrowUp', 14)} Maju (W)
                                 </button>
                                 <div></div>
 
                                 <button type="button" class="btn btn-outline" style="padding:10px 0; font-weight:700;"
                                         onmousedown="startMappingStepHold(0, 1)" onmouseup="stopMappingStepHold(true)" onmouseleave="stopMappingStepHold(false)"
                                         ontouchstart="event.preventDefault(); startMappingStepHold(0, 1)" ontouchend="stopMappingStepHold(true)">
-                                    ⬅️ Kiri (A)
+                                    ${getIcon('arrowLeft', 14)} Kiri (A)
                                 </button>
                                 <button type="button" class="btn btn-danger" style="padding:10px 0; font-weight:700;"
                                         onclick="stopMappingStepHold(true)">
-                                    ⏹️ STOP
+                                    ${getIcon('stopCircle', 14)} STOP
                                 </button>
                                 <button type="button" class="btn btn-outline" style="padding:10px 0; font-weight:700;"
                                         onmousedown="startMappingStepHold(0, -1)" onmouseup="stopMappingStepHold(true)" onmouseleave="stopMappingStepHold(false)"
                                         ontouchstart="event.preventDefault(); startMappingStepHold(0, -1)" ontouchend="stopMappingStepHold(true)">
-                                    ➡️ Kanan (D)
+                                    ${getIcon('arrowRight', 14)} Kanan (D)
                                 </button>
 
                                 <div></div>
                                 <button type="button" class="btn btn-outline" style="padding:10px 0; font-weight:700;"
                                         onmousedown="startMappingStepHold(-1, 0)" onmouseup="stopMappingStepHold(true)" onmouseleave="stopMappingStepHold(false)"
                                         ontouchstart="event.preventDefault(); startMappingStepHold(-1, 0)" ontouchend="stopMappingStepHold(true)">
-                                    ⬇️ Mundur (S)
+                                    ${getIcon('arrowDown', 14)} Mundur (S)
                                 </button>
                                 <div></div>
                             </div>
@@ -2650,7 +2652,7 @@ async function stopSlamMapping() {
         [
             { label: 'Batal', class: 'btn-outline' },
             {
-                label: '🛑 Ya, Hentikan Mapping',
+                label: `${getIcon('stopCircle', 14)} Ya, Hentikan Mapping`,
                 class: 'btn-danger',
                 action: async () => {
                     showToast('Menghentikan proses SLAM Mapping...', 'info');
@@ -2702,7 +2704,7 @@ async function saveSlamMap() {
             const filesList = (res.saved_files || []).map(f => `<div>• <code>${f}</code></div>`).join('');
             resultBox.innerHTML = `
                 <div style="font-weight:700; color:var(--emerald); margin-bottom:4px;">
-                    ✅ ${res.message} (${res.width}×${res.height} px, resolusi ${res.resolution} m/px)
+                    ${getIcon('checkCircle', 14)} ${res.message} (${res.width}×${res.height} px, resolusi ${res.resolution} m/px)
                 </div>
                 <div class="mono" style="font-size:0.68rem; color:var(--text-secondary);">
                     ${filesList}
@@ -2739,7 +2741,7 @@ function renderJoystick() {
                         <span id="camera-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.cameraActive ? (APP.cameraReady ? 'var(--success)' : 'var(--warning)') : 'var(--text-muted)'}; box-shadow:${APP.cameraActive ? (APP.cameraReady ? '0 0 8px var(--success)' : '0 0 10px var(--warning)') : 'none'}; display:inline-block; ${APP.cameraActive && !APP.cameraReady ? 'animation: pulse-dot 1s infinite;' : ''}"></span>
                         <div>
                             <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="camera-status-text">
-                                USB CAMERA: ${APP.cameraActive ? (APP.cameraReady ? '<span style="color:var(--success)">🟢 ONLINE (STREAMING)</span>' : '<span style="color:var(--warning)">⏳ MEMBUKA STREAM...</span>') : '<span style="color:var(--text-muted)">OFFLINE</span>'}
+                                USB CAMERA: ${APP.cameraActive ? (APP.cameraReady ? `<span style="color:var(--success)">${getIcon('checkCircle', 13)} ONLINE (STREAMING)</span>` : `<span style="color:var(--warning)">${getIcon('loader', 13)} MEMBUKA STREAM...</span>`) : '<span style="color:var(--text-muted)">OFFLINE</span>'}
                             </div>
                             <div style="font-size:0.68rem; color:var(--text-muted);" id="camera-sub-text">
                                 ${APP.cameraActive ? (APP.cameraReady ? 'Stream /camera/image_raw/compressed aktif' : 'Menghubungkan /dev/video0 & inisialisasi stream...') : 'Nyalakan kamera untuk melihat video real-time'}
@@ -2748,10 +2750,10 @@ function renderJoystick() {
                     </div>
                     <div style="display:flex; gap:8px;">
                         <button type="button" id="teleop-bbox-toggle-btn" class="btn btn-sm ${APP.showBbox ? 'btn-accent' : 'btn-outline'}" onclick="toggleBboxOverlay()" style="font-weight:600; border-radius:6px;">
-                            ${APP.showBbox ? '👁️ Bbox HUD: ON' : '👁️ Bbox HUD: OFF'}
+                            ${APP.showBbox ? `${getIcon('eye', 14)} Bbox HUD: ON` : `${getIcon('eyeOff', 14)} Bbox HUD: OFF`}
                         </button>
                         <button type="button" id="camera-toggle-btn" class="btn btn-sm ${APP.cameraActive ? (APP.cameraReady ? 'btn-danger' : 'btn-warning') : 'btn-success'}" onclick="toggleCamera()" style="min-width:120px; font-weight:600; border-radius:6px;">
-                            ${APP.cameraActive ? (APP.cameraReady ? '🛑 Stop Kamera' : '⏳ Menyiapkan...') : '📷 Start Kamera'}
+                            ${APP.cameraActive ? (APP.cameraReady ? `${getIcon('stopCircle', 14)} Stop Kamera` : `${getIcon('loader', 14)} Menyiapkan...`) : `${getIcon('camera', 14)} Start Kamera`}
                         </button>
                     </div>
                 </div>
@@ -2781,7 +2783,7 @@ function renderJoystick() {
                             <span id="arduino-status-indicator" style="width:10px; height:10px; border-radius:50%; background:${APP.arduinoActive ? (APP.arduinoReady ? 'var(--success)' : 'var(--warning)') : 'var(--text-muted)'}; box-shadow:${APP.arduinoActive ? (APP.arduinoReady ? '0 0 8px var(--success)' : '0 0 10px var(--warning)') : 'none'}; display:inline-block; ${APP.arduinoActive && !APP.arduinoReady ? 'animation: pulse-dot 1s infinite;' : ''}"></span>
                             <div>
                                 <div style="font-size:0.75rem; font-weight:700; letter-spacing:0.05em; color:var(--text-primary);" id="arduino-status-text">
-                                    ARDUINO BRIDGE: ${APP.arduinoActive ? (APP.arduinoReady ? '<span style="color:var(--success)">🟢 ONLINE (READY)</span>' : '<span style="color:var(--warning)">⏳ MENYIAPKAN...</span>') : '<span style="color:var(--text-muted)">OFFLINE</span>'}
+                                    ARDUINO BRIDGE: ${APP.arduinoActive ? (APP.arduinoReady ? `<span style="color:var(--success)">${getIcon('checkCircle', 13)} ONLINE (READY)</span>` : `<span style="color:var(--warning)">${getIcon('loader', 13)} MENYIAPKAN...</span>`) : '<span style="color:var(--text-muted)">OFFLINE</span>'}
                                 </div>
                                 <div style="font-size:0.68rem; color:var(--text-muted);" id="arduino-sub-text">
                                     ${APP.arduinoActive ? (APP.arduinoReady ? 'Hardware motor & odometri aktif (50Hz)' : 'Menghubungkan serial & verifikasi encoder...') : 'Nyalakan agar robot merespon /cmd_vel'}
@@ -2789,7 +2791,7 @@ function renderJoystick() {
                             </div>
                         </div>
                         <button type="button" id="arduino-toggle-btn" class="btn btn-sm ${APP.arduinoActive ? (APP.arduinoReady ? 'btn-danger' : 'btn-warning') : 'btn-success'}" onclick="toggleArduinoBridge()" style="min-width:120px; font-weight:600; border-radius:6px;">
-                            ${APP.arduinoActive ? (APP.arduinoReady ? '🛑 Stop Bridge' : '⏳ Menyiapkan...') : '⚡ Start Bridge'}
+                            ${APP.arduinoActive ? (APP.arduinoReady ? `${getIcon('stopCircle', 14)} Stop Bridge` : `${getIcon('loader', 14)} Menyiapkan...`) : `${getIcon('zap', 14)} Start Bridge`}
                         </button>
                     </div>
 
@@ -2876,18 +2878,18 @@ function updateArduinoBridgeUI(active, ready = APP.arduinoReady) {
             ind.style.background = 'var(--success)';
             ind.style.boxShadow = '0 0 8px var(--success)';
             ind.style.animation = 'none';
-            text.innerHTML = 'ARDUINO BRIDGE: <span style="color:var(--success)">🟢 ONLINE (READY)</span>';
+            text.innerHTML = `ARDUINO BRIDGE: <span style="color:var(--success)">${getIcon('checkCircle', 13)} ONLINE (READY)</span>`;
             if (sub) sub.textContent = 'Hardware motor, encoder & odometri aktif (50Hz)';
             btn.className = 'btn btn-sm btn-danger';
-            btn.innerHTML = '🛑 Stop Bridge';
+            btn.innerHTML = `${getIcon('stopCircle', 14)} Stop Bridge`;
         } else {
             ind.style.background = 'var(--warning)';
             ind.style.boxShadow = '0 0 10px var(--warning)';
             ind.style.animation = 'pulse-dot 1s infinite';
-            text.innerHTML = 'ARDUINO BRIDGE: <span style="color:var(--warning)">⏳ MENYIAPKAN &amp; VERIFIKASI ENCODER...</span>';
+            text.innerHTML = `ARDUINO BRIDGE: <span style="color:var(--warning)">${getIcon('loader', 13)} MENYIAPKAN &amp; VERIFIKASI ENCODER...</span>`;
             if (sub) sub.textContent = 'Menghubungkan serial & verifikasi stream encoder hardware...';
             btn.className = 'btn btn-sm btn-warning';
-            btn.innerHTML = '⏳ Menyiapkan...';
+            btn.innerHTML = `${getIcon('loader', 14)} Menyiapkan...`;
         }
     } else {
         ind.style.background = 'var(--text-muted)';
@@ -2896,7 +2898,7 @@ function updateArduinoBridgeUI(active, ready = APP.arduinoReady) {
         text.innerHTML = 'ARDUINO BRIDGE: <span style="color:var(--text-muted)">OFFLINE</span>';
         if (sub) sub.textContent = 'Nyalakan agar robot merespon /cmd_vel';
         btn.className = 'btn btn-sm btn-success';
-        btn.innerHTML = '⚡ Start Bridge';
+        btn.innerHTML = `${getIcon('zap', 14)} Start Bridge`;
     }
 }
 
@@ -2970,19 +2972,19 @@ function updateCameraUI(active, ready = APP.cameraReady) {
                 ind.style.background = 'var(--success)';
                 ind.style.boxShadow = '0 0 8px var(--success)';
                 ind.style.animation = 'none';
-                text.innerHTML = 'USB CAMERA: <span style="color:var(--success)">🟢 ONLINE (STREAMING)</span>';
+                text.innerHTML = `USB CAMERA: <span style="color:var(--success)">${getIcon('checkCircle', 13)} ONLINE (STREAMING)</span>`;
                 if (sub) sub.textContent = 'Stream /camera/image_raw/compressed aktif';
                 btn.className = 'btn btn-sm btn-danger';
-                btn.innerHTML = '🛑 Stop Kamera';
+                btn.innerHTML = `${getIcon('stopCircle', 14)} Stop Kamera`;
                 if (lbl) lbl.textContent = 'LIVE TELEOP VIEW';
             } else {
                 ind.style.background = 'var(--warning)';
                 ind.style.boxShadow = '0 0 10px var(--warning)';
                 ind.style.animation = 'pulse-dot 1s infinite';
-                text.innerHTML = 'USB CAMERA: <span style="color:var(--warning)">⏳ MEMBUKA STREAM...</span>';
+                text.innerHTML = `USB CAMERA: <span style="color:var(--warning)">${getIcon('loader', 13)} MEMBUKA STREAM...</span>`;
                 if (sub) sub.textContent = 'Menghubungkan device /dev/video0 & inisialisasi stream...';
                 btn.className = 'btn btn-sm btn-warning';
-                btn.innerHTML = '⏳ Menyiapkan...';
+                btn.innerHTML = `${getIcon('loader', 14)} Menyiapkan...`;
                 if (lbl) lbl.textContent = 'OPENING CAMERA...';
             }
         } else {
@@ -2992,7 +2994,7 @@ function updateCameraUI(active, ready = APP.cameraReady) {
             text.innerHTML = 'USB CAMERA: <span style="color:var(--text-muted)">OFFLINE</span>';
             if (sub) sub.textContent = 'Nyalakan kamera untuk melihat video real-time';
             btn.className = 'btn btn-sm btn-success';
-            btn.innerHTML = '📷 Start Kamera';
+            btn.innerHTML = `${getIcon('camera', 14)} Start Kamera`;
             if (lbl) lbl.textContent = 'CAMERA OFFLINE';
         }
     }
@@ -3008,18 +3010,18 @@ function updateCameraUI(active, ready = APP.cameraReady) {
                 pageInd.style.background = 'var(--success)';
                 pageInd.style.boxShadow = '0 0 8px var(--success)';
                 pageInd.style.animation = 'none';
-                pageText.innerHTML = 'USB CAMERA: <span style="color:var(--success)">🟢 ONLINE (STREAMING)</span>';
+                pageText.innerHTML = `USB CAMERA: <span style="color:var(--success)">${getIcon('checkCircle', 13)} ONLINE (STREAMING)</span>`;
                 if (pageSub) pageSub.textContent = 'Hardware kamera & publisher terhubung';
                 pageBtn.className = 'btn btn-sm btn-danger';
-                pageBtn.innerHTML = '🛑 Stop Kamera';
+                pageBtn.innerHTML = `${getIcon('stopCircle', 14)} Stop Kamera`;
             } else {
                 pageInd.style.background = 'var(--warning)';
                 pageInd.style.boxShadow = '0 0 10px var(--warning)';
                 pageInd.style.animation = 'pulse-dot 1s infinite';
-                pageText.innerHTML = 'USB CAMERA: <span style="color:var(--warning)">⏳ MEMBUKA STREAM...</span>';
+                pageText.innerHTML = `USB CAMERA: <span style="color:var(--warning)">${getIcon('loader', 13)} MEMBUKA STREAM...</span>`;
                 if (pageSub) pageSub.textContent = 'Menghubungkan device /dev/video0 & inisialisasi stream...';
                 pageBtn.className = 'btn btn-sm btn-warning';
-                pageBtn.innerHTML = '⏳ Menyiapkan...';
+                pageBtn.innerHTML = `${getIcon('loader', 14)} Menyiapkan...`;
             }
         } else {
             pageInd.style.background = 'var(--text-muted)';
@@ -3028,7 +3030,7 @@ function updateCameraUI(active, ready = APP.cameraReady) {
             pageText.innerHTML = 'USB CAMERA: <span style="color:var(--text-muted)">OFFLINE</span>';
             if (pageSub) pageSub.textContent = 'Hardware kamera standby';
             pageBtn.className = 'btn btn-sm btn-success';
-            pageBtn.innerHTML = '📷 Start Kamera';
+            pageBtn.innerHTML = `${getIcon('camera', 14)} Start Kamera`;
         }
     }
 
@@ -3128,18 +3130,18 @@ function updateHumanAwarenessUI(active, ready = APP.humanNodeReady) {
                 ind.style.background = 'var(--success)';
                 ind.style.boxShadow = '0 0 8px var(--success)';
                 ind.style.animation = 'none';
-                text.innerHTML = 'HUMAN AI NODE: <span style="color:var(--success)">🟢 ACTIVE &amp; DETECTING</span>';
+                text.innerHTML = `HUMAN AI NODE: <span style="color:var(--success)">${getIcon('checkCircle', 13)} ACTIVE &amp; DETECTING</span>`;
                 if (sub) sub.textContent = 'Deteksi YOLO & estimasi jarak aktif (/human_info)';
                 btn.className = 'btn btn-sm btn-danger';
-                btn.innerHTML = '🛑 Stop Human AI';
+                btn.innerHTML = `${getIcon('stopCircle', 14)} Stop Human AI`;
             } else {
                 ind.style.background = 'var(--warning)';
                 ind.style.boxShadow = '0 0 10px var(--warning)';
                 ind.style.animation = 'pulse-dot 1s infinite';
-                text.innerHTML = 'HUMAN AI NODE: <span style="color:var(--warning)">⏳ MEMUAT MODEL AI (YOLO)...</span>';
+                text.innerHTML = `HUMAN AI NODE: <span style="color:var(--warning)">${getIcon('loader', 13)} MEMUAT MODEL AI (YOLO)...</span>`;
                 if (sub) sub.textContent = 'Inisialisasi model neural network ke GPU Jetson (~5-10 detik)...';
                 btn.className = 'btn btn-sm btn-warning';
-                btn.innerHTML = '⏳ Memuat YOLO...';
+                btn.innerHTML = `${getIcon('loader', 14)} Memuat YOLO...`;
             }
         } else {
             ind.style.background = 'var(--text-muted)';
@@ -3148,7 +3150,7 @@ function updateHumanAwarenessUI(active, ready = APP.humanNodeReady) {
             text.innerHTML = 'HUMAN AI NODE: <span style="color:var(--text-muted)">STOPPED</span>';
             if (sub) sub.textContent = 'Tes deteksi manusia mandiri tanpa perlu navigasi';
             btn.className = 'btn btn-sm btn-primary';
-            btn.innerHTML = '🚀 Start Human AI';
+            btn.innerHTML = `${getIcon('play', 14)} Start Human AI`;
         }
     }
 }
@@ -3181,10 +3183,10 @@ function updateBboxUI() {
     mainBtns.forEach(b => {
         if (APP.showBbox) {
             b.className = 'btn btn-sm btn-accent';
-            b.innerHTML = '👁️ Bbox HUD: ON';
+            b.innerHTML = `${getIcon('eye', 14)} Bbox HUD: ON`;
         } else {
             b.className = 'btn btn-sm btn-outline';
-            b.innerHTML = '👁️ Bbox HUD: OFF';
+            b.innerHTML = `${getIcon('eyeOff', 14)} Bbox HUD: OFF`;
         }
     });
 
@@ -3389,12 +3391,12 @@ function renderSettings() {
     const activeTheme = getTheme();
 
     const mapOptionsHtml = [
-        `<option value="live" ${APP.mapFile === 'live' ? 'selected' : ''}>📡 Live ROS /map Topic (SLAM / Nav2)</option>`,
+        `<option value="live" ${APP.mapFile === 'live' ? 'selected' : ''}>Live ROS /map Topic (SLAM / Nav2)</option>`,
         ...(APP.availableMaps || []).map(m => {
             const mapId = (typeof m === 'object' && m.id) ? m.id : (typeof m === 'object' ? m.name : m);
             const mapLabel = (typeof m === 'object' && m.name) ? m.name : mapId;
             const isSelected = APP.mapFile === mapId || APP.mapFile === mapLabel;
-            return `<option value="${mapId}" ${isSelected ? 'selected' : ''}>🗺️ ${mapLabel}</option>`;
+            return `<option value="${mapId}" ${isSelected ? 'selected' : ''}>${mapLabel}</option>`;
         })
     ].join('');
 
@@ -3427,13 +3429,13 @@ function renderSettings() {
         <div class="page-section">
             <div class="section-title">
                 <span>00 // MODE OPERASI ROBOT & PETA AKTIF</span>
-                <span class="mono" style="color:var(--accent-bright);">${APP.mode === 'sim' ? '🎮 SIMULASI (GAZEBO)' : '🤖 REAL ROBOT'}</span>
+                <span class="mono" style="color:var(--accent-bright);">${APP.mode === 'sim' ? `${getIcon('gamepad', 13)} SIMULASI (GAZEBO)` : `${getIcon('bot', 13)} REAL ROBOT`}</span>
             </div>
             <div class="panel">
                 <div class="mode-selector-grid">
                     <button type="button" class="mode-option-card ${APP.mode === 'real' ? 'active-real' : ''}" onclick="setOperationMode('real')">
                         <div class="mode-option-title">
-                            <span>🤖 MODE REAL ROBOT (NYATA)</span>
+                            <span>${getIcon('bot', 15)} MODE REAL ROBOT (NYATA)</span>
                             ${APP.mode === 'real' ? `<span class="badge badge-online" style="font-size:0.62rem;">AKTIF</span>` : ''}
                         </div>
                         <div class="mode-option-desc">
@@ -3443,7 +3445,7 @@ function renderSettings() {
 
                     <button type="button" class="mode-option-card ${APP.mode === 'sim' ? 'active-sim' : ''}" onclick="setOperationMode('sim')">
                         <div class="mode-option-title">
-                            <span>🎮 MODE SIMULASI (GAZEBO)</span>
+                            <span>${getIcon('gamepad', 15)} MODE SIMULASI (GAZEBO)</span>
                             ${APP.mode === 'sim' ? `<span class="badge badge-online" style="font-size:0.62rem;">AKTIF</span>` : ''}
                         </div>
                         <div class="mode-option-desc">
@@ -3462,10 +3464,10 @@ function renderSettings() {
                             ${mapOptionsHtml}
                         </select>
                         <button type="button" class="btn btn-outline btn-sm" onclick="openInitialPoseModal()">
-                            📍 Set Initial Pose (AMCL)
+                            ${getIcon('crosshair', 13)} Set Initial Pose (AMCL)
                         </button>
                         <button type="button" class="btn btn-outline btn-sm" onclick="openAutoRelocalizeModal()">
-                            🔄 Relokalisasi (360°)
+                            ${getIcon('rotateCcw', 13)} Relokalisasi (360°)
                         </button>
                     </div>
                 </div>
@@ -3554,7 +3556,7 @@ function renderSettings() {
                         <!-- LIST PERANGKAT BLUETOOTH HASIL SCAN -->
                         <div id="bt-scan-results-box" class="hidden" style="margin: 8px 0; padding: 10px; background: rgba(0,0,0,0.25); border-radius: 6px; border: 1px solid var(--border-color);">
                             <div style="font-size:0.75rem; font-weight:600; margin-bottom:6px; color:var(--accent-bright);">
-                                📡 Perangkat Bluetooth Terdeteksi di Sekitar Jetson:
+                                ${getIcon('radio', 13)} Perangkat Bluetooth Terdeteksi di Sekitar Jetson:
                             </div>
                             <div id="bt-device-list" style="display:flex; flex-direction:column; gap:6px;">
                                 <span style="font-size:0.75rem; color:var(--text-muted);">Klik Scan Bluetooth untuk mendeteksi perangkat terdekat...</span>
@@ -3656,7 +3658,7 @@ function renderSettings() {
                             </div>
                             <div style="width:100%; display:flex; gap:8px;">
                                 <input type="password" class="input-field mono" id="set-gemini-key" placeholder="Masukkan API Key (AIzaSy...)" style="flex:1;">
-                                <button type="button" class="btn btn-outline btn-sm" onclick="toggleApiKeyVisibility()" id="btn-toggle-key-eye" title="Lihat/Sembunyikan Key">👁️</button>
+                                <button type="button" class="btn btn-outline btn-sm" onclick="toggleApiKeyVisibility()" id="btn-toggle-key-eye" title="Lihat/Sembunyikan Key">${getIcon('eye', 14)}</button>
                             </div>
                         </div>
                         <div style="display:flex; gap:8px; margin-top:10px;">
@@ -3664,7 +3666,7 @@ function renderSettings() {
                                 ${getIcon('save', 14)} Simpan Key
                             </button>
                             <button type="button" class="btn btn-outline btn-sm" style="flex:1;" onclick="testGeminiConnection()">
-                                ⚡ Uji Koneksi AI
+                                ${getIcon('zap', 14)} Uji Koneksi AI
                             </button>
                         </div>
                     </div>
@@ -3772,7 +3774,7 @@ async function setOperationMode(newMode, customMapFile = null) {
 
 function toggleOperationMode() {
     const targetMode = APP.mode === 'real' ? 'sim' : 'real';
-    const targetLabel = targetMode === 'sim' ? '🎮 SIMULASI (Gazebo)' : '🤖 REAL ROBOT (Nyata)';
+    const targetLabel = targetMode === 'sim' ? `${getIcon('gamepad', 14)} SIMULASI (Gazebo)` : `${getIcon('bot', 14)} REAL ROBOT (Nyata)`;
     const targetDesc = targetMode === 'sim'
         ? 'Dashboard akan memuat peta gudang simulasi (<code>peta_dc.yaml</code>) beserta daftar waypoint & batas kecepatan simulasi.'
         : 'Dashboard akan memuat peta robot nyata (<code>peta_1b.yaml</code> / Live SLAM) beserta daftar waypoint & batas kecepatan fisik.';
@@ -3839,7 +3841,7 @@ function openInitialPoseModal(initX = null, initY = null, initYawDeg = null) {
         ? Math.round(Number(initYawDeg))
         : ((APP.pose && APP.pose.yaw != null) ? Math.round((APP.pose.yaw * 180) / Math.PI) : 0);
 
-    document.getElementById('modal-title').textContent = '📍 Set Posisi Awal Robot (AMCL /initialpose)';
+    document.getElementById('modal-title').innerHTML = `${getIcon('crosshair', 16)} Set Posisi Awal Robot (AMCL /initialpose)`;
     document.getElementById('modal-body').innerHTML = `
         <p style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:10px; line-height:1.45;">
             Kirim <strong>2D Pose Estimate</strong> ke topik <code>/initialpose</code> agar AMCL mengetahui koordinat dan arah hadap robot di peta secara presisi.
@@ -3863,19 +3865,19 @@ function openInitialPoseModal(initX = null, initY = null, initYawDeg = null) {
             </div>
             <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px;">
                 <button type="button" class="btn btn-outline btn-sm" onclick="setInitPoseHeading(0)" style="font-size:0.72rem; padding:6px 2px; display:flex; flex-direction:column; align-items:center;">
-                    <span>➡️ Timur</span>
+                    <span>${getIcon('arrowRight', 13)} Timur</span>
                     <span class="mono" style="font-size:0.65rem; color:var(--text-muted);">(0°)</span>
                 </button>
                 <button type="button" class="btn btn-outline btn-sm" onclick="setInitPoseHeading(90)" style="font-size:0.72rem; padding:6px 2px; display:flex; flex-direction:column; align-items:center;">
-                    <span>⬆️ Utara</span>
+                    <span>${getIcon('arrowUp', 13)} Utara</span>
                     <span class="mono" style="font-size:0.65rem; color:var(--text-muted);">(+90°)</span>
                 </button>
                 <button type="button" class="btn btn-outline btn-sm" onclick="setInitPoseHeading(180)" style="font-size:0.72rem; padding:6px 2px; display:flex; flex-direction:column; align-items:center;">
-                    <span>⬅️ Barat</span>
+                    <span>${getIcon('arrowLeft', 13)} Barat</span>
                     <span class="mono" style="font-size:0.65rem; color:var(--text-muted);">(180°)</span>
                 </button>
                 <button type="button" class="btn btn-outline btn-sm" onclick="setInitPoseHeading(-90)" style="font-size:0.72rem; padding:6px 2px; display:flex; flex-direction:column; align-items:center;">
-                    <span>⬇️ Selatan</span>
+                    <span>${getIcon('arrowDown', 13)} Selatan</span>
                     <span class="mono" style="font-size:0.65rem; color:var(--text-muted);">(-90°)</span>
                 </button>
             </div>
@@ -3902,7 +3904,7 @@ function openInitialPoseModal(initX = null, initY = null, initYawDeg = null) {
         <div style="margin-top:12px; padding:9px 12px; background:rgba(255,255,255,0.03); border:1px solid var(--border-subtle); border-radius:6px; font-size:0.72rem; color:var(--text-secondary); display:flex; justify-content:space-between; align-items:center; gap:8px;">
             <span>Mau kalibrasi otomatis dengan sensor LiDAR?</span>
             <button type="button" class="btn btn-sm btn-outline" style="font-size:0.68rem; padding:3px 8px; white-space:nowrap;" onclick="hideModal(); openAutoRelocalizeModal();">
-                🔄 Relokalisasi Otomatis (360°)
+                ${getIcon('rotateCcw', 12)} Relokalisasi Otomatis (360°)
             </button>
         </div>
     `;
@@ -3966,7 +3968,7 @@ function openAutoRelocalizeModal() {
     const isArdOnline = !!APP.arduinoActive;
     const canStart = isNavOnline && isArdOnline;
 
-    document.getElementById('modal-title').textContent = '🔄 Relokalisasi Posisi Robot (AMCL 360°)';
+    document.getElementById('modal-title').innerHTML = `${getIcon('rotateCcw', 16)} Relokalisasi Posisi Robot (AMCL 360°)`;
     document.getElementById('modal-body').innerHTML = `
         <p style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:12px; line-height:1.5;">
             Gunakan fitur ini untuk menyelaraskan kembali posisi dan orientasi AMCL robot dengan dinding menggunakan pantulan sensor LiDAR dengan memutar robot 360°.
@@ -4008,13 +4010,13 @@ function openAutoRelocalizeModal() {
                 <div class="flex-between" style="font-size:0.75rem;">
                     <span>1. Navigasi (Nav2 / AMCL):</span>
                     <span style="font-weight:700; color:${isNavOnline ? 'var(--success)' : 'var(--danger)'};">
-                        ${isNavOnline ? '✅ READY (ONLINE)' : '❌ OFFLINE (Nyalakan Navigasi)'}
+                        ${isNavOnline ? `${getIcon('checkCircle', 13)} READY (ONLINE)` : `${getIcon('xCircle', 13)} OFFLINE (Nyalakan Navigasi)`}
                     </span>
                 </div>
                 <div class="flex-between" style="font-size:0.75rem;">
                     <span>2. Hardware Motor (Arduino Bridge):</span>
                     <span style="font-weight:700; color:${isArdOnline ? 'var(--success)' : 'var(--danger)'};">
-                        ${isArdOnline ? '✅ READY (ONLINE)' : '❌ OFFLINE (Nyalakan Bridge)'}
+                        ${isArdOnline ? `${getIcon('checkCircle', 13)} READY (ONLINE)` : `${getIcon('xCircle', 13)} OFFLINE (Nyalakan Bridge)`}
                     </span>
                 </div>
             </div>
@@ -4022,7 +4024,7 @@ function openAutoRelocalizeModal() {
 
         <!-- SAFETY WARNING -->
         <div style="padding:10px 12px; background:rgba(234, 88, 12, 0.1); border:1px solid rgba(234, 88, 12, 0.3); border-radius:8px; font-size:0.74rem; color:var(--warning); margin-bottom:14px; line-height:1.45;">
-            <strong>⚠️ Peringatan Keamanan:</strong>
+            <strong>${getIcon('warning', 14)} Peringatan Keamanan:</strong>
             Pastikan area radius minimal <strong>50 cm di sekeliling robot bebas dari rintangan</strong> manusia atau barang agar robot dapat berputar di tempat dengan aman.
         </div>
 
@@ -4052,7 +4054,7 @@ function openAutoRelocalizeModal() {
     const btnStart = document.createElement('button');
     btnStart.className = `btn ${canStart ? 'btn-primary' : 'btn-secondary'}`;
     btnStart.id = 'relocalize-btn-start';
-    btnStart.textContent = '🚀 Mulai Putar & Kalibrasi (360°)';
+    btnStart.innerHTML = `${getIcon('play', 14)} Mulai Putar & Kalibrasi (360°)`;
     btnStart.disabled = !canStart;
     btnStart.onclick = startAutoRelocalize;
 
@@ -4073,7 +4075,7 @@ async function startAutoRelocalize() {
     }
     if (btnCancel) {
         btnCancel.className = 'btn btn-danger';
-        btnCancel.textContent = '⏹️ Batalkan Relokalisasi';
+        btnCancel.innerHTML = `${getIcon('stopCircle', 14)} Batalkan Relokalisasi`;
         btnCancel.onclick = cancelAutoRelocalize;
     }
     if (progWrap) {
@@ -4158,18 +4160,18 @@ async function pollRelocalizeProgress() {
                 pctLbl.style.color = 'var(--success)';
             }
             if (statLbl) {
-                statLbl.innerHTML = `<strong>✅ Selesai!</strong> ${st.message}`;
+                statLbl.innerHTML = `<strong>${getIcon('checkCircle', 14)} Selesai!</strong> ${st.message}`;
                 statLbl.style.color = 'var(--success)';
             }
             if (btnCancel) {
                 btnCancel.className = 'btn btn-success';
-                btnCancel.textContent = '✅ Selesai & Tutup';
+                btnCancel.innerHTML = `${getIcon('check', 14)} Selesai & Tutup`;
                 btnCancel.onclick = hideModal;
             }
             showToast(st.message || 'Relokalisasi selesai!', 'success');
         } else if (st.phase === 'failed') {
             if (statLbl) {
-                statLbl.textContent = `❌ ${st.message || 'Gagal'}`;
+                statLbl.innerHTML = `${getIcon('xCircle', 14)} ${st.message || 'Gagal'}`;
                 statLbl.style.color = 'var(--danger)';
             }
             if (btnCancel) {
@@ -4328,7 +4330,7 @@ async function saveVoiceConfigFromUI() {
     const res = await apiPost('/api/voice/config', payload);
     if (res && res.success) {
         APP.voiceConfig = res.config;
-        showToast('⚙️ Setting suara robot tersimpan!', 'success');
+        showToast('Setting suara robot tersimpan!', 'success');
     }
 }
 
@@ -4343,7 +4345,7 @@ async function scanBluetoothFromUI() {
     if (box) box.classList.remove('hidden');
     if (list) list.innerHTML = `<div style="font-size:0.75rem; color:var(--text-muted);">Sedang memindai perangkat Bluetooth terdekat (4 detik)...</div>`;
 
-    showToast('📡 Memindai sinyal Bluetooth terdekat...', 'info');
+    showToast('Memindai sinyal Bluetooth terdekat...', 'info');
     try {
         const res = await apiPost('/api/bluetooth/scan');
         if (res && res.success && res.devices && res.devices.length > 0) {
@@ -4376,7 +4378,7 @@ async function connectBluetoothDevice(mac, name) {
     showToast(`Menghubungkan ke ${name} (${mac})...`, 'info');
     const res = await apiPost('/api/bluetooth/connect', { mac, name });
     if (res && res.success) {
-        showToast(`🟢 Berhasil terhubung ke ${name}!`, 'success');
+        showToast(`Berhasil terhubung ke ${name}!`, 'success');
         if (APP.voiceConfig) {
             APP.voiceConfig.connected = true;
             APP.voiceConfig.auto_reconnect = true;
@@ -4386,7 +4388,7 @@ async function connectBluetoothDevice(mac, name) {
         if (autoReconInput) autoReconInput.checked = true;
         setTimeout(loadVoiceConfig, 300);
     } else {
-        showToast(`❌ Gagal terhubung ke ${mac}: ${res ? res.output || res.error : 'Timeout'}`, 'error');
+        showToast(`Gagal terhubung ke ${mac}: ${res ? res.output || res.error : 'Timeout'}`, 'error');
     }
 }
 
@@ -4401,7 +4403,7 @@ async function disconnectBluetoothFromUI() {
     const targetMac = APP.voiceConfig?.target_mac || '0E:21:D5:E9:AB:5F';
     const res = await apiPost('/api/bluetooth/disconnect', { mac: targetMac });
     if (res && res.success) {
-        showToast('✓ Bluetooth terputus (Auto-reconnect nonaktif)', 'info');
+        showToast('Bluetooth terputus (Auto-reconnect nonaktif)', 'info');
         if (APP.voiceConfig) {
             APP.voiceConfig.connected = false;
             APP.voiceConfig.auto_reconnect = false;
@@ -4416,10 +4418,10 @@ async function disconnectBluetoothFromUI() {
 }
 
 async function testRobotHardwareVoice(mode, text) {
-    showToast(`📢 Mengirim perintah suara ke robot: "${text}"`, 'info');
+    showToast(`Mengirim perintah suara ke robot: "${text}"`, 'info');
     const res = await apiPost('/api/voice/test', { mode, text });
     if (res && res.success) {
-        showToast('✓ Perintah suara diterima robot', 'success');
+        showToast('Perintah suara diterima robot', 'success');
     } else {
         showToast('Gagal mengirim perintah suara', 'error');
     }
@@ -4435,7 +4437,7 @@ function updateVoiceSpeakerUI(voiceData) {
 
     if (badge) {
         badge.className = isConn ? 'badge badge-online' : 'badge badge-offline';
-        badge.textContent = isConn ? 'SPEAKER TERHUBUNG ✅' : 'SPEAKER TERPUTUS ❌';
+        badge.innerHTML = isConn ? `${getIcon('checkCircle', 11)} SPEAKER TERHUBUNG` : `${getIcon('xCircle', 11)} SPEAKER TERPUTUS`;
     }
     if (desc) {
         const name = voiceData.target_name || 'Acome A1';
@@ -4473,7 +4475,7 @@ function showAddPointModal() {
             </div>
         </div>
         <p style="font-size:0.7rem; color:var(--text-muted); margin-bottom:8px;">
-            💡 Default diisi dengan posisi robot saat ini (${curX}, ${curY}).
+            ${getIcon('lightbulb', 12)} Default diisi dengan posisi robot saat ini (${curX}, ${curY}).
         </p>
         <div class="input-group">
             <div class="input-label">Kategori Titik</div>
@@ -4592,7 +4594,7 @@ async function globalStatusPoll() {
             APP.arduinoReady = APP.arduinoActive && !!data.arduino_ready;
             updateArduinoBridgeUI(APP.arduinoActive, APP.arduinoReady);
             if (!wasReady && APP.arduinoReady) {
-                showToast('🟢 Arduino Bridge siap! Hardware encoder & serial terverifikasi.', 'success');
+                showToast('Arduino Bridge siap! Hardware encoder & serial terverifikasi.', 'success');
             }
         }
 
@@ -4602,7 +4604,7 @@ async function globalStatusPoll() {
             APP.navReady = APP.navActive && !!data.nav_ready;
             updateNavigationUI(APP.navActive, APP.navReady);
             if (!wasReady && APP.navReady) {
-                showToast('🟢 AMR Siap untuk Navigasi & Mengantar! Semua sensor, AMCL, dan Nav2 telah aktif.', 'success');
+                showToast('AMR Siap untuk Navigasi & Mengantar! Semua sensor, AMCL, dan Nav2 telah aktif.', 'success');
             }
         }
 
@@ -4612,7 +4614,7 @@ async function globalStatusPoll() {
             APP.cameraReady = APP.cameraActive && !!data.camera_ready;
             updateCameraUI(APP.cameraActive, APP.cameraReady);
             if (!wasReady && APP.cameraReady) {
-                showToast('🟢 Kamera USB siap! Stream video aktif.', 'success');
+                showToast('Kamera USB siap! Stream video aktif.', 'success');
                 const ts = Date.now();
                 ['teleop-cam-img', 'camera-feed', 'cockpit-cam-img', 'split-cam-img'].forEach(id => {
                     const img = document.getElementById(id);
@@ -4630,7 +4632,7 @@ async function globalStatusPoll() {
             APP.humanNodeReady = APP.humanNodeActive && !!data.human_node_ready;
             updateHumanAwarenessUI(APP.humanNodeActive, APP.humanNodeReady);
             if (!wasReady && APP.humanNodeReady) {
-                showToast('🟢 Human Awareness AI siap! Model YOLO aktif mendeteksi.', 'success');
+                showToast('Human Awareness AI siap! Model YOLO aktif mendeteksi.', 'success');
             }
         }
 
@@ -4696,7 +4698,7 @@ async function globalStatusPoll() {
                 waiting_delivery: 'Menunggu Ambil Barang',
                 at_delivery: 'Tiba di Tujuan',
                 returning_home: 'Kembali ke Home Base',
-                waiting_human: '🚶 Menunggu Manusia Lewat'
+                waiting_human: 'Menunggu Manusia Lewat'
             };
             const homePhase = document.getElementById('home-phase');
             if (homePhase) homePhase.textContent = phaseLabels[APP.delivery.current_phase] || APP.delivery.current_phase;
@@ -4876,10 +4878,10 @@ function toggleApiKeyVisibility() {
     if (!input) return;
     if (input.type === 'password') {
         input.type = 'text';
-        if (btn) btn.textContent = '🔒';
+        if (btn) btn.innerHTML = getIcon('lock', 14);
     } else {
         input.type = 'password';
-        if (btn) btn.textContent = '👁️';
+        if (btn) btn.innerHTML = getIcon('eye', 14);
     }
 }
 

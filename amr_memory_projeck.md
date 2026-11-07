@@ -1259,3 +1259,20 @@ Memvalidasi keandalan integrasi subsistem navigasi otonom Nav2 saat menghadapi r
    - **Cockpit Quick Dispatch ([`monitoring.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/monitoring.js))**:
      - Tombol cepat titik lokasi di halaman Cockpit langsung mengirim robot tanpa meminta konfirmasi pickup di posisi awal.
 
+---
+
+## 📌 36. Perbaikan Anti-Power-Off Speaker Bluetooth Acome A1 (Sub-Audible 18 Hz Keep-Alive) & Standarisasi Ikon SVG Dashboard
+
+### 1. Perbaikan Speaker Bluetooth Acome A1 Auto-Power-Off (`test_robot_voice.py` & `app.py`):
+- **Akar Masalah Speaker Mati Sendiri Meskipun Ada Heartbeat**:
+  1. **Zero-Amplitude Digital Silence Filtering**: Sebelumnya `generate_silence_wav()` menghasilkan PCM 16-bit bernilai `0x0000` murni. Chip DSP pada speaker Bluetooth modern (termasuk Acome A1 `0E:21:D5:E9:AB:5F`) memiliki *digital zero-crossing / noise gate detector* yang menganggap sampel nol mutlak sebagai "tidak ada sinyal audio", sehingga timer *auto-sleep* internal speaker (10–15 menit) tetap berjalan dan mematikan speaker.
+  2. **PulseAudio `module-suspend-on-idle`**: Daemon PulseAudio di Linux secara default menutup *sink* A2DP (`AVDTP_SUSPEND`) setelah 5 detik hening, membuat koneksi Bluetooth turun ke mode *idle*.
+  3. **Node Suara Belum Tentu Aktif & Crash Argumen ROS 2**: `parser.parse_args()` pada [`test_robot_voice.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/test_robot_voice.py) sebelumnya gagal ketika `ros2 launch` menyertakan `--ros-args`, dan ketika hanya dashboard yang berjalan tanpa `real_navigation.launch.py`, tidak ada proses yang mengirim sinyal *keep-alive*.
+- **Solusi Teknis 4 Lapis**:
+  1. **Sub-Audible 18 Hz Infrasonic Sine Wave (`generate_silence_wav`)**: Mengganti sampel `0x0000` dengan gelombang sinus infrasonik **18 Hz** berdurasi `0.8` detik (amplitudo puncak `450` $\approx -37.2\text{ dBFS}$ dengan amplop $\sin^2$ *fade-in/out*). Sinyal ini menjaga DAC dan amplifier speaker Bluetooth 100% aktif namun **sama sekali tidak terdengar oleh telinga manusia** dan di bawah respons frekuensi konus speaker kecil (tidak ada suara *pop/click/hum*).
+  2. **Penonaktifan Suspend Idle PulseAudio (`disable_pulseaudio_idle_suspend`)**: Otomatis membongkar `module-suspend-on-idle` via `pactl unload-module` dan memaksa `pactl suspend-sink <sink> 0` serta profil `a2dp_sink` agar stream A2DP tidak pernah di-suspend oleh OS.
+  3. **Interval Keep-Alive Dipercepat ke 25 Detik**: Diperbarui dari `45` detik menjadi `25` detik pada [`voice_config.json`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/voice_config.json), [`test_robot_voice.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/test_robot_voice.py), dan [`app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py).
+  4. **Auto-Supervisor di Backend Dashboard (`ensure_voice_node_running`)**: [`app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py) kini otomatis menyalakan dan mengawasi daemon `test_robot_voice.py --node` sejak dashboard dijalankan, ditambah *fallback* pemicu `--keepalive` setiap 25 detik dan perbaikan `parser.parse_known_args()`.
+
+### 2. Standarisasi Penuh Ikon Vektor SVG pada Web Dashboard (`icons.js`, `index.html`, `map.js`, `app.js`):
+- Mengganti **seluruh emoji ketikan Unicode** (`🚀`, `📦`, `🛑`, `⏳`, `🟢`, `📷`, `👁️`, `⚡`, `🔄`, `🧹`, `💾`, `📡`, `🗺️`, `🎮`, `🤖`, `📍`, `⚠️`, `✅`, `❌`, `🔒`, `💡`, `⬆️`, `⬇️`, `⬅️`, `➡️`, `⏹️`) di seluruh halaman, modal, tombol kontrol, peta 2D, dan notifikasi *toast* menjadi ikon vektor SVG Feather/Lucide yang tajam dan konsisten melalui helper `getIcon(...)` di [`icons.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/icons.js).
