@@ -344,12 +344,10 @@ class AdaptiveVelocityNode(Node):
         out = Twist()
         out.linear.x = actual_v
 
-        # Hanya matikan setir jika masih dalam masa jeda 5 detik pertama
+        # Teruskan kecepatan setir (angular.z) penuh dari Nav2 tanpa dipotong (mencegah understeer / manuver melingkar melebar).
+        # Hanya matikan setir jika sedang dalam masa jeda diam penuh safe stop.
         if is_safe_stop_active:
             out.angular.z = 0.0
-        elif abs(orig_v) > 0.02:
-            scale = max(0.4, min(1.0, actual_v / orig_v))
-            out.angular.z = orig_w * scale
         else:
             out.angular.z = orig_w
 

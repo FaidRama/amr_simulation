@@ -1303,3 +1303,35 @@ Memvalidasi keandalan integrasi subsistem navigasi otonom Nav2 saat menghadapi r
    - **Responsivitas Mobile**: Pada layar `< 480px`, grid 2-kolom otomatis bertumpuk menjadi 1-kolom yang nyaman di-tap pada smartphone.
 3. **Penyempurnaan Bar Nav2 Controller & Utilitas Flex ([`style.css`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/css/style.css))**:
    - Menambahkan definisi `.flex-between` dan `.nav-ctrl-bar` dengan `flex-wrap: wrap; gap: 12px;` agar status Nav2 dan tombol Start/Stop navigasi di halaman dispatch tidak terjepit pada resolusi sempit.
+
+---
+
+## 📌 38. Solusi Manuver Melingkar / Orbit (Loop-the-Loop) & Putar Balik 180° Tersendat pada Nav2 DWB
+
+### 1. Gejala & Masalah di Lapangan:
+- **Jejak Melingkar (*Orbit / Loop-de-Loop*)**: Saat robot bergerak menuju titik tujuan (misal `titik awal`), alih-alih melaju lurus lalu memutar badan di tempat, robot melakukan putaran melingkar besar (360° loop) di tengah ruangan sebelum masuk ke titik target.
+- **Tersendat & Berdengung (*Stiction / Ngeng-Ngeng*)**: Saat hendak putar balik 180° (*U-turn*), robot menoleh 5°–10° lalu kembali ke 0°, mengeluarkan suara motor berdengung putus-putus, dan tertahan hingga ~26 detik sebelum recovery `Failed to make progress` membersihkan local costmap.
+
+### 2. Akar Masalah Teknis:
+1. **Skala Critic `GoalAlign` Ekstrem (`24.0`) di DWB**:
+   - Critic `GoalAlign` memaksa robot untuk menyelaraskan arah hadapnya dengan target *final yaw* (misal -59.9°) saat robot masih melaju di jalur.
+   - Karena robot adalah diferensial non-holonomik yang dilarang mundur (`min_vel_x: 0.0`), untuk mencapai sudut hadap tersebut sambil tetap bergerak maju, DWB memilih trajektori kurva melengkung melingkar ke bawah.
+2. **Pemotongan Kecepatan Setir (*Understeer*) di [`adaptive_velocity_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/adaptive_velocity_node.py)**:
+   - Rumus sebelumnya: `scale = max(0.4, min(1.0, actual_v / orig_v)); out.angular.z = orig_w * scale`.
+   - Saat robot melambat mendekati tujuan, kecepatan setir $\omega$ dipotong hingga 60%. Hal ini memperbesar radius putar ($R = v / \omega$), membuat robot *understeer* (melebar), bablas dari mulut titik tujuan, dan terpaksa memutar melingkar penuh untuk kembali.
+3. **`OscillationCritic` Membekukan Rotasi di Tempat**:
+   - Pada rotasi murni, perpindahan linier robot $\Delta x, \Delta y \approx 0\text{ m}$.
+   - Karena syarat reset bendera `OscillationCritic` membutuhkan perpindahan linier $\ge 0.05\text{ m}$, critic mengira rotasi murni sebagai osilasi bahaya, sehingga memotong kecepatan sudut $\omega$ dan menyebabkan robot menoleh sedikit lalu ditarik mundur ke 0°.
+4. **Kecepatan Sudut Minimum Kurang Mengatasi Gesekan Statis Ban (`min_speed_theta: 0.20`)**:
+   - Torsi motor DC pada kecepatan sudut rendah tidak cukup kuat memutar sasis robot di lantai, memicu getaran dengung (*stiction*).
+
+### 3. Solusi Parameter & Kode yang Diterapkan:
+1. **Pembaruan [`adaptive_velocity_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/adaptive_velocity_node.py)**:
+   - Menghapus pemotongan `scale` pada kecepatan sudut. Kecepatan setir `orig_w` dari Nav2 kini diteruskan utuh 1:1 (`out.angular.z = orig_w`), menghilangkan total gejala *understeer* saat melambat.
+2. **Pembaruan DWB Local Planner di [`nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml)**:
+   - **`GoalAlign.scale: 0.0`** (Sebelumnya: `24.0`): Robot dibebaskan dari keharusan menyelaraskan sudut hadap sambil melaju; robot melaju pada garis lurus terpendek menuju koordinat target $(X, Y)$, lalu memutar badan di tempat menuju YAW target via `RotateToGoal`.
+   - **`PathAlign.scale: 4.0`** (Sebelumnya: `16.0`): Mengurangi penalti hadap berlebih saat jalur berbelok atau di belakang robot.
+   - **`PathDist.scale: 24.0`** (Sebelumnya: `32.0`) & **`GoalDist.scale: 20.0`** (Sebelumnya: `24.0`): Memberikan ruang gerak yang proporsional.
+   - **Hapus `Oscillation` dari daftar `critics`**: Menghilangkan *false positive* pembatalan rotasi di tempat.
+   - **`max_vel_theta: 0.80`** (Sebelumnya: `0.60`) & **`min_speed_theta: 0.28`** (Sebelumnya: `0.20`): Memberikan torsi putar awal yang tegas untuk memecahkan gesekan ban di lantai.
+   - **`acc_lim_theta: 2.5`** & **`decel_lim_theta: -2.0`**: Manuver putar lebih responsif dan gesit.
