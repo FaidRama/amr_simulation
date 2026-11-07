@@ -141,31 +141,26 @@ struct PerformaTracker {
     }
   }
 
-  float getOvershoot() {
-    if (target <= 0.0) return 0.0;
-    return max(0.0, ((ymax - target) / target) * 100.0);
-  }
-
-  float getRiseTime() {
-    return (reached_90) ? max(0.0, t_90 - t_10) : 0.0;
-  }
-
-  float getSettlingTime() {
-    return (settled) ? t_settle : 0.0;
-  }
-
-  float getSteadyRPM() {
-    return (count_steady > 0) ? (sum_rpm / count_steady) : ymax;
-  }
-
-  float getEss() {
-    return abs(target - getSteadyRPM());
-  }
-
   float getRMSE() {
     return (count_steady > 0) ? sqrt(sum_error_sq / count_steady) : 0.0;
   }
-
+  float getOvershoot() {
+    if (target <= 1.0 || ymax <= target) return 0.0;
+    return ((ymax - target) / target) * 100.0;
+  }
+  float getRiseTime() {
+    return (reached_90 && reached_10 && t_90 >= t_10) ? (t_90 - t_10) : 0.0;
+  }
+  float getSettlingTime() {
+    return (settled) ? t_settle : 0.0;
+  }
+  float getEss() {
+    if (count_steady == 0) return 0.0;
+    return abs(target - (sum_rpm / count_steady));
+  }
+  float getSteadyRPM() {
+    return (count_steady > 0) ? (sum_rpm / count_steady) : 0.0;
+  }
   float getSteadyPWM() {
     return (count_steady > 0) ? (sum_pwm / count_steady) : 0.0;
   }
@@ -336,7 +331,7 @@ void loop() {
     waktuSebelumnya = waktuSekarang;
     float t = (waktuSekarang - waktuMulaiTes) / 1000.0;
 
-    // TARGET STEP: 0 RPM selama 0.5s baseline, lalu 100.0 RPM sampai 6.5s
+    // TARGET STEP: 0 RPM selama 0.5s baseline, lalu 80.0 RPM sampai 6.5s
     float target_rpm = 0.0;
     if (t >= T_STEP_MULAI && t <= DURASI_TOTAL) {
       target_rpm = TARGET_STEP_RPM;
