@@ -1276,3 +1276,30 @@ Memvalidasi keandalan integrasi subsistem navigasi otonom Nav2 saat menghadapi r
 
 ### 2. Standarisasi Penuh Ikon Vektor SVG pada Web Dashboard (`icons.js`, `index.html`, `map.js`, `app.js`):
 - Mengganti **seluruh emoji ketikan Unicode** (`🚀`, `📦`, `🛑`, `⏳`, `🟢`, `📷`, `👁️`, `⚡`, `🔄`, `🧹`, `💾`, `📡`, `🗺️`, `🎮`, `🤖`, `📍`, `⚠️`, `✅`, `❌`, `🔒`, `💡`, `⬆️`, `⬇️`, `⬅️`, `➡️`, `⏹️`) di seluruh halaman, modal, tombol kontrol, peta 2D, dan notifikasi *toast* menjadi ikon vektor SVG Feather/Lucide yang tajam dan konsisten melalui helper `getIcon(...)` di [`icons.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/icons.js).
+
+---
+
+## 📌 37. Perapian UI Modal Tetapkan Koordinat Peta & Layout Dispatch Dashboard (`map.js`, `app.js`, `style.css`, `index.html`)
+
+### 1. Masalah pada Modal Tetapkan Koordinat Peta (`openPointModal`):
+- Pada halaman Dispatch Pengiriman (`/dispatch`), saat operator mengklik koordinat mana saja pada kanvas peta 2D, fungsi `openPointModal(wx, wy)` memunculkan dialog modal bawaan `showModal()`.
+- Sebelumnya, seluruh 5 tombol opsi aksi (`Langsung Antar ke Sini`, `Set Tujuan (Delivery)`, `Set Pickup`, `Set Posisi Awal Robot (AMCL)`, `Simpan ke Daftar Lokasi`) dimasukkan ke dalam array `actions` di bagian footer modal (`#modal-actions`).
+- Karena `#modal-actions` memiliki `display: flex; gap: 8px;` dengan `#modal-box` berukuran `max-width: 400px;` tanpa `flex-wrap: wrap`, kelima tombol dipaksa berjejer dalam satu baris horizontal. Akibatnya, tombol ke-4 (`Set Posisi Awal Robot`) dan tombol ke-5 (`Simpan ke Daftar Lokasi`) **meluap (overflow) jauh ke luar batas kartu modal** hingga tembus ke background gelap, dengan teks yang terpotong dan tampilan yang tidak rapi.
+- Selain itu, modal belum memiliki tombol close (✕) di pojok kanan atas header dan tidak memiliki hierarki visual antara aksi instan (*1-Click Dispatch*), pemilihan waypoint formulir, serta aksi sistem/AMCL.
+
+### 2. Solusi & Pembaruan Desain Terstruktur:
+1. **Redesain Kartu Aksi Terstruktur (`openPointModal` di [`map.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/map.js))**:
+   - Kelima tindakan kini ditata di dalam `#modal-body` sebagai **Action Card Grid** yang elegan dengan hierarki jelas:
+     - **Bar Koordinat & Jarak Real-Time**: Menampilkan koordinat klik presisi (`X: -2.68m, Y: 0.08m`) dan jarak Euclidean dari posisi robot terkini (`~2.68m dari robot`).
+     - **Hero Action Card (Emerald Highlight)**: `🚀 Langsung Antar ke Sini` (*1-Click Auto Dispatch*), untuk langsung memberangkatkan robot tanpa antrean.
+     - **Waypoint Form Actions (2 Kolom - Biru & Amber)**: `🎯 Set Titik Tujuan (Delivery)` dan `📦 Set Titik Muat (Pickup)`.
+     - **System & Database Actions (2 Kolom - Cyan & Purple)**: `📍 Posisi Awal (AMCL)` (membuka konfigurasi 2D pose estimate) dan `💾 Simpan ke Daftar Lokasi` (membuka dialog simpan ke database).
+   - Menambahkan handler global `window.execPointModalAction(action, wx, wy)` untuk eksekusi cepat aksi dengan otomatis menutup modal (`hideModal()`).
+   - Bagian footer modal hanya menyisakan satu tombol bersih: `Tutup / Batal`.
+2. **Peningkatan Sistem Modal Global ([`style.css`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/css/style.css) & [`index.html`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/templates/index.html))**:
+   - **Tombol Close Universal (✕)**: Ditambahkan pada header `.modal-header-line` di [`index.html`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/templates/index.html) sehingga pengguna dapat menutup modal apa pun dengan sekali klik atau tombol Esc.
+   - **Dimensi & Responsivitas `#modal-box`**: Diperlebar dari `400px` menjadi `width: min(520px, 94vw); max-width: 520px; border-radius: 12px;` dengan `box-shadow` modern dan `max-height: 90vh; overflow-y: auto;`.
+   - **Perbaikan `#modal-actions`**: Ditambahkan `flex-wrap: wrap; justify-content: flex-end; gap: 10px;` sehingga tombol apa pun tidak akan pernah meluap ke luar kartu.
+   - **Responsivitas Mobile**: Pada layar `< 480px`, grid 2-kolom otomatis bertumpuk menjadi 1-kolom yang nyaman di-tap pada smartphone.
+3. **Penyempurnaan Bar Nav2 Controller & Utilitas Flex ([`style.css`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/css/style.css))**:
+   - Menambahkan definisi `.flex-between` dan `.nav-ctrl-bar` dengan `flex-wrap: wrap; gap: 12px;` agar status Nav2 dan tombol Start/Stop navigasi di halaman dispatch tidak terjepit pada resolusi sempit.
