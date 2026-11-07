@@ -57,7 +57,7 @@ class PIDEvaluationNode(Node):
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.pid_l_sub = self.create_subscription(Point, '/pid/motor_left', self.pid_l_cb, 10)
         self.pid_r_sub = self.create_subscription(Point, '/pid/motor_right', self.pid_r_cb, 10)
-
+ 
         # Buffer telemetri real-time
         self.pid_l = {'target': 0.0, 'actual': 0.0, 'pwm': 0.0}
         self.pid_r = {'target': 0.0, 'actual': 0.0, 'pwm': 0.0}
