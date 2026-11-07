@@ -111,10 +111,8 @@ struct PerformaTracker {
     if (target <= 1.0) return;
     float t_rel = t_now - t_step_start;
 
-    // 1. Puncak Overshoot
     if (rpm > ymax) ymax = rpm;
 
-    // 2. Rise Time (10% s.d 90%)
     if (!reached_10 && rpm >= (0.10 * target)) {
       t_10 = t_rel;
       reached_10 = true;
@@ -124,7 +122,6 @@ struct PerformaTracker {
       reached_90 = true;
     }
 
-    // 3. Settling Time (+-5%)
     float band = 0.05 * target;
     if (abs(rpm - target) <= band) {
       if (!settled && t_rel >= 0.15) {
@@ -135,7 +132,6 @@ struct PerformaTracker {
       if (t_rel < 1.0) settled = false;
     }
 
-    // 4 & 5. Steady-State Accumulation (t_rel >= 1.0s)
     if (t_rel >= 1.0) {
       float err = target - rpm;
       sum_error_sq += (err * err);
