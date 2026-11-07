@@ -1,7 +1,9 @@
 /* =========================================================================
- * FIRMWARE AMR DIFFERENTIAL DRIVE - PENGUJIAN STEP RESPON 80 RPM (TRIAL & ERROR)
- * MODE: STANDBY DIAM SAAT UPLOAD (MENUNGGU SINYAL '1' DARI PYTHON)
+ * FIRMWARE AMR DIFFERENTIAL DRIVE - PENGUJIAN STEP RESPON 100 RPM (TRIAL & ERROR)
+ * KHUSUS PENGUJIAN TUNGGAL: STEP 100 RPM (DURASI 6.5 DETIK)
+ * MODE: STANDBY DIAM SAAT UPLOAD (MENUNGGU PERINTAH DARI PYTHON)
  * FITUR: MENCETAK DATA CSV 50 HZ + MENGHITUNG OTOMATIS 5 PARAMETER PERFORMA
+ *        (RMSE, Overshoot, Rise Time, Settling Time, Steady-State Error)
  * PARAMETER : Motor Kiri  (Kp = 2.5000 | Ki = 18.0000 | Kd = 0.0000)
  *             Motor Kanan (Kp = 2.8000 | Ki = 18.0000 | Kd = 0.0000)
  * SKRIPSI   : DIVALA ZAHRA OKTAVIA (TEKNIK KOMPUTER UNNES 2026)
@@ -50,8 +52,8 @@ const float KD_R = 0.0000;
 const unsigned long SAMPLING_MS = 20;
 const float DT = SAMPLING_MS / 1000.0; // 0.02 s (50 Hz)
 
-// TARGET STEP RPM & DURASI KHUSUS 80 RPM
-const float TARGET_STEP_RPM = 80.0;
+// TARGET STEP RPM & DURASI KHUSUS 100 RPM
+const float TARGET_STEP_RPM = 100.0;
 const float T_STEP_MULAI    = 0.5;   // Detik ke-0.5 step diaktifkan
 const float DURASI_TOTAL    = 6.5;   // Total durasi pengujian (detik)
 
@@ -67,7 +69,7 @@ float error_R = 0.0, prev_error_R = 0.0, integral_R = 0.0, pwm_R = 0.0;
 
 unsigned long waktuSebelumnya = 0;
 unsigned long waktuMulaiTes   = 0;
-bool sedangUji = false; // STANDBY: Default tidak bergerak saat pertama kali nyala
+bool sedangUji = false; // Standby diam saat baru dinyalakan
 bool stepAktif = false;
 
 // =========================================================================
@@ -109,8 +111,10 @@ struct PerformaTracker {
     if (target <= 1.0) return;
     float t_rel = t_now - t_step_start;
 
+    // 1. Puncak Overshoot
     if (rpm > ymax) ymax = rpm;
 
+    // 2. Rise Time (10% s.d 90%)
     if (!reached_10 && rpm >= (0.10 * target)) {
       t_10 = t_rel;
       reached_10 = true;
@@ -120,6 +124,7 @@ struct PerformaTracker {
       reached_90 = true;
     }
 
+    // 3. Settling Time (+-5%)
     float band = 0.05 * target;
     if (abs(rpm - target) <= band) {
       if (!settled && t_rel >= 0.15) {
@@ -130,6 +135,7 @@ struct PerformaTracker {
       if (t_rel < 1.0) settled = false;
     }
 
+    // 4 & 5. Steady-State Accumulation (t_rel >= 1.0s)
     if (t_rel >= 1.0) {
       float err = target - rpm;
       sum_error_sq += (err * err);
@@ -219,7 +225,7 @@ void driveMotors(float pwmL, float pwmR) {
 // ====================== 9. CETAK REKAP HASIL 5 PARAMETER ==================
 void cetakRangkumanPerforma() {
   Serial.println(F("\n# ============================================================================"));
-  Serial.println(F("# RANGKUMAN 5 PARAMETER EVALUASI PERFORMA STEP RESPON 80 RPM (TRIAL & ERROR)"));
+  Serial.println(F("# RANGKUMAN 5 PARAMETER EVALUASI PERFORMA STEP RESPON 100 RPM (TRIAL & ERROR)"));
   Serial.println(F("# ============================================================================"));
   Serial.println(F("# Parameter Evaluasi              | Motor Kiri     | Motor Kanan    | Satuan"));
   Serial.println(F("# ----------------------------------------------------------------------------"));
@@ -252,11 +258,11 @@ void cetakRangkumanPerforma() {
   Serial.print(perf_L.getSteadyPWM(), 1); Serial.print(F("        | "));
   Serial.print(perf_R.getSteadyPWM(), 1); Serial.println(F("        | PWM (0-255)"));
   Serial.println(F("# ============================================================================"));
-  Serial.println(F("# PENGUJIAN 80 RPM SELESAI. Silakan copy data CSV atau tabel di atas."));
+  Serial.println(F("# PENGUJIAN 100 RPM SELESAI. Silakan copy data CSV atau tabel di atas."));
 }
 
 // ====================== 10. CETAK HEADER CSV & RESET =====================
-void mulaiPengujian80RPM() {
+void mulaiPengujian100RPM() {
   noInterrupts();
   totalPulsa_L = 0; totalPulsa_R = 0;
   deltaPulsa_L = 0; deltaPulsa_R = 0;
@@ -274,10 +280,10 @@ void mulaiPengujian80RPM() {
   waktuMulaiTes = millis();
   waktuSebelumnya = millis();
 
-  Serial.println(F("# PENGUJIAN : STEP RESPON 80 RPM (TRIAL & ERROR);;;;;;;;"));
+  Serial.println(F("# PENGUJIAN : STEP RESPON 100 RPM (TRIAL & ERROR);;;;;;;;"));
   Serial.println(F("# MOTOR_LEFT : Kp=2.5000; Ki=18.0000; Kd=0.0000;;;;;;"));
   Serial.println(F("# MOTOR_RIGHT: Kp=2.8000; Ki=18.0000; Kd=0.0000;;;;;;"));
-  Serial.println(F("# TARGET_RPM : 80.0; DURASI: 6.5s;;;;;;;"));
+  Serial.println(F("# TARGET_RPM : 100.0; DURASI: 6.5s;;;;;;;"));
   Serial.println(F("Time_s;Target_RPM_L;Actual_RPM_L;PWM_L;Error_L;Target_RPM_R;Actual_RPM_R;PWM_R;Error_R"));
 }
 
@@ -307,20 +313,19 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(PIN_ENCA_L), isrL, FALLING);
   attachInterrupt(digitalPinToInterrupt(PIN_ENCA_R), isrR, FALLING);
 
-  // Standby diam: motor mati, menunggu sinyal trigger '1' dari Python
+  // Standby diam: motor mati total saat upload
   driveMotors(0, 0);
   sedangUji = false;
   stepAktif = false;
-  Serial.println(F("# [STANDBY] Robot siap. Menunggu perintah '1' untuk memulai pengujian 80 RPM."));
+  Serial.println(F("# [STANDBY] Robot siap. Menunggu perintah '1' untuk memulai pengujian 100 RPM."));
 }
 
 // ====================== 12. LOOP KENDALI 50 HZ ===========================
 void loop() {
-  // Input Serial: hanya mulai saat Python mengirim '1'
   while (Serial.available() > 0) {
     char c = Serial.read();
     if (c == '1' || c == 'r' || c == 'R') {
-      mulaiPengujian80RPM(); // Mulai tes 80 RPM
+      mulaiPengujian100RPM(); // Mulai tes 100 RPM
     } else if (c == '0') {
       sedangUji = false;
       driveMotors(0, 0);
@@ -335,7 +340,7 @@ void loop() {
     waktuSebelumnya = waktuSekarang;
     float t = (waktuSekarang - waktuMulaiTes) / 1000.0;
 
-    // TARGET STEP: 0 RPM selama 0.5s baseline, lalu 80.0 RPM sampai 6.5s
+    // TARGET STEP: 0 RPM selama 0.5s baseline, lalu 100.0 RPM sampai 6.5s
     float target_rpm = 0.0;
     if (t >= T_STEP_MULAI && t <= DURASI_TOTAL) {
       target_rpm = TARGET_STEP_RPM;
@@ -366,7 +371,7 @@ void loop() {
     rpm_L = rpm_ctrl_L;
     rpm_R = rpm_ctrl_R;
 
-    // Kendali PI
+    // Kendali PI Trial & Error
     // Motor Kiri
     if (fabs(setpoint_L) < 0.05) {
       rpm_ctrl_L = 0.0; rpm_L = 0.0; pwm_L = 0.0;
@@ -409,7 +414,7 @@ void loop() {
     Serial.print((int)pwm_R);    Serial.print(";");
     Serial.println(error_R, 2);
 
-    // Saat Pengujian Selesai (t >= 6.5s)
+    // Saat Selesai (t >= 6.5s)
     if (t >= DURASI_TOTAL) {
       driveMotors(0, 0);
       sedangUji = false;
