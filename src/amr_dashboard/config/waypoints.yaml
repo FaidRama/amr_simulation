@@ -1,7 +1,7 @@
 home_position:
-  x: 8.37
-  y: -2.5
-  yaw: 3.142
+  x: 0.02
+  y: 0.05
+  yaw: -1.571
 operation_mode: real
 predefined_points:
 - &id001
@@ -10,17 +10,24 @@ predefined_points:
   type: pickup
   x: 8.4
   y: -2.55
+- &id002
+  description: ''
+  name: titik awal
+  type: pickup
+  x: 0.0
+  y: 0.0
 profiles:
   real:
     home_position:
-      x: 8.37
-      y: -2.5
-      yaw: 3.142
+      x: 0.02
+      y: 0.05
+      yaw: -1.571
     map_file: peta_l1_dc.yaml
     max_angular_speed: 0.6
     max_linear_speed: 0.35
     predefined_points:
     - *id001
+    - *id002
     settings:
       arrival_sound_mode: human
       max_angular_speed: 0.5
