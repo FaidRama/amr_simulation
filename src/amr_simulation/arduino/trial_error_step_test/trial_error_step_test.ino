@@ -68,7 +68,7 @@ float error_R = 0.0, prev_error_R = 0.0, integral_R = 0.0, pwm_R = 0.0;
 
 unsigned long waktuSebelumnya = 0;
 unsigned long waktuMulaiTes   = 0;
-bool sedangUji = true;
+bool sedangUji = false;
 bool stepAktif = false;
 
 // =========================================================================
@@ -321,8 +321,11 @@ void setup() {
   driveMotors(0, 0);
   delay(1000); // Waktu inisialisasi awal 1 detik
 
-  // Otomatis langsung memulai pengujian 80 RPM
-  mulaiPengujian80RPM();
+  // Standby diam: motor mati, menunggu sinyal trigger '1' dari Python / Serial Monitor
+  driveMotors(0, 0);
+  sedangUji = false;
+  stepAktif = false;
+  Serial.println(F("# [STANDBY] Robot siap. Menunggu perintah '1' untuk memulai pengujian 80 RPM."));
 }
 
 // ====================== 12. LOOP KENDALI 50 HZ ===========================
