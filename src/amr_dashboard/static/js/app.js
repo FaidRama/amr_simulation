@@ -200,21 +200,28 @@ function showToast(message, type = 'info') {
 }
 
 // ====================== MODAL ======================
-function showModal(title, body, actions) {
+function showModal(title, body, actions, tag = 'SYS // PROMPT') {
+    const tagEl = document.getElementById('modal-tag');
+    if (tagEl) tagEl.textContent = tag;
     document.getElementById('modal-title').innerHTML = title;
     document.getElementById('modal-body').innerHTML = body;
     const actionsEl = document.getElementById('modal-actions');
     actionsEl.innerHTML = '';
-    actions.forEach(a => {
-        const btn = document.createElement('button');
-        btn.className = `btn ${a.class || 'btn-outline'}`;
-        btn.innerHTML = a.label;
-        btn.onclick = () => {
-            document.getElementById('modal-overlay').classList.add('hidden');
-            if (a.action) a.action();
-        };
-        actionsEl.appendChild(btn);
-    });
+    if (Array.isArray(actions) && actions.length > 0) {
+        actions.forEach(a => {
+            const btn = document.createElement('button');
+            btn.className = `btn ${a.class || 'btn-outline'}`;
+            btn.innerHTML = a.label;
+            btn.onclick = () => {
+                document.getElementById('modal-overlay').classList.add('hidden');
+                if (a.action) a.action();
+            };
+            actionsEl.appendChild(btn);
+        });
+        actionsEl.style.display = 'flex';
+    } else {
+        actionsEl.style.display = 'none';
+    }
     document.getElementById('modal-overlay').classList.remove('hidden');
 }
 
@@ -3841,6 +3848,8 @@ function openInitialPoseModal(initX = null, initY = null, initYawDeg = null) {
         ? Math.round(Number(initYawDeg))
         : ((APP.pose && APP.pose.yaw != null) ? Math.round((APP.pose.yaw * 180) / Math.PI) : 0);
 
+    const tagEl = document.getElementById('modal-tag');
+    if (tagEl) tagEl.textContent = 'AMCL // LOCALIZATION';
     document.getElementById('modal-title').innerHTML = `${getIcon('crosshair', 16)} Set Posisi Awal Robot (AMCL /initialpose)`;
     document.getElementById('modal-body').innerHTML = `
         <p style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:10px; line-height:1.45;">
@@ -3910,6 +3919,7 @@ function openInitialPoseModal(initX = null, initY = null, initYawDeg = null) {
     `;
     const actionsEl = document.getElementById('modal-actions');
     actionsEl.innerHTML = '';
+    actionsEl.style.display = 'flex';
 
     const btnCancel = document.createElement('button');
     btnCancel.className = 'btn btn-outline';
@@ -4185,7 +4195,9 @@ async function pollRelocalizeProgress() {
 }
 
 function openSavePointFromMapModal(wx, wy) {
-    document.getElementById('modal-title').textContent = 'Simpan Lokasi ke Peta';
+    const tagEl = document.getElementById('modal-tag');
+    if (tagEl) tagEl.textContent = 'DATABASE // SIMPAN LOKASI';
+    document.getElementById('modal-title').innerHTML = `${getIcon('save', 16)} Simpan Lokasi Baru ke Database`;
     document.getElementById('modal-body').innerHTML = `
         <div class="input-group">
             <div class="input-label">Nama Titik Lokasi</div>
@@ -4194,11 +4206,11 @@ function openSavePointFromMapModal(wx, wy) {
         <div class="input-row">
             <div class="input-group">
                 <div class="input-label">Koordinat X (m)</div>
-                <input class="input-field" id="map-point-x" type="number" step="0.05" value="${wx}">
+                <input class="input-field" id="map-point-x" type="number" step="0.05" value="${Number(wx).toFixed(2)}">
             </div>
             <div class="input-group">
                 <div class="input-label">Koordinat Y (m)</div>
-                <input class="input-field" id="map-point-y" type="number" step="0.05" value="${wy}">
+                <input class="input-field" id="map-point-y" type="number" step="0.05" value="${Number(wy).toFixed(2)}">
             </div>
         </div>
         <div class="input-group">
@@ -4211,6 +4223,7 @@ function openSavePointFromMapModal(wx, wy) {
     `;
     const actionsEl = document.getElementById('modal-actions');
     actionsEl.innerHTML = '';
+    actionsEl.style.display = 'flex';
 
     const btnCancel = document.createElement('button');
     btnCancel.className = 'btn btn-outline';

@@ -478,64 +478,136 @@ window.addEventListener('keydown', (e) => {
 });
 
 function openPointModal(wx, wy) {
+    const wxNum = Number(wx);
+    const wyNum = Number(wy);
+    const wxStr = wxNum.toFixed(2);
+    const wyStr = wyNum.toFixed(2);
+
+    let distText = '';
+    if (window.APP && window.APP.pose && typeof window.APP.pose.x === 'number' && typeof window.APP.pose.y === 'number') {
+        const d = Math.hypot(wxNum - window.APP.pose.x, wyNum - window.APP.pose.y);
+        distText = `~${d.toFixed(2)}m dari robot`;
+    }
+
+    const bodyHtml = `
+        <div class="point-modal-container">
+            <div class="point-modal-coord-bar">
+                <div class="mono" style="font-weight:700; color:var(--text-primary); display:flex; align-items:center; gap:6px;">
+                    ${getIcon('mapPin', 14) || getIcon('pickup', 14)} <span>X: <strong style="color:var(--accent-bright);">${wxStr}m</strong>, Y: <strong style="color:var(--accent-bright);">${wyStr}m</strong></span>
+                </div>
+                ${distText ? `<span class="point-modal-dist-tag mono">${getIcon('navigation', 12)} ${distText}</span>` : ''}
+            </div>
+
+            <div style="font-size:0.75rem; color:var(--text-secondary); margin-top:2px; margin-bottom:4px;">
+                Pilih tindakan navigasi untuk titik koordinat ini:
+            </div>
+
+            <!-- HERO ACTION: Direct 1-Click Dispatch -->
+            <div class="point-action-card point-action-hero" onclick="execPointModalAction('direct', ${wxNum}, ${wyNum})" role="button" tabindex="0">
+                <div class="point-action-icon">${getIcon('send', 18)}</div>
+                <div class="point-action-content">
+                    <div class="point-action-title">
+                        <span>Langsung Antar ke Sini</span>
+                        <span class="point-action-badge">1-Click Dispatch</span>
+                    </div>
+                    <div class="point-action-desc">Kirim robot secara instan langsung menuju titik koordinat ini tanpa antrean.</div>
+                </div>
+            </div>
+
+            <!-- WAYPOINT CONFIGURATION (2 COLUMNS) -->
+            <div class="point-modal-grid-2">
+                <div class="point-action-card point-action-delivery" onclick="execPointModalAction('delivery', ${wxNum}, ${wyNum})" role="button" tabindex="0">
+                    <div class="point-action-icon">${getIcon('delivery_point', 18)}</div>
+                    <div class="point-action-content">
+                        <div class="point-action-title">Set Tujuan (Delivery)</div>
+                        <div class="point-action-desc">Tetapkan titik ini sebagai target akhir pengantaran pada form.</div>
+                    </div>
+                </div>
+
+                <div class="point-action-card point-action-pickup" onclick="execPointModalAction('pickup', ${wxNum}, ${wyNum})" role="button" tabindex="0">
+                    <div class="point-action-icon">${getIcon('pickup', 18)}</div>
+                    <div class="point-action-content">
+                        <div class="point-action-title">Set Titik Muat (Pickup)</div>
+                        <div class="point-action-desc">Tetapkan titik ini sebagai lokasi awal pengambilan muatan barang.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LOCALIZATION & SAVED DATABASE (2 COLUMNS) -->
+            <div class="point-modal-grid-2">
+                <div class="point-action-card point-action-amcl" onclick="execPointModalAction('initialpose', ${wxNum}, ${wyNum})" role="button" tabindex="0">
+                    <div class="point-action-icon">${getIcon('crosshair', 18)}</div>
+                    <div class="point-action-content">
+                        <div class="point-action-title">Posisi Awal (AMCL)</div>
+                        <div class="point-action-desc">Kirim /initialpose untuk kalibrasi estimasi posisi robot di peta.</div>
+                    </div>
+                </div>
+
+                <div class="point-action-card point-action-save" onclick="execPointModalAction('save', ${wxNum}, ${wyNum})" role="button" tabindex="0">
+                    <div class="point-action-icon">${getIcon('save', 18)}</div>
+                    <div class="point-action-content">
+                        <div class="point-action-title">Simpan ke Daftar Lokasi</div>
+                        <div class="point-action-desc">Beri nama &amp; simpan titik koordinat ini ke database lokasi.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
     showModal(
-        'Tetapkan Koordinat Peta',
-        `<span class="mono">POSISI KLIK: <strong>X=${wx.toFixed(2)}m, Y=${wy.toFixed(2)}m</strong></span><br>
-         Pilih tindakan untuk titik koordinat ini:`,
+        `${getIcon('navigation', 17)} Tetapkan Tindakan Koordinat`,
+        bodyHtml,
         [
             {
-                label: `${getIcon('send', 14)} Langsung Antar ke Sini`, class: 'btn-success',
-                action: () => {
-                    const point = { name: `Peta (${wx.toFixed(2)}, ${wy.toFixed(2)})`, x: wx, y: wy };
-                    if (typeof directDispatchToPoint === 'function') {
-                        directDispatchToPoint(point);
-                    } else {
-                        APP.pendingDelivery = point;
-                        const el = document.getElementById('delivery-selected');
-                        if (el) el.innerHTML = `${getIcon('check', 13)} Tujuan: [${wx.toFixed(2)}, ${wy.toFixed(2)}]`;
-                        showToast(`Tujuan ditetapkan: (${wx.toFixed(2)}, ${wy.toFixed(2)})`, 'info');
-                    }
-                }
-            },
-            {
-                label: `${getIcon('delivery_point', 14)} Set Tujuan (Delivery)`, class: 'btn-primary',
-                action: () => {
-                    APP.pendingDelivery = { name: `Map (${wx.toFixed(2)}, ${wy.toFixed(2)})`, x: wx, y: wy };
-                    const el = document.getElementById('delivery-selected');
-                    if (el) el.innerHTML = `${getIcon('check', 13)} Tujuan: [${wx.toFixed(2)}, ${wy.toFixed(2)}]`;
-                    showToast(`Tujuan ditetapkan: (${wx.toFixed(2)}, ${wy.toFixed(2)})`, 'info');
-                }
-            },
-            {
-                label: `${getIcon('pickup', 14)} Set Pickup`, class: 'btn-outline',
-                action: () => {
-                    APP.pendingPickup = { name: `Map (${wx.toFixed(2)}, ${wy.toFixed(2)})`, x: wx, y: wy };
-                    const el = document.getElementById('pickup-selected');
-                    if (el) el.innerHTML = `${getIcon('check', 13)} Pickup: [${wx.toFixed(2)}, ${wy.toFixed(2)}]`;
-                    showToast(`Pickup ditetapkan: (${wx.toFixed(2)}, ${wy.toFixed(2)})`, 'info');
-                }
-            },
-            {
-                label: `${getIcon('crosshair', 14)} Set Posisi Awal Robot (AMCL)`, class: 'btn-warning',
-                action: () => {
-                    if (typeof openInitialPoseModal === 'function') {
-                        openInitialPoseModal(wx, wy);
-                    } else if (typeof sendInitialPoseToRobot === 'function') {
-                        sendInitialPoseToRobot(wx, wy, 0.0, false);
-                    }
-                }
-            },
-            {
-                label: `${getIcon('save', 14)} Simpan ke Daftar Lokasi`, class: 'btn-secondary',
-                action: () => {
-                    if (typeof openSavePointFromMapModal === 'function') {
-                        openSavePointFromMapModal(wx, wy);
-                    }
-                }
+                label: 'Tutup / Batal',
+                class: 'btn-outline',
+                action: hideModal
             }
-        ]
+        ],
+        'NAV2 // MAP ACTION'
     );
 }
+
+window.execPointModalAction = function(action, wx, wy) {
+    hideModal();
+    const wxNum = Number(wx);
+    const wyNum = Number(wy);
+    const wxStr = wxNum.toFixed(2);
+    const wyStr = wyNum.toFixed(2);
+
+    if (action === 'direct') {
+        const point = { name: `Peta (${wxStr}, ${wyStr})`, x: wxNum, y: wyNum };
+        if (typeof directDispatchToPoint === 'function') {
+            directDispatchToPoint(point);
+        } else {
+            APP.pendingDelivery = point;
+            const el = document.getElementById('delivery-selected');
+            if (el) el.innerHTML = `${getIcon('check', 13)} Tujuan: [${wxStr}, ${wyStr}]`;
+            showToast(`Tujuan ditetapkan: (${wxStr}, ${wyStr})`, 'info');
+        }
+    } else if (action === 'delivery') {
+        APP.pendingDelivery = { name: `Peta (${wxStr}, ${wyStr})`, x: wxNum, y: wyNum };
+        const el = document.getElementById('delivery-selected');
+        const roleLabel = (APP.dispatchMode === 'direct') ? 'Tujuan' : 'Delivery';
+        if (el) el.innerHTML = `${getIcon('check', 13)} ${roleLabel}: [${wxStr}, ${wyStr}]`;
+        showToast(`Tujuan ditetapkan: (${wxStr}, ${wyStr})`, 'info');
+    } else if (action === 'pickup') {
+        APP.pendingPickup = { name: `Peta (${wxStr}, ${wyStr})`, x: wxNum, y: wyNum };
+        const el = document.getElementById('pickup-selected');
+        if (el) el.innerHTML = `${getIcon('check', 13)} Pickup: [${wxStr}, ${wyStr}]`;
+        showToast(`Pickup ditetapkan: (${wxStr}, ${wyStr})`, 'info');
+    } else if (action === 'initialpose') {
+        if (typeof openInitialPoseModal === 'function') {
+            openInitialPoseModal(wxNum, wyNum);
+        } else if (typeof sendInitialPoseToRobot === 'function') {
+            sendInitialPoseToRobot(wxNum, wyNum, 0.0, false);
+        }
+    } else if (action === 'save') {
+        if (typeof openSavePointFromMapModal === 'function') {
+            openSavePointFromMapModal(wxNum, wyNum);
+        }
+    }
+};
 
 async function initDeliveryMap() {
     const canvas = document.getElementById('delivery-map-canvas');

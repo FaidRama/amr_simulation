@@ -172,8 +172,11 @@
     <div id="modal-overlay" class="hidden" onclick="closeModal(event)">
         <div id="modal-box">
             <div class="modal-header-line">
-                <span class="modal-tag">SYS // PROMPT</span>
-                <h3 id="modal-title"></h3>
+                <div style="flex:1; min-width:0;">
+                    <span class="modal-tag" id="modal-tag">SYS // PROMPT</span>
+                    <h3 id="modal-title"></h3>
+                </div>
+                <button type="button" class="modal-close-btn" onclick="hideModal()" title="Tutup dialog">✕</button>
             </div>
             <div id="modal-body"></div>
             <div id="modal-actions"></div>
