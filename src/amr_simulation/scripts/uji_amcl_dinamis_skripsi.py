@@ -393,11 +393,30 @@ class EvaluasiAMCLDinamisNode(Node):
         if not msg.status_list:
             return
 
-        latest_status = msg.status_list[-1]
-        st = latest_status.status
-
         with self.lock:
-            # 1. Navigasi Diterima & Mulai Berjalan
+            # 1. Cari status untuk goal spesifik yang sedang kita pantau
+            target_status = None
+            if self.last_goal_id is not None:
+                for gs in msg.status_list:
+                    if bytes(gs.goal_info.goal_id.uuid) == self.last_goal_id:
+                        target_status = gs
+                        break
+
+            # 2. Jika belum mengunci goal_id atau baru mulai, cari goal baru yang sedang aktif
+            if target_status is None:
+                for gs in reversed(msg.status_list):
+                    if gs.status in (GoalStatus.STATUS_ACCEPTED, GoalStatus.STATUS_EXECUTING):
+                        target_status = gs
+                        self.last_goal_id = bytes(gs.goal_info.goal_id.uuid)
+                        break
+
+            # 3. Fallback jika tidak ada status aktif
+            if target_status is None:
+                target_status = msg.status_list[-1]
+
+            st = target_status.status
+
+            # Navigasi Diterima & Mulai Berjalan
             if st in (GoalStatus.STATUS_ACCEPTED, GoalStatus.STATUS_EXECUTING):
                 if not self.is_navigating:
                     self.is_navigating = True
@@ -435,10 +454,11 @@ class EvaluasiAMCLDinamisNode(Node):
                     self.goal_aborted_event.clear()
                     self.nav_started_event.set()
 
-            # 2. Navigasi Sukses Tiba di Tujuan (SUCCEEDED)
+            # Navigasi Sukses Tiba di Tujuan (SUCCEEDED)
             elif st == GoalStatus.STATUS_SUCCEEDED:
                 if self.is_navigating:
                     self.is_navigating = False
+                    self.last_goal_id = None
                     end_time = time.time()
                     travel_time = end_time - (self.start_time or end_time)
                     final_amcl = dict(self.current_pose) if self.current_pose else {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
@@ -459,10 +479,11 @@ class EvaluasiAMCLDinamisNode(Node):
                     self.active_goal = None  # Reset active goal agar rute berikutnya (misal Home) tidak memakai nama lama
                     self.goal_reached_event.set()
 
-            # 3. Navigasi Dibatalkan atau Gagal (ABORTED / CANCELED)
+            # Navigasi Dibatalkan atau Gagal (ABORTED / CANCELED)
             elif st in (GoalStatus.STATUS_ABORTED, GoalStatus.STATUS_CANCELED):
                 if self.is_navigating:
                     self.is_navigating = False
+                    self.last_goal_id = None
                     self.active_goal = None
                     self.goal_aborted_event.set()
 
@@ -534,14 +555,28 @@ class EvaluasiAMCLDinamisNode(Node):
         print(f"🎯 Estimasi Posisi AMCL Akhir : X = {final_amcl['x']:.3f} m, Y = {final_amcl['y']:.3f} m, Heading = {math.degrees(final_amcl['yaw']):+.1f}°")
         print(f"📊 Kepadatan Partikel AMCL    : Sigma X: {sig_x_cm:.1f} cm | Sigma Y: {sig_y_cm:.1f} cm | Sigma Yaw: {sig_yaw_deg:.1f}°")
         print(f"📏 Selisih AMCL vs Goal       : Jarak = {e_pos_amcl_cm:.1f} cm | Sudut = {e_yaw_amcl_deg:.1f}°")
+
+        # Deteksi lonjakan galat AMCL (Corridor Symmetry Slippage)
+        is_amcl_slip = e_pos_amcl_cm > 50.0
+        if is_amcl_slip:
+            print("\n" + "⚠️ " * 26)
+            print("⚠️ PERINGATAN ANOMALI AMCL (SLIP PARTIKEL DI LORONG SIMETRIS TERDETEKSI):")
+            print(f"   • Selisih pembacaan sensor AMCL terhadap Goal mencapai {e_pos_amcl_cm:.1f} cm.")
+            print("   • Hal ini wajar terjadi pada koridor lurus panjang karena LiDAR 2D kehilangan")
+            print("     referensi longitudinal X (dinding kiri-kanan simetris dan seragam).")
+            print("   • Nav2 telah berhasil membawa robot secara fisik ke titik target.")
+            print("   👉 Segera ukur dengan meteran dan KETIK jarak galat fisik di bawah ini!")
+            print("⚠️ " * 26)
+
         print("-" * 78)
         print("📐 VERIFIKASI PENGUKURAN FISIK GROUND TRUTH DI LANTAI:")
         print("   💡 Masukkan angka jika mengukur manual di lantai (ENTER = pakai estimasi AMCL).")
-        print("   ⏳ (Otomatis lanjut dalam 6 detik atau jika robot melanjutkan perjalanan pulang)")
+        timeout_pos = 20.0 if is_amcl_slip else 10.0
+        print(f"   ⏳ (Waktu input: {timeout_pos:.0f} detik, otomatis lanjut jika robot jalan pulang)")
         user_pos = timed_input(
             f"   👉 Galat Jarak Fisik Robot di Lantai (cm) [Estimasi AMCL: {e_pos_amcl_cm:.1f} cm]: ",
             default_val=f"{e_pos_amcl_cm:.1f}",
-            timeout_sec=6.0,
+            timeout_sec=timeout_pos,
             cancel_check_fn=lambda: self.is_navigating
         )
 
@@ -555,10 +590,11 @@ class EvaluasiAMCLDinamisNode(Node):
         if self.is_navigating:
             final_yaw_deg = e_yaw_amcl_deg
         else:
+            timeout_yaw = 10.0 if is_amcl_slip else 5.0
             user_yaw = timed_input(
                 f"   👉 Galat Sudut Hadap Fisik Robot (derajat) [Estimasi AMCL: {e_yaw_amcl_deg:.1f}°]: ",
                 default_val=f"{e_yaw_amcl_deg:.1f}",
-                timeout_sec=4.0,
+                timeout_sec=timeout_yaw,
                 cancel_check_fn=lambda: self.is_navigating
             )
             try:
@@ -687,6 +723,91 @@ class EvaluasiAMCLDinamisNode(Node):
         print(f"\n🚀 Mengirim robot ke '{wp['name']}' (X={wp['x']}, Y={wp['y']})...")
         self.nav_client.send_goal_async(goal_msg)
 
+    def edit_last_csv_row(self):
+        """Mengoreksi nilai baris data terakhir di file CSV (misal setelah terlewat timeout ground truth)."""
+        if not os.path.exists(self.csv_path):
+            print("⚠️ File CSV belum ada.")
+            return
+
+        with open(self.csv_path, 'r') as f:
+            rows = list(csv.reader(f))
+
+        if len(rows) <= 1:
+            print("⚠️ Belum ada data untuk dikoreksi.")
+            return
+
+        header = rows[0]
+        last_row = rows[-1]
+        print("\n" + "=" * 75)
+        print("📝 KOREKSI DATA PENGUJIAN TERAKHIR:")
+        print(f"  • Nomor Run       : {last_row[0]}")
+        print(f"  • Titik Target    : {last_row[1]}")
+        print(f"  • Estimasi AMCL   : Posisi = {last_row[14]} cm, Yaw = {last_row[15]}°")
+        print(f"  • Rekaman Saat Ini: Posisi = {last_row[16]} cm, Yaw = {last_row[17]}° ({last_row[18]})")
+        print(f"  • Status Kelulusan: [{last_row[20]}]")
+        print("=" * 75)
+
+        new_pos = input(f"👉 Masukkan Galat Posisi Fisik Baru (cm) [Tekan ENTER jika tetap {last_row[16]} cm]: ").strip()
+        new_yaw = input(f"👉 Masukkan Galat Sudut Hadap Baru (derajat) [Tekan ENTER jika tetap {last_row[17]}°]: ").strip()
+
+        if new_pos:
+            try:
+                val_p = float(new_pos)
+                last_row[16] = f"{val_p:.1f}"
+                last_row[18] = "PENGUKURAN FISIK MANUAL (METERAN)"
+                st_p = "LULUS" if val_p <= self.pass_max_epos_cm else "GAGAL"
+                val_y = float(last_row[17])
+                st_y = "LULUS" if val_y <= self.pass_max_eyaw_deg else "GAGAL"
+                last_row[20] = "LULUS" if (st_p == "LULUS" and st_y == "LULUS") else "TIDAK LULUS"
+            except ValueError:
+                print("⚠️ Angka posisi tidak valid, perubahan dibatalkan.")
+                return
+
+        if new_yaw:
+            try:
+                val_y = float(new_yaw)
+                last_row[17] = f"{val_y:.1f}"
+                val_p = float(last_row[16])
+                st_p = "LULUS" if val_p <= self.pass_max_epos_cm else "GAGAL"
+                st_y = "LULUS" if val_y <= self.pass_max_eyaw_deg else "GAGAL"
+                last_row[20] = "LULUS" if (st_p == "LULUS" and st_y == "LULUS") else "TIDAK LULUS"
+            except ValueError:
+                print("⚠️ Angka sudut tidak valid, perubahan dibatalkan.")
+                return
+
+        rows[-1] = last_row
+        with open(self.csv_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerows(rows)
+
+        print("\n✅ Data pengujian terakhir berhasil diperbarui!")
+        print(f"   • Posisi Fisik Baru : {last_row[16]} cm (Toleransi <= {self.pass_max_epos_cm:.1f} cm)")
+        print(f"   • Sudut Hadap Baru  : {last_row[17]}° (Toleransi <= {self.pass_max_eyaw_deg:.1f}°)")
+        print(f"   • Status Kelulusan  : [{last_row[20]}]")
+        print(f"   • Sumber Data       : {last_row[18]}")
+
+    def delete_last_csv_row(self):
+        """Menghapus 1 baris pengujian terakhir di CSV jika salah uji."""
+        if not os.path.exists(self.csv_path):
+            print("⚠️ File CSV belum ada.")
+            return
+
+        with open(self.csv_path, 'r') as f:
+            rows = list(csv.reader(f))
+
+        if len(rows) <= 1:
+            print("⚠️ Belum ada data untuk dihapus.")
+            return
+
+        last_row = rows[-1]
+        c = input(f"⚠️ Yakin hapus baris terakhir #{last_row[0]} ('{last_row[1]}')? (y/n): ").strip().lower()
+        if c == 'y':
+            rows.pop()
+            with open(self.csv_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerows(rows)
+            print("✅ Baris terakhir berhasil dihapus dari CSV!")
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -711,11 +832,13 @@ def main(args=None):
             print("  [1] MODE STANDBY / MONITOR PASIF (Jalankan navigasi dari Web Dashboard)")
             print("  [2] Kirim Navigasi Langsung dari Daftar Titik Terminal")
             print("  [3] Tampilkan Rekapitulasi Tabel & Statistik Bab 4")
-            print("  [4] Reset / Hapus File CSV")
+            print("  [4] Koreksi / Edit Baris Data Terakhir CSV (Ground Truth)")
+            print("  [5] Hapus 1 Baris Data Terakhir CSV")
+            print("  [6] Reset / Hapus Seluruh File CSV")
             print("  [0] Keluar")
             print("=" * 75)
 
-            choice = input("Pilih menu (1/2/3/4/0) [Default: 1]: ").strip() or '1'
+            choice = input("Pilih menu (1/2/3/4/5/6/0) [Default: 1]: ").strip() or '1'
 
             if choice == '1':
                 print("\n" + "-" * 75)
@@ -824,7 +947,13 @@ def main(args=None):
                 node.print_recap_table()
 
             elif choice == '4':
-                c = input("⚠️ Yakin ingin menghapus CSV skenario 2 dinamis? (ketik 'ya'): ").strip()
+                node.edit_last_csv_row()
+
+            elif choice == '5':
+                node.delete_last_csv_row()
+
+            elif choice == '6':
+                c = input("⚠️ Yakin ingin menghapus seluruh file CSV skenario 2 dinamis? (ketik 'ya'): ").strip()
                 if c.lower() == 'ya':
                     if os.path.exists(node.csv_path):
                         os.remove(node.csv_path)

@@ -1572,3 +1572,51 @@ Saat pengguna menjalankan `uji_amcl_dinamis_skripsi.py` Mode 1 (Monitor Pasif) d
 5. **Pemisahan Banner `nav_started_event` ke Main Loop**:
    - Pencetakan banner pengumuman awal navigasi didelegasikan ke thread utama menggunakan `Event()`, mencegah terjadinya tumpang tindih (*interleaving stdout*) dengan prompt kedatangan.
 
+---
+
+## 46. Analisis Fenomena Slip AMCL di Lorong Simetris & Fitur Koreksi Data CSV (08 November 2026)
+
+### A. Gejala & Kasus Pengujian Run 3 (`titik 3`)
+Pada pengujian Skenario 2 Evaluasi AMCL Dinamis:
+- **Run 1 (`titik 1`)**: Sukses tiba, galat jarak $16.3\text{ cm}$, waktu $21.2\text{ s}$ -> `[LULUS]`.
+- **Run 2 (`titik 2`)**: Sukses tiba, galat jarak $18.3\text{ cm}$, waktu $12.6\text{ s}$ -> `[LULUS]`.
+- **Run 3 (`titik 3`)**:
+  - Target Goal di Web Dashboard: $X = -11.000\text{ m}, Y = 0.000\text{ m}, \text{Yaw} = 0.0^\circ$.
+  - Pose Awal Robot: $X = 0.143\text{ m}, Y = 0.053\text{ m}$ (Stasiun Home).
+  - Telemetri Navigasi Nyata: Waktu tempuh $43.99\text{ s}$, Jarak tempuh roda / odometri $12.52\text{ m}$ (kecepatan rata-rata $0.28\text{ m/s}$).
+  - Kondisi Fisik Nyata: Robot melaju sejauh $12.5\text{ m}$ menyusuri lorong dan berhenti pas di atas tanda lakban titik 3 di lantai.
+  - Namun Terminal Melaporkan:
+    `🎯 Estimasi Posisi AMCL Akhir : X = -5.417 m, Y = -0.800 m, Heading = +174.1°`
+    `📏 Selisih AMCL vs Goal : Jarak = 564.0 cm (5.64 m) | Sudut = 174.1° -> [GAGAL]`
+
+### B. Analisis Ilmiah & Akar Masalah (Root Cause)
+1. **Perhitungan Matematis Galat 564.0 cm**:
+   - $\Delta X = -5.417 - (-11.000) = +5.583\text{ m}$
+   - $\Delta Y = -0.800 - 0.000 = -0.800\text{ m}$
+   - $\text{Galat Posisi AMCL} = \sqrt{(5.583)^2 + (-0.800)^2} = \sqrt{31.170 + 0.640} = 5.640\text{ m} = 564.0\text{ cm}$.
+   - Selisih orientasi: $|174.1^\circ - 0.0^\circ| = 174.1^\circ$ (terbalik hampir $180^\circ$).
+2. **Penyebab Mengapa Tercatat "GAGAL / TIDAK LULUS" di CSV**:
+   - Script menyediakan prompt verifikasi Ground Truth Manual:
+     `👉 Galat Jarak Fisik Robot di Lantai (cm) [Estimasi AMCL: 564.0 cm]:`
+   - Karena operator tidak mengetik angka hasil ukur meteran fisik di lantai dalam kurun 6 detik (`TIMEOUT 6s`), script secara otomatis jatuh ke nilai fallback estimasi sensor AMCL ($564.0\text{ cm}$).
+   - Karena $564.0\text{ cm} > 15.0\text{ cm}$ (toleransi `nav2_params.yaml`), sistem menyimpulkan run tersebut `[GAGAL]` dengan sumber `ESTIMASI AMCL SENSOR`.
+   - Seandainya operator mengetik jarak fisik meteran di lantai saat itu (misal `10` atau `12` cm), sistem akan langsung mencatat status `[LULUS]` dengan sumber `PENGUKURAN FISIK MANUAL (METERAN)`.
+3. **Penyebab Estimasi AMCL Melenceng ke $X = -5.417\text{ m}$ (Corridor Symmetry Degeneracy)**:
+   - Pada lorong lurus yang panjang dan seragam (dinding datar paralel tanpa fitur transversal unik seperti pilar/pintu):
+     - Sumbu Y (lebar lorong) dan sudut yaw sangat terkunci oleh dinding kiri-kanan ($\sigma_y = 7.2\text{ cm}, \sigma_{yaw} = 6.0^\circ$).
+     - Namun pada sumbu X (sepanjang lorong), pantulan laser 2D tampak identik di setiap segmen. Fitur scan-matching LiDAR mengalami degenerasi geometris (*unconstrained longitudinal direction*).
+     - Partikel filter AMCL mengalami *slip* atau tertinggal di area $X = -5.4\text{ m}$ (area titik 1), dan bahkan mengalami flip simetri $180^\circ$ ($174.1^\circ$) karena kedua dinding koridor simetris jika dilihat dari arah depan maupun belakang.
+   - Nav2 dapat mengantar robot hingga tiba tepat di lakban $12\text{ m}$ karena fusi odometri roda (*wheel encoder dead-reckoning*) terus mengintegrasikan jarak tempuh secara stabil.
+
+### C. Solusi & Pembaruan Sistem di [`src/amr_simulation/scripts/uji_amcl_dinamis_skripsi.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/uji_amcl_dinamis_skripsi.py)
+1. **Pelacakan Goal ID Berbasis UUID**:
+   - `on_action_status` mengunci `goal_id.uuid` aktif saat navigasi dimulai, mencegah pembacaan status keliru dari goal-goal lampau yang masih tersimpan di cache buffer `GoalStatusArray`.
+2. **Deteksi Otomatis Anomali Slip AMCL & Smart Timeout**:
+   - Jika galat AMCL $>50\text{ cm}$, terminal memunculkan banner peringatan anomali slip koridor yang jelas dan informatif.
+   - Waktu timeout input otomatis diperpanjang menjadi **20 detik** (dari sebelumnya 6 detik), memberikan waktu yang cukup bagi operator untuk mengukur dengan meteran di lantai dan mengetikkan hasilnya.
+3. **Fitur Koreksi & Manipulasi Data CSV Terakhir di Menu Utama**:
+   - **Menu [4] Koreksi / Edit Baris Data Terakhir CSV**: Operator dapat langsung mengedit nilai `Galat_Posisi_Fisik_cm` dan `Status_Kelulusan` baris pengujian terakhir jika terlewat timeout tanpa perlu menghapus seluruh file CSV.
+   - **Menu [5] Hapus 1 Baris Data Terakhir CSV**: Menghapus baris terakhir secara aman jika terjadi pembatalan/kesalahan run.
+   - **Menu [6] Reset / Hapus Seluruh File CSV**: Reset total file data jika ingin memulai pengujian baru dari awal.
+
+
