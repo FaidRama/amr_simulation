@@ -39,6 +39,7 @@ import math
 import csv
 import json
 import yaml
+import select
 import threading
 from datetime import datetime
 
@@ -112,6 +113,39 @@ def load_nav2_tolerances():
     return xy_tol, yaw_tol
 
 
+def timed_input(prompt: str, default_val: str = "", timeout_sec: float = 6.0, cancel_check_fn=None) -> str:
+    """Membaca input terminal dengan batas waktu otomatis (non-blocking) agar tidak membekukan pengujian otomatis."""
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+
+    if not sys.stdin.isatty():
+        sys.stdout.write(f"{default_val}\n")
+        sys.stdout.flush()
+        return default_val
+
+    start_time = time.time()
+    while time.time() - start_time < timeout_sec:
+        # Cek apakah navigasi berikutnya sudah terlanjur jalan (misal auto return-home)
+        if cancel_check_fn and cancel_check_fn():
+            sys.stdout.write(f"\n⏱️ [AUTO-RESUME] Navigasi berikutnya terdeteksi jalan! Menggunakan estimasi sensor ({default_val}).\n")
+            sys.stdout.flush()
+            return default_val
+
+        # Polling stdin 0.1 detik
+        try:
+            rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
+            if rlist:
+                line = sys.stdin.readline()
+                val = line.strip()
+                return val if val else default_val
+        except Exception:
+            return default_val
+
+    sys.stdout.write(f"\n⏱️ [TIMEOUT {timeout_sec:.0f}s] Waktu input selesai. Menggunakan estimasi sensor ({default_val}).\n")
+    sys.stdout.flush()
+    return default_val
+
+
 class EvaluasiAMCLDinamisNode(Node):
     def __init__(self):
         super().__init__('evaluasi_amcl_dinamis_node')
@@ -172,6 +206,7 @@ class EvaluasiAMCLDinamisNode(Node):
         self.lock = threading.Lock()
         self.goal_reached_event = threading.Event()
         self.goal_aborted_event = threading.Event()
+        self.nav_started_event = threading.Event()
         self.arrival_data = None
 
         # Konfigurasi Waypoint Peta
@@ -246,6 +281,34 @@ class EvaluasiAMCLDinamisNode(Node):
                 tot += math.hypot(p1.x - p0.x, p1.y - p0.y)
             self.planned_path_len = tot
 
+            # Ekstrak titik tujuan akhir dari lintasan Nav2
+            lp = msg.poses[-1].pose
+            dest_x = float(lp.position.x)
+            dest_y = float(lp.position.y)
+            dest_yaw = euler_from_quaternion(lp.orientation)
+
+            # Cari waypoint terdekat
+            dest_name = None
+            for wp in self.waypoints:
+                if math.hypot(wp['x'] - dest_x, wp['y'] - dest_y) < 0.35:
+                    dest_name = wp['name']
+                    break
+
+            with self.lock:
+                # Update jika active_goal kosong atau jika target tujuan berbeda jauh (> 0.40m)
+                if not self.active_goal or math.hypot(self.active_goal['x'] - dest_x, self.active_goal['y'] - dest_y) > 0.40:
+                    prefix = ""
+                    if self.waypoints and math.hypot(self.waypoints[0]['x'] - dest_x, self.waypoints[0]['y'] - dest_y) < 0.35:
+                        prefix = "[HOME] "
+                    target_name = prefix + (dest_name if dest_name else f"Goal ({dest_x:.2f}, {dest_y:.2f})")
+                    self.active_goal = {
+                        'name': target_name,
+                        'x': dest_x,
+                        'y': dest_y,
+                        'yaw': dest_yaw,
+                        'source': 'nav_plan'
+                    }
+
     def on_goal_pose(self, msg: PoseStamped):
         """Mendeteksi saat pengguna mengirim goal dari RViz atau Dashboard."""
         with self.lock:
@@ -256,12 +319,16 @@ class EvaluasiAMCLDinamisNode(Node):
             # Cari apakah cocok dengan salah satu nama waypoint
             matched_name = "Custom Goal Target"
             for wp in self.waypoints:
-                if math.hypot(wp['x'] - gx, wp['y'] - gy) < 0.25:
+                if math.hypot(wp['x'] - gx, wp['y'] - gy) < 0.35:
                     matched_name = wp['name']
                     break
 
+            prefix = ""
+            if self.waypoints and math.hypot(self.waypoints[0]['x'] - gx, self.waypoints[0]['y'] - gy) < 0.35:
+                prefix = "[HOME] "
+
             self.active_goal = {
-                'name': matched_name,
+                'name': prefix + matched_name,
                 'x': gx,
                 'y': gy,
                 'yaw': gyaw,
@@ -269,7 +336,7 @@ class EvaluasiAMCLDinamisNode(Node):
             }
 
     def on_delivery_status(self, msg: String):
-        """Membaca status pengiriman misi dari waypoint_manager dashboard (mendukung 1x Antar & Antar-Jemput)."""
+        """Membaca status pengiriman misi dari waypoint_manager dashboard (mendukung 1x Antar, Antar-Jemput, & Return Home)."""
         try:
             data = json.loads(msg.data)
             mission = data.get('mission')
@@ -281,7 +348,18 @@ class EvaluasiAMCLDinamisNode(Node):
             idx = mission.get('current_task_index', 0)
 
             target_info = None
-            if 0 <= idx < len(tasks):
+            # Prioritas 1: Fase Pulang ke Home (Auto Return Home)
+            if phase == 'returning_home':
+                home_wp = self.waypoints[0] if self.waypoints else {'name': 'Home', 'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+                target_info = {
+                    'name': "[HOME] Stasiun Pangkalan",
+                    'x': float(home_wp['x']),
+                    'y': float(home_wp['y']),
+                    'yaw': float(home_wp['yaw']),
+                    'source': 'dashboard_home'
+                }
+            # Prioritas 2: Task Pickup atau Delivery
+            elif 0 <= idx < len(tasks):
                 task = tasks[idx]
                 if phase == 'navigating_pickup':
                     pk = task.get('pickup') or {}
@@ -303,20 +381,8 @@ class EvaluasiAMCLDinamisNode(Node):
                         'source': 'dashboard_delivery'
                     }
 
-            elif phase == 'returning_home':
-                # Cari koordinat home
-                home_wp = self.waypoints[0] if self.waypoints else {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
-                target_info = {
-                    'name': "[HOME] Stasiun Pangkalan",
-                    'x': float(home_wp['x']),
-                    'y': float(home_wp['y']),
-                    'yaw': float(home_wp['yaw']),
-                    'source': 'dashboard_home'
-                }
-
             if target_info:
                 with self.lock:
-                    # Update active goal jika nama/fase berubah
                     if not self.active_goal or self.active_goal.get('name') != target_info['name']:
                         self.active_goal = target_info
         except Exception:
@@ -339,20 +405,35 @@ class EvaluasiAMCLDinamisNode(Node):
                     self.actual_travel_dist = 0.0
                     self.start_pose = dict(self.current_pose) if self.current_pose else {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
                     if not self.active_goal:
-                        self.active_goal = {
-                            'name': 'Goal Navigasi Aktif',
-                            'x': self.start_pose['x'],
-                            'y': self.start_pose['y'],
-                            'yaw': self.start_pose['yaw'],
-                            'source': 'auto'
-                        }
+                        if self.active_path and len(self.active_path.poses) > 0:
+                            lp = self.active_path.poses[-1].pose
+                            dest_x = float(lp.position.x)
+                            dest_y = float(lp.position.y)
+                            dest_yaw = euler_from_quaternion(lp.orientation)
+                            matched_name = "Target Navigasi"
+                            for wp in self.waypoints:
+                                if math.hypot(wp['x'] - dest_x, wp['y'] - dest_y) < 0.35:
+                                    matched_name = wp['name']
+                                    break
+                            prefix = "[HOME] " if (self.waypoints and math.hypot(self.waypoints[0]['x'] - dest_x, self.waypoints[0]['y'] - dest_y) < 0.35) else ""
+                            self.active_goal = {
+                                'name': prefix + matched_name,
+                                'x': dest_x,
+                                'y': dest_y,
+                                'yaw': dest_yaw,
+                                'source': 'nav_plan'
+                            }
+                        else:
+                            self.active_goal = {
+                                'name': 'Goal Navigasi Aktif',
+                                'x': self.start_pose['x'],
+                                'y': self.start_pose['y'],
+                                'yaw': self.start_pose['yaw'],
+                                'source': 'auto'
+                            }
                     self.goal_reached_event.clear()
                     self.goal_aborted_event.clear()
-                    print("\n" + "=" * 78)
-                    print(f"🚀 NAVIGASI AKTIF TERDETEKSI: Menuju '{self.active_goal['name']}'")
-                    print(f"📍 Target Koordinat : X = {self.active_goal['x']:.3f} m, Y = {self.active_goal['y']:.3f} m, Yaw = {math.degrees(self.active_goal['yaw']):+.1f}°")
-                    print(f"🛫 Pose Awal Robot  : X = {self.start_pose['x']:.3f} m, Y = {self.start_pose['y']:.3f} m, Yaw = {math.degrees(self.start_pose['yaw']):+.1f}°")
-                    print("=" * 78)
+                    self.nav_started_event.set()
 
             # 2. Navigasi Sukses Tiba di Tujuan (SUCCEEDED)
             elif st == GoalStatus.STATUS_SUCCEEDED:
@@ -362,7 +443,7 @@ class EvaluasiAMCLDinamisNode(Node):
                     travel_time = end_time - (self.start_time or end_time)
                     final_amcl = dict(self.current_pose) if self.current_pose else {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
                     goal = dict(self.active_goal) if self.active_goal else {'name': 'Target', 'x': final_amcl['x'], 'y': final_amcl['y'], 'yaw': final_amcl['yaw']}
-                    
+
                     self.arrival_data = {
                         'status': 'SUCCEEDED',
                         'travel_time': travel_time,
@@ -375,12 +456,14 @@ class EvaluasiAMCLDinamisNode(Node):
                         'sigma_y': self.sigma_y,
                         'sigma_yaw': self.sigma_yaw,
                     }
+                    self.active_goal = None  # Reset active goal agar rute berikutnya (misal Home) tidak memakai nama lama
                     self.goal_reached_event.set()
 
             # 3. Navigasi Dibatalkan atau Gagal (ABORTED / CANCELED)
             elif st in (GoalStatus.STATUS_ABORTED, GoalStatus.STATUS_CANCELED):
                 if self.is_navigating:
                     self.is_navigating = False
+                    self.active_goal = None
                     self.goal_aborted_event.set()
 
     def ensure_csv_header(self):
@@ -453,28 +536,35 @@ class EvaluasiAMCLDinamisNode(Node):
         print(f"📏 Selisih AMCL vs Goal       : Jarak = {e_pos_amcl_cm:.1f} cm | Sudut = {e_yaw_amcl_deg:.1f}°")
         print("-" * 78)
         print("📐 VERIFIKASI PENGUKURAN FISIK GROUND TRUTH DI LANTAI:")
-        print("   💡 Ukur jarak titik tengah robot ke tanda fisik di lantai menggunakan meteran/penggaris.")
-        user_pos = input(f"   👉 Galat Jarak Fisik Robot di Lantai (cm) [ENTER = pakai estimasi AMCL {e_pos_amcl_cm:.1f} cm]: ").strip()
-        
-        if user_pos:
-            try:
-                final_pos_cm = float(user_pos)
-                source_gt = "PENGUKURAN FISIK MANUAL (METERAN)"
-            except ValueError:
-                final_pos_cm = e_pos_amcl_cm
-                source_gt = "ESTIMASI AMCL SENSOR"
-        else:
+        print("   💡 Masukkan angka jika mengukur manual di lantai (ENTER = pakai estimasi AMCL).")
+        print("   ⏳ (Otomatis lanjut dalam 6 detik atau jika robot melanjutkan perjalanan pulang)")
+        user_pos = timed_input(
+            f"   👉 Galat Jarak Fisik Robot di Lantai (cm) [Estimasi AMCL: {e_pos_amcl_cm:.1f} cm]: ",
+            default_val=f"{e_pos_amcl_cm:.1f}",
+            timeout_sec=6.0,
+            cancel_check_fn=lambda: self.is_navigating
+        )
+
+        try:
+            final_pos_cm = float(user_pos)
+            source_gt = "PENGUKURAN FISIK MANUAL (METERAN)" if abs(final_pos_cm - e_pos_amcl_cm) > 0.05 else "ESTIMASI AMCL SENSOR"
+        except ValueError:
             final_pos_cm = e_pos_amcl_cm
             source_gt = "ESTIMASI AMCL SENSOR"
 
-        user_yaw = input(f"   👉 Galat Sudut Hadap Fisik Robot (derajat) [ENTER = pakai estimasi AMCL {e_yaw_amcl_deg:.1f}°]: ").strip()
-        if user_yaw:
+        if self.is_navigating:
+            final_yaw_deg = e_yaw_amcl_deg
+        else:
+            user_yaw = timed_input(
+                f"   👉 Galat Sudut Hadap Fisik Robot (derajat) [Estimasi AMCL: {e_yaw_amcl_deg:.1f}°]: ",
+                default_val=f"{e_yaw_amcl_deg:.1f}",
+                timeout_sec=4.0,
+                cancel_check_fn=lambda: self.is_navigating
+            )
             try:
                 final_yaw_deg = float(user_yaw)
             except ValueError:
                 final_yaw_deg = e_yaw_amcl_deg
-        else:
-            final_yaw_deg = e_yaw_amcl_deg
 
         # Evaluasi Kelulusan Berdasarkan nav2_params.yaml
         status_epos = "LULUS" if final_pos_cm <= self.pass_max_epos_cm else "GAGAL"
@@ -634,7 +724,19 @@ def main(args=None):
                 print("-" * 75)
                 try:
                     while True:
-                        time.sleep(0.1)
+                        time.sleep(0.05)
+
+                        if node.nav_started_event.is_set():
+                            node.nav_started_event.clear()
+                            with node.lock:
+                                goal = dict(node.active_goal) if node.active_goal else {'name': 'Goal Navigasi Aktif', 'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+                                sp = dict(node.start_pose) if node.start_pose else {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+                            print("\n" + "=" * 78)
+                            print(f"🚀 NAVIGASI AKTIF TERDETEKSI: Menuju '{goal.get('name', 'Target')}'")
+                            print(f"📍 Target Koordinat : X = {goal.get('x', 0.0):.3f} m, Y = {goal.get('y', 0.0):.3f} m, Yaw = {math.degrees(goal.get('yaw', 0.0)):+.1f}°")
+                            print(f"🛫 Pose Awal Robot  : X = {sp.get('x', 0.0):.3f} m, Y = {sp.get('y', 0.0):.3f} m, Yaw = {math.degrees(sp.get('yaw', 0.0)):+.1f}°")
+                            print("=" * 78)
+
                         if node.is_navigating:
                             now = time.time()
                             if now - node.last_terminal_log_time >= 0.5:
@@ -655,12 +757,14 @@ def main(args=None):
                             if node.arrival_data:
                                 node.process_arrival_result(node.arrival_data)
                                 node.arrival_data = None
-                            print("\n👀 Kembali standby memantau navigasi berikutnya...")
+                            if not node.is_navigating:
+                                print("\n👀 Kembali standby memantau navigasi berikutnya...")
 
                         if node.goal_aborted_event.is_set():
                             node.goal_aborted_event.clear()
                             print("\n⚠️ Navigasi dibatalkan atau terhalang rintangan.")
-                            print("👀 Kembali standby memantau navigasi berikutnya...")
+                            if not node.is_navigating:
+                                print("👀 Kembali standby memantau navigasi berikutnya...")
 
                 except KeyboardInterrupt:
                     print("\n🔙 Kembali ke menu utama.")
@@ -676,7 +780,19 @@ def main(args=None):
                     print("\n👀 Mengawal perjalanan robot...")
                     try:
                         while not node.goal_reached_event.is_set() and not node.goal_aborted_event.is_set():
-                            time.sleep(0.1)
+                            time.sleep(0.05)
+
+                            if node.nav_started_event.is_set():
+                                node.nav_started_event.clear()
+                                with node.lock:
+                                    goal = dict(node.active_goal) if node.active_goal else {'name': 'Goal Navigasi Aktif', 'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+                                    sp = dict(node.start_pose) if node.start_pose else {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+                                print("\n" + "=" * 78)
+                                print(f"🚀 NAVIGASI AKTIF TERDETEKSI: Menuju '{goal.get('name', 'Target')}'")
+                                print(f"📍 Target Koordinat : X = {goal.get('x', 0.0):.3f} m, Y = {goal.get('y', 0.0):.3f} m, Yaw = {math.degrees(goal.get('yaw', 0.0)):+.1f}°")
+                                print(f"🛫 Pose Awal Robot  : X = {sp.get('x', 0.0):.3f} m, Y = {sp.get('y', 0.0):.3f} m, Yaw = {math.degrees(sp.get('yaw', 0.0)):+.1f}°")
+                                print("=" * 78)
+
                             if node.is_navigating:
                                 now = time.time()
                                 if now - node.last_terminal_log_time >= 0.5:
