@@ -1371,3 +1371,44 @@ Memvalidasi keandalan integrasi subsistem navigasi otonom Nav2 saat menghadapi r
    - `drawLiveSlamMap`: Mengirimkan `fitScale` ke `drawRobot` sehingga ukuran sasis robot proporsional dengan skala kanvas SLAM.
    - Standby Radar Grid: Mengirimkan `overrideRadius = 0.29 * ppm` (di mana `ppm = 40px/m`) sehingga ukuran sasis di radar standby tepat 0.29m (11.6px radius).
 
+---
+
+## 40. Fitur Manajemen Daya Hardware Jetson Nano (Web-Based Power Off & Reboot) (08 November 2026)
+
+### A. Latar Belakang & Kebutuhan
+- Sebelumnya, operator harus selalu membuka terminal SSH secara manual dan mengetik `sudo poweroff` atau `sudo reboot` setiap kali ingin mematikan komputer Jetson Nano di robot AMR setelah pengoperasian selesai.
+- Hal ini kurang praktis saat robot dioperasikan di lapangan atau diuji menggunakan tablet/smartphone tanpa akses SSH langsung.
+- Diperlukan fitur kendali daya (*hardware power management*) terintegrasi langsung di dashboard web, dengan prosedur keselamatan (*safe shutdown*) untuk mencegah kerusakan file sistem pada microSD/eMMC Jetson Nano.
+
+### B. Implementasi Backend ([`src/amr_dashboard/amr_dashboard/app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py))
+1. **Fungsi `execute_system_power(action='poweroff')`**:
+   - **Safety Stop Robot**: Mengirimkan perintah kecepatan nol (`linear=0, angular=0`) sebanyak 3 kali berturut-turut ke `/cmd_vel` dan membatalkan navigasi aktif Nav2 (`cancel_navigation`) agar robot tidak sedang melaju saat sistem dimatikan.
+   - **Audio Announcement**: Mengirim notifikasi TTS/suara ke speaker robot via topic `/robot_voice/say` ("*Mematikan sistem Jetson Nano. Sampai jumpa.*").
+   - **Eksekusi Asinkron**: Menjalankan eksekusi sistem di background thread dengan jeda waktu 1.2 detik agar Flask server sempat mengembalikan respons HTTP 200 OK ke browser pengguna.
+   - **Fallback Perintah Bertingkat**:
+     1. `systemctl poweroff/reboot -i` (metode standar systemd, `-i` mengabaikan inhibitor sessions).
+     2. D-Bus login1 method call (`org.freedesktop.login1.Manager.PowerOff` / `Reboot`).
+     3. `sudo -n poweroff` / `sudo -n shutdown -h now`.
+     4. `poweroff` / `reboot` fallback langsung.
+2. **REST Endpoints Baru**:
+   - `GET /api/system/status`: Mengembalikan data telemetry sistem Jetson (uptime detik & format teks "X jam Y menit", suhu SOC/CPU dari thermal zones `/sys/devices/virtual/thermal/thermal_zone*/temp`, dan flag `can_poweroff`).
+   - `POST /api/system/power`: Menerima payload `{"action": "poweroff"}` atau `{"action": "reboot"}`.
+   - `POST /api/system/poweroff` & `POST /api/system/reboot`: Alias cepat untuk kemudahan integrasi.
+3. **Integrasi Voice AI Assistant**:
+   - Menambahkan *offline fast-path* di `api_voice_command()` untuk frasa *"matikan robot"*, *"matikan jetson"*, *"power off"*, *"shutdown"*, dan *"reboot robot"*, sehingga operator juga bisa mematikan Jetson via perintah suara.
+
+### C. Implementasi Frontend
+1. **Tombol Topbar (`btn-topbar-power`) di [`index.html`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/templates/index.html)**:
+   - Diletakkan di samping tombol E-STOP pada header atas dengan ikon `${getIcon('power', 14)}`.
+   - Mengklik tombol ini memanggil `openSystemPowerModal()`.
+2. **Section 07 di Halaman Pengaturan ([`app.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/app.js))**:
+   - Ditambahkan panel khusus **"07 // KONTROL DAYA HARDWARE (JETSON NANO)"** dengan badge Uptime real-time.
+   - Menyediakan tombol aksi **"Mulai Ulang (Reboot)"** dan **"Matikan Jetson (Power Off)"**.
+3. **Modal Dialog Konfirmasi & Layar Power-Down**:
+   - **Modal Kartu Aksi**: Memperlihatkan metadata Jetson (Uptime, Suhu SOC), kartu *Safe Shutdown*, kartu *Reboot*, dan catatan keselamatan agar saklar fisik baterai tidak langsung dimatikan sebelum LED padam.
+   - **Konfirmasi Bertingkat**: Mencegah klik tidak sengaja dengan dialog peringatan bertanda merah.
+   - **Layar Hitung Mundur & Auto-Reconnect**:
+     - Shutdown: Menampilkan hitung mundur 8 detik dengan instruksi visual, lalu beralih ke status *"SYSTEM OFFLINE / POWERED OFF"*.
+     - Reboot: Menampilkan hitung mundur dan secara otomatis melakukan polling status server setiap 3 detik. Begitu Jetson menyala kembali, dashboard langsung memuat ulang halaman secara otomatis.
+
+

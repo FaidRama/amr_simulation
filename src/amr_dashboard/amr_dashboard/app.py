@@ -2004,6 +2004,7 @@ def api_status():
                 'human_node_active': is_human_node_active(),
                 'human_node_ready': is_human_node_ready(),
                 'voice': get_voice_telemetry_status(),
+                'uptime': get_system_uptime_seconds(),
                 'connected': True,
                 'timestamp': time.time()
             })
@@ -3030,6 +3031,25 @@ def api_voice_command():
             'text': text
         })
 
+    # Rule-based offline fast path untuk matikan jetson / power off
+    if any(k in text_lower for k in ['matikan robot', 'matikan jetson', 'power off', 'shutdown', 'shut down']):
+        execute_system_power('poweroff')
+        return jsonify({
+            'success': True,
+            'action': 'poweroff',
+            'spoken_response': 'Mematikan sistem Jetson Nano. Sampai jumpa.',
+            'text': text
+        })
+
+    if any(k in text_lower for k in ['reboot robot', 'reboot jetson', 'restart robot', 'restart jetson', 'mulai ulang robot', 'mulai ulang jetson']):
+        execute_system_power('reboot')
+        return jsonify({
+            'success': True,
+            'action': 'reboot',
+            'spoken_response': 'Memulai ulang sistem Jetson Nano.',
+            'text': text
+        })
+
     # Cek API Key
     api_key = get_gemini_api_key()
     if not api_key:
@@ -3385,6 +3405,151 @@ def api_camera_snapshot():
     if frame:
         return Response(frame, mimetype='image/jpeg')
     return Response(get_placeholder_frame(), mimetype='image/jpeg')
+
+
+# =====================================================================
+# SYSTEM POWER MANAGEMENT (JETSON NANO / AMR HARDWARE)
+# =====================================================================
+def get_system_uptime_seconds():
+    """Membaca uptime sistem dari /proc/uptime."""
+    try:
+        with open('/proc/uptime', 'r') as f:
+            return float(f.readline().split()[0])
+    except Exception:
+        return 0.0
+
+
+def get_system_cpu_temp():
+    """Membaca suhu CPU / SOC (Celsius) dari thermal zones."""
+    try:
+        for z in ('thermal_zone0', 'thermal_zone1', 'thermal_zone2'):
+            p = f'/sys/devices/virtual/thermal/{z}/temp'
+            if os.path.exists(p):
+                with open(p, 'r') as f:
+                    val = float(f.read().strip())
+                    if val > 1000:
+                        val /= 1000.0
+                    return round(val, 1)
+    except Exception:
+        pass
+    return None
+
+
+def execute_system_power(action='poweroff'):
+    """
+    Eksekusi shutdown atau reboot pada sistem Linux (Jetson Nano / Host PC).
+    Aksi valid: 'poweroff' atau 'reboot'.
+    """
+    if action not in ('poweroff', 'reboot'):
+        return False, f"Aksi '{action}' tidak valid. Harus 'poweroff' atau 'reboot'."
+
+    global ros_node
+    # 1. Safety stop robot: kirim kecepatan 0 beberapa kali
+    if ros_node is not None:
+        try:
+            stop_msg = Twist()
+            for _ in range(3):
+                ros_node.cmd_vel_pub.publish(stop_msg)
+                time.sleep(0.04)
+            if hasattr(ros_node, 'cancel_navigation'):
+                ros_node.cancel_navigation()
+        except Exception as e:
+            print(f"[SYSTEM-POWER] Error stopping robot: {e}")
+
+    # 2. Mainkan notifikasi audio bila speaker aktif
+    try:
+        if ros_node and hasattr(ros_node, 'voice_say_pub'):
+            txt = 'Mematikan sistem Jetson Nano. Sampai jumpa.' if action == 'poweroff' else 'Memulai ulang sistem Jetson Nano.'
+            ros_node.voice_say_pub.publish(String(data=txt))
+    except Exception:
+        pass
+
+    # 3. Eksekusi perintah power di thread terpisah dengan jeda 1.2 detik
+    # agar HTTP response sempat kembali 200 OK ke antarmuka web browser
+    def _power_worker():
+        time.sleep(1.2)
+        print(f"[SYSTEM-POWER] Memulai proses {action} sistem...", flush=True)
+
+        if action == 'poweroff':
+            cmd_list = [
+                ['systemctl', 'poweroff', '-i'],
+                ['dbus-send', '--system', '--print-reply', '--dest=org.freedesktop.login1',
+                 '/org/freedesktop/login1', 'org.freedesktop.login1.Manager.PowerOff', 'boolean:true'],
+                ['sudo', '-n', 'poweroff'],
+                ['sudo', '-n', 'shutdown', '-h', 'now'],
+                ['poweroff'],
+            ]
+        else:
+            cmd_list = [
+                ['systemctl', 'reboot', '-i'],
+                ['dbus-send', '--system', '--print-reply', '--dest=org.freedesktop.login1',
+                 '/org/freedesktop/login1', 'org.freedesktop.login1.Manager.Reboot', 'boolean:true'],
+                ['sudo', '-n', 'reboot'],
+                ['sudo', '-n', 'shutdown', '-r', 'now'],
+                ['reboot'],
+            ]
+
+        for cmd in cmd_list:
+            try:
+                print(f"[SYSTEM-POWER] Menjalankan: {' '.join(cmd)}", flush=True)
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+                if res.returncode == 0:
+                    print(f"[SYSTEM-POWER] Berhasil dieksekusi via {' '.join(cmd)}", flush=True)
+                    return
+                else:
+                    print(f"[SYSTEM-POWER] Gagal ({res.returncode}): {res.stderr.strip()}", flush=True)
+            except Exception as ex:
+                print(f"[SYSTEM-POWER] Exception saat menjalankan {cmd[0]}: {ex}", flush=True)
+
+    t = threading.Thread(target=_power_worker, daemon=True)
+    t.start()
+    return True, f"Perintah {action} berhasil dijadwalkan."
+
+
+@app.route('/api/system/status')
+def api_system_status():
+    """Mengembalikan metrik sistem: uptime, suhu CPU, dan ketersediaan kontrol daya."""
+    uptime_sec = get_system_uptime_seconds()
+    hours = int(uptime_sec // 3600)
+    minutes = int((uptime_sec % 3600) // 60)
+    uptime_str = f"{hours}j {minutes}m" if hours > 0 else f"{minutes} menit"
+
+    return jsonify({
+        'uptime_seconds': uptime_sec,
+        'uptime_text': uptime_str,
+        'cpu_temp': get_system_cpu_temp(),
+        'can_poweroff': True,
+        'timestamp': time.time()
+    })
+
+
+@app.route('/api/system/power', methods=['POST'])
+def api_system_power():
+    """Endpoint kendali daya sistem Jetson Nano."""
+    data = request.get_json(silent=True) or {}
+    action = data.get('action', 'poweroff').strip().lower()
+    ok, msg = execute_system_power(action)
+    if ok:
+        return jsonify({'success': True, 'action': action, 'message': msg})
+    return jsonify({'success': False, 'action': action, 'error': msg}), 400
+
+
+@app.route('/api/system/poweroff', methods=['POST'])
+def api_system_poweroff():
+    """Alias cepat untuk mematikan Jetson Nano."""
+    ok, msg = execute_system_power('poweroff')
+    if ok:
+        return jsonify({'success': True, 'action': 'poweroff', 'message': msg})
+    return jsonify({'success': False, 'action': 'poweroff', 'error': msg}), 400
+
+
+@app.route('/api/system/reboot', methods=['POST'])
+def api_system_reboot():
+    """Alias cepat untuk me-reboot Jetson Nano."""
+    ok, msg = execute_system_power('reboot')
+    if ok:
+        return jsonify({'success': True, 'action': 'reboot', 'message': msg})
+    return jsonify({'success': False, 'action': 'reboot', 'error': msg}), 400
 
 
 # =====================================================================
