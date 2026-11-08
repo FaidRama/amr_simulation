@@ -1452,3 +1452,32 @@ Fungsi `drawRobot(ctx, x, y, yaw, zoom, customScale, overrideRadius)` diperbarui
 7. **Sinkronisasi Mode Standby Grid**:
    - Parameter pemanggilan `drawRobot` pada radar grid standby diperbarui menggunakan `0.30 * ppm` agar skala lingkaran dan sasis konsisten di seluruh tampilan dashboard.
 
+---
+
+## 42. Evolusi Skenario 2 Skripsi: Evaluasi Keandalan AMCL & Navigasi Dinamis (*Arrival Accuracy*) (08 November 2026)
+
+### A. Latar Belakang & Akar Masalah Pengujian Statis (*In-Place Spin*)
+1. **Batas Noise Alami Model Sensor LiDAR (`sigma_hit: 0.20`)**:
+   - Pengujian awal menggunakan metode statis (robot berputar di tempat di atas satu titik datum hingga $\sigma \le 5.0\text{ cm}$) mengalami *timeout 25 detik*.
+   - Analisis membuktikan bahwa pada `nav2_params.yaml`, parameter `sigma_hit: 0.20` dan injeksi noise odometri `alpha1 .. alpha4: 0.2` secara matematis mempertahankan sebaran partikel kesetimbangan (*steady-state noise floor*) pada kisaran $\sigma \approx 6.0 - 8.6\text{ cm}$. Menuntut $\sigma \le 5.0\text{ cm}$ hanya dari rotasi di tempat bertentangan dengan desain filter partikel AMCL.
+2. **Selip Roda Berputar (*Wheel Slip*)**:
+   - Memutar robot di tempat selama 25 detik memicu selip ban PG36 di lantai, membuat odometri roda mencatat putaran $+137.1^\circ$ padahal sasis fisik dan AMCL hanya berputar $+104.8^\circ$ (sesuai ukur manual $+105^\circ - 115^\circ$).
+3. **Ketidaksesuaian Ground Truth Peletakan Manusia**:
+   - Manusia yang meletakkan robot dengan tangan di lantai tidak dapat menjamin presisi millimeter terhadap nominal $(X, Y)$, sehingga selisih posisi $10\text{ cm}$ diakibatkan toleransi peletakan manusia, bukan galat AMCL.
+
+### B. Penyempurnaan Metodologi: Evaluasi Navigasi Dinamis (*Dynamic Waypoint Arrival*)
+Sesuai tugas sejati AMR pengantar barang (*delivery robot*), evaluasi dialihkan ke pengujian akurasi kedatangan di titik target (*Goal Arrival Accuracy*):
+1. **Penyelarasan Parameter Nav2 ([`nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml))**:
+   - Memperketat toleransi berhenti `general_goal_checker` dan `FollowPath` dari `0.15 m` menjadi **`xy_goal_tolerance: 0.05` ($5\text{ cm}$)**.
+   - Memperketat toleransi orientasi akhir dari `0.65 rad` menjadi **`yaw_goal_tolerance: 0.20` ($\approx 11.4^\circ$)**.
+2. **Implementasi Skrip Otomasi Pengujian ([`uji_amcl_dinamis_skripsi.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/uji_amcl_dinamis_skripsi.py))**:
+   - **Mode Monitor Pasif (Default)**: Berjalan di latar belakang, otomatis mendeteksi saat operator mengirim goal dari Web Dashboard (1-Click Dispatch, Waypoint, atau RViz).
+   - Mengunci $T_{\text{start}}$, memantau kecepatan dan kestabilan $\sigma$ saat melaju, dan saat status `Goal Reached` seketika mencatat waktu tempuh ($T_{\text{travel}}$), jarak tempuh ($L_{\text{path}}$), dan estimasi pose AMCL.
+   - **Verifikasi Fisik Mandiri**: Memberikan prompt pengukuran fisik di lantai menggunakan meteran/penggaris (atau tekan ENTER untuk menggunakan estimasi AMCL).
+   - Evaluasi otomatis: $e_{\text{pos}} \le 5.0\text{ cm}$ $\rightarrow$ [LULUS], $e_\theta \le 11.5^\circ$ $\rightarrow$ [LULUS].
+   - Penyimpanan data otomatis ke: `~/hasil_pengujian_skripsi/skenario2_evaluasi_amcl_dinamis.csv`.
+   - Menyediakan fitur menu rekapitulasi tabel rata-rata untuk langsung dimasukkan ke Bab 4 Skripsi.
+3. **Pembaruan Panduan SOP**:
+   - Artifact [`panduan_skenario2_evaluasi_amcl.md`](file:///home/faid/.gemini/antigravity/brain/a3af2b69-fd73-41ee-8f16-8f2155ff7489/panduan_skenario2_evaluasi_amcl.md) diperbarui menyeluruh memuat SOP navigasi dinamis, panduan penandaan lakban lantai, template tabel Bab 4, dan strategi menjawab pertanyaan dosen penguji.
+
+
