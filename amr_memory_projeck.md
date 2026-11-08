@@ -1619,4 +1619,55 @@ Pada pengujian Skenario 2 Evaluasi AMCL Dinamis:
    - **Menu [5] Hapus 1 Baris Data Terakhir CSV**: Menghapus baris terakhir secara aman jika terjadi pembatalan/kesalahan run.
    - **Menu [6] Reset / Hapus Seluruh File CSV**: Reset total file data jika ingin memulai pengujian baru dari awal.
 
+---
+
+## 47. Investigasi & Solusi Latensi Manuver Balik Arah ($180^\circ$ Turnaround Delay) pada Nav2 DWB Controller & Behavior Tree Recovery (08 November 2026)
+
+### A. Gejala & Masalah di Lapangan
+Ketika robot menerima target navigasi baru yang posisinya berada tepat di belakang robot ($180^\circ$ berlawanan arah dari orientasi hadap robot saat itu, misalnya robot menghadap tenggara $Yaw = -15.6^\circ$ sementara rute global mengarah ke barat laut):
+1. **Robot Diam Mematung Selama 2 Menit Penuh (120 Detik)**:
+   - Terminal mencatat `controller_server` berulang kali melaporkan `Passing new path to controller.` selama 60 detik.
+   - Pada detik ke-60, muncul pesan error: `[controller_server]: Failed to make progress`.
+   - Nav2 mencoba ulang (*retry*) selama 60 detik berikutnya, robot tetap diam mematung di tempat.
+   - Total waktu freeze sebelum robot mau bergerak berputar mencapai **120 s.d. 125 detik**.
+2. **Manuver Berputar Baru Terjadi Setelah Masuk Behavior Spin**:
+   - Setelah 2x kegagalan berturut-turut, Behavior Tree akhirnya mengalihkan kendali ke fallback `RecoveryActions`.
+   - Node `<Spin>` dieksekusi, robot berputar, diikuti `<Wait wait_duration="5"/>`, barulah robot melanjutkan perjalanan.
+
+### B. Analisis Ilmiah & Akar Masalah (Root Cause)
+1. **Penyebab Delay 120 Detik (`movement_time_allowance: 60.0` + `number_of_retries="1"`)**:
+   - `SimpleProgressChecker` pada Nav2 mengevaluasi apakah robot bergerak minimal `required_movement_radius: 0.05` meter ($5\text{ cm}$) dalam kurun waktu `movement_time_allowance`.
+   - Pada konfigurasi bawaan `nav2_params.yaml`, parameter ini disetel ke `60.0` detik.
+   - Pada Behavior Tree `navigate_w_replanning_and_recovery.xml`, node `FollowPath` dibungkus dalam `<RecoveryNode number_of_retries="1">`.
+   - Akibatnya:
+     - Siklus 1: Robot diam mematung selama **60.0 detik** -> `Failed to make progress` -> Bersihkan local costmap.
+     - Siklus 2 (Retry 1): Robot kembali mencoba dan diam lagi selama **60.0 detik** -> `Failed to make progress`.
+     - **Total latensi diam**: $60\text{s} + 60\text{s} = 120\text{ detik}$!
+2. **Mengapa DWB Controller Menolak Berputar Sendiri Sejak Awal?**:
+   - Global planner (NavFn 2D Grid) menggambar garis rute lurus ke belakang tanpa kurva manuver U-turn.
+   - DWB Local Controller mengevaluasi trayektori kecepatan $(v_x, v_y, \omega)$:
+     - Robot adalah non-holonomik diferensial yang tidak diizinkan mundur berkecepatan (`min_vel_x: 0.0`).
+     - Semua kandidat kecepatan maju ($v_x > 0$) akan membawa robot semakin menjauhi garis rute yang ada di belakangnya, sehingga mendapat penalti kritis pada kritik `PathDist` (skala `24.0`).
+     - Kandidat putar di tempat ($v_x = 0, \omega \ne 0$) tidak mengubah koordinat posisi $(X, Y)$ robot, sehingga skor jarak `PathDist` tidak berkurang.
+     - Selain itu, `min_speed_theta: 0.20` menciptakan zona mati kecepatan sudut yang kaku.
+     - Nav2 ROS 2 Foxy belum memiliki plugin `RotationShimController` (fitur yang baru dirilis di Humble).
+   - Akibatnya, DWB tidak menghasilkan perintah gerak maju dan memilih diam hingga Behavior Tree mengambil alih.
+3. **Recovery Bawaan Kurang Efektif**:
+   - Parameter bawaan BT recovery hanya memutar $\text{spin\_dist} = 1.57\text{ rad}$ ($90^\circ$).
+   - Setelah putar $90^\circ$, robot masih belum menghadap rute balik ($180^\circ$), ditambah jeda pasif 5 detik `<Wait wait_duration="5"/>`.
+
+### C. Solusi & Pembaruan Sistem
+1. **Optimalisasi Parameter Progress Checker & DWB ([`src/amr_simulation/config/nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml))**:
+   - `movement_time_allowance`: Diturunkan drastis dari `60.0` detik menjadi **`4.0` detik**. Jika robot terhambat atau mematung $>4$ detik, Nav2 langsung mendeteksi stagnasi tanpa menunggu bermenit-menit.
+   - `min_speed_theta`: Diubah dari `0.20` ke **`0.0`**, menghilangkan deadband agar sampling putar di tempat lebih fleksibel.
+   - `vtheta_samples`: Ditingkatkan dari `18` ke **`24`** untuk eksplorasi resolusi manuver rotasi yang lebih kaya.
+   - `general_goal_checker.stateful`: Diaktifkan (`True`) agar status ketibaan stabil saat mencapai toleransi goal.
+2. **Penyempurnaan Behavior Tree Recovery ([`src/amr_simulation/config/navigate_w_replanning_and_recovery.xml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/navigate_w_replanning_and_recovery.xml))**:
+   - `RecoveryNode number_of_retries` pada `FollowPath`: Diubah dari `1` menjadi **`0`**. Menghilangkan pengulangan 60 detik kedua yang redundan.
+   - `<Spin spin_dist="3.14"/>`: Diubah dari $1.57\text{ rad}$ ($90^\circ$) menjadi **$3.14\text{ rad}$ ($180^\circ$)**, sehingga robot langsung berbalik arah penuh menghadap koridor rute yang dituju.
+   - Menghapus `<Wait wait_duration="5"/>`: Mengeliminasi jeda beku 5 detik yang tidak perlu.
+3. **Hasil Efisiensi Waktu**:
+   - Total waktu respons balik arah terpangkas dari **125 detik** menjadi hanya **$\approx 8 - 9$ detik** (4 detik deteksi stagnasi + 4-5 detik manuver putar $180^\circ$ dengan kecepatan $\approx 0.8\text{ rad/s}$), setelah itu robot langsung meluncur maju menuju target.
+
+
 
