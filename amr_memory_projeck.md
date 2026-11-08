@@ -1544,3 +1544,31 @@ Dibuat artefak lengkap [`panduan_skenario1_evaluasi_pemetaan.md`](file:///home/f
    - Reticle crosshair dan center pinpoint dot putih (`#ffffff`) berkontur gelap kini sangat kontras dan langsung terlihat tanpa terhalang warna hitam bodi.
    - Panah directional depan disesuaikan proporsinya agar ramping dan tidak mendominasi tampilan peta.
 
+---
+
+## 45. Sinkronisasi Multi-Leg & Non-Blocking Timed Input pada Evaluasi AMCL Dinamis (08 November 2026)
+
+### A. Gejala & Masalah di Lapangan
+Saat pengguna menjalankan `uji_amcl_dinamis_skripsi.py` Mode 1 (Monitor Pasif) dan mengirim misi dari Web Dashboard:
+1. **Freeze pada Terminal saat Tiba**: Robot sukses tiba di titik antar (`[SEKALI ANTAR] titik 1` dalam 21.57s). Terminal menampilkan prompt input manual galat fisik: `👉 Galat Jarak Fisik Robot di Lantai (cm) [ENTER = pakai estimasi AMCL 15.3 cm]: `. Karena pemanggilan `input()` bersifat blocking synchronous, terminal tertahan menunggu input operator.
+2. **Kekeliruan Nama & Target saat Auto Return-Home**: Dashboard otomatis memerintahkan robot kembali ke Home setelah jeda waktu beberapa detik. Di background thread, Nav2 menerima goal baru menuju Home. Namun script mencetak banner dengan nama dan koordinat titik antar lama (`Menuju '[SEKALI ANTAR] titik 1'`), bukan `[HOME] Stasiun Pangkalan`.
+3. **Penyebab Utama (Root Cause)**:
+   - **Bug Cabang Logika di `on_delivery_status`**: Percabangan `elif phase == 'returning_home'` berada di bawah `if 0 <= idx < len(tasks):`. Karena `idx < len(tasks)` selalu bernilai `True` pada misi task tunggal/jamak, kondisi `returning_home` tidak pernah dievaluasi sehingga metadata Home tidak pernah terbentuk.
+   - **`self.active_goal` Tidak Direset saat Tiba**: Pada event `STATUS_SUCCEEDED`, `self.active_goal` tidak di-reset ke `None`, sehingga leg baru yang belum sempat menerima nama baru mewarisi nama dan koordinat tujuan leg sebelumnya.
+   - **`sys.stdin` Blocking**: Pemanggilan `input()` standar menahan thread utama sehingga siklus pemantauan terminal tidak bisa mengawal leg kepulangan secara dinamis.
+
+### B. Solusi & Implementasi pada [`src/amr_simulation/scripts/uji_amcl_dinamis_skripsi.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/uji_amcl_dinamis_skripsi.py)
+1. **Helper Non-Blocking `timed_input` Berbasis `select.select`**:
+   - Menerapkan fungsi `timed_input(prompt, default_val, timeout_sec=6.0, cancel_check_fn)` pada sistem Linux.
+   - Operator dapat memasukkan angka pengukuran meteran fisik dalam kurun 6 detik atau menekan `[ENTER]` untuk langsung menggunakan estimasi AMCL sensor.
+   - Jika robot otomatis mulai berjalan pulang (`cancel_check_fn` mendeteksi `self.is_navigating == True`), input otomatis selesai dalam fraksi detik (<0.1s), menyimpan data leg pengantaran ke CSV, dan langsung melanjutkan pengawalan leg kepulangan tanpa freeze!
+2. **Prioritas Utama Deteksi `returning_home`**:
+   - `on_delivery_status` mengevaluasi `if phase == 'returning_home':` sebagai prioritas pertama secara independen sebelum memeriksa indeks task.
+3. **Ekstraksi Ujung Lintasan `/plan` (`msg.poses[-1]`)**:
+   - `on_plan` membedah koordinat titik tujuan akhir dari pesan `/plan` Nav2 dan mencocokkannya dengan waypoint peta.
+   - Jika koordinat target bergeser $>0.40\text{ m}$ dari target sebelumnya, `self.active_goal` langsung diperbarui secara otomatis. Ini menjamin akurasi nama dan target bahkan saat navigasi diperintahkan langsung dari RViz2.
+4. **Pembersihan `self.active_goal = None` pada Kedatangan**:
+   - Setiap kali robot tiba (`STATUS_SUCCEEDED`) atau batal (`STATUS_ABORTED`), `self.active_goal` dibersihkan ke `None` agar setiap leg pengantaran maupun kepulangan tercatat secara independen dan murni.
+5. **Pemisahan Banner `nav_started_event` ke Main Loop**:
+   - Pencetakan banner pengumuman awal navigasi didelegasikan ke thread utama menggunakan `Event()`, mencegah terjadinya tumpang tindih (*interleaving stdout*) dengan prompt kedatangan.
+
