@@ -1704,11 +1704,15 @@ Pada uji navigasi di area fisik:
    - Titik-titik di luar batas kotak $[-0.215, +0.215]$ **TETAP DIPERTAHANKAN (`ranges[i]`)** dan tidak dibuang menjadi `NaN`.
    - Menggunakan vektorisasi NumPy dengan *cached trigonometry look-up tables* sehingga eksekusi per scan scan berlangsung dalam **$< 0.05\text{ ms}$ (beban CPU $< 0.05\%$)**.
 2. **Sinkronisasi Parameter Launch & Mapper**:
-   - [`src/amr_simulation/launch/rplidar.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/rplidar.launch.py): Diberi parameter `filter_type: 'box'`, batas kotak $[-0.215, 0.215]$, dan `min_range: 0.05`.
+   - [`src/amr_simulation/launch/real_navigation.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/real_navigation.launch.py): Menghapus parameter warisan `min_range: 0.29` yang sebelumnya menimpa logika box menjadi lingkaran $29\text{ cm}$. Menggantinya dengan parameter `filter_type: 'box'`, batas kotak $[-0.215, 0.215]$, dan `sensor_min_range: 0.05`.
+   - [`src/amr_simulation/launch/real_mapping.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/real_mapping.launch.py): Menghapus warisan `min_range: 0.34` dan menggantinya dengan parameter box filter.
+   - [`src/amr_simulation/launch/rplidar.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/rplidar.launch.py): Diberi parameter `filter_type: 'box'`, batas kotak $[-0.215, 0.215]$, dan `sensor_min_range: 0.05`.
    - [`src/amr_simulation/config/mapper_params_online_async.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/mapper_params_online_async.yaml): `min_laser_range` diturunkan dari `0.34` menjadi `0.10` meter agar SLAM Toolbox tidak membuang data laser jarak dekat yang valid.
+   - **Fix `msg.range_min` di ROS 2**: Pada mode box, `msg.range_min` dikunci ke batas fisik sensor `sensor_min_range = 0.05` m sehingga RViz maupun Costmap tidak lagi memotong titik laser secara lingkaran di atas $0.05\text{ m}$.
 3. **Hasil Eliminasi Zona Buta**:
    - Zona buta di depan bemper terpangkas drastis dari **$12\text{ cm}$ menjadi hanya $1.5\text{ cm}$** (penurunan $87.5\%$).
-   - Kaki kursi pada jarak $22 - 32\text{ cm}$ dari pusat robot kini terlihat jelas di `/scan_filtered` dan tertandai secara konsisten pada Nav2 local costmap, mencegah tabrakan fisik.
+   - Fenomena bidang datar (seperti laptop) yang sebelumnya "hilang di tengah lebih dulu" berhasil diatasi: kini bidang datar terdeteksi dan terpotong lurus sejajar bemper tanpa lengkungan busur lingkaran.
+
 
 
 

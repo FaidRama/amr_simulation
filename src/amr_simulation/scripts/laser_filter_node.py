@@ -34,10 +34,11 @@ class LaserFilterNode(Node):
         # Offset sudut RPLidar terhadap base_link (RPLidar terpasang membelakangi base_link, yaw = pi rad)
         self.declare_parameter('laser_yaw_offset', 3.141592653589793)
 
-        # Batas jarak fisik sensor (meter)
+        # Batas jarak fisik sensor (meter) - noise hardware RPLiDAR A1
+        self.declare_parameter('sensor_min_range', 0.05)
         self.declare_parameter('min_range', 0.05)
         self.declare_parameter('max_range', 12.0)
-        self.declare_parameter('circle_min_range', 0.32)  # Fallback jika filter_type == 'circle'
+        self.declare_parameter('circle_min_range', 0.32)  # Hanya dipakai jika filter_type == 'circle'
 
         self.filter_type = str(self.get_parameter('filter_type').value).strip().lower()
         self.box_min_x = float(self.get_parameter('box_min_x').value)
@@ -45,9 +46,11 @@ class LaserFilterNode(Node):
         self.box_min_y = float(self.get_parameter('box_min_y').value)
         self.box_max_y = float(self.get_parameter('box_max_y').value)
         self.laser_yaw_offset = float(self.get_parameter('laser_yaw_offset').value)
-        self.min_range = float(self.get_parameter('min_range').value)
+        self.sensor_min_range = float(self.get_parameter('sensor_min_range').value)
         self.max_range = float(self.get_parameter('max_range').value)
-        self.circle_min_range = float(self.get_parameter('circle_min_range').value)
+        # Jika launch file lama masih passing 'min_range' > 0.1, simpan ke circle_min_range untuk mode circle
+        raw_min = float(self.get_parameter('min_range').value)
+        self.circle_min_range = raw_min if raw_min > 0.1 else float(self.get_parameter('circle_min_range').value)
 
         # Cache tabel trigonometri untuk eksekusi vektor numpy (< 0.05 ms per scan)
         self.cached_len = 0
@@ -65,7 +68,7 @@ class LaserFilterNode(Node):
                 f"(X: [{self.box_min_x:.3f}, {self.box_max_x:.3f}]m, "
                 f"Y: [{self.box_min_y:.3f}, {self.box_max_y:.3f}]m, "
                 f"Yaw Offset: {self.laser_yaw_offset:.3f} rad). "
-                f"Zona buta depan 12 cm berhasil dihilangkan!"
+                f"Sensor min range: {self.sensor_min_range}m. Zona buta depan dihilangkan!"
             )
         else:
             self.get_logger().info(
@@ -76,13 +79,14 @@ class LaserFilterNode(Node):
         # 1. Paksa sinkronisasi waktu laser dengan waktu Jetson
         msg.header.stamp = self.get_clock().now().to_msg()
 
-        # Update range_min agar node Costmap & SLAM menerima objek di luar bodi (mulai dari min_range)
-        msg.range_min = self.min_range
-
         ranges = np.array(msg.ranges, dtype=np.float32)
         n = len(ranges)
 
         if self.filter_type == 'box':
+            # Di mode BOX: Set msg.range_min ke batas fisik sensor (0.05m) agar RViz & Costmap
+            # TIDAK memotong titik di luar bodi secara lingkaran!
+            msg.range_min = self.sensor_min_range
+
             # Precompute sinus dan cosinus sudut jika ukuran array scan belum tercache
             if (n != self.cached_len or 
                 msg.angle_min != self.cached_angle_min or 
@@ -105,14 +109,16 @@ class LaserFilterNode(Node):
                 (y_base >= self.box_min_y) & (y_base <= self.box_max_y)
             )
 
-            # Titik tidak valid (NaN, Inf, noise < min_range, atau out-of-range > max_range)
-            invalid = np.isnan(ranges) | np.isinf(ranges) | (ranges < self.min_range) | (ranges > self.max_range)
+            # Titik tidak valid (NaN, Inf, noise hardware < sensor_min_range, atau out-of-range > max_range)
+            # JANGAN gunakan circle min_range di sini!
+            invalid = np.isnan(ranges) | np.isinf(ranges) | (ranges < self.sensor_min_range) | (ranges > self.max_range)
 
             # Masking titik yang harus dibuang
             mask = inside_box | invalid
             ranges[mask] = np.nan
         else:
             # Mode circle legacy
+            msg.range_min = self.circle_min_range
             invalid = np.isnan(ranges) | np.isinf(ranges) | (ranges < self.circle_min_range) | (ranges > self.max_range)
             ranges[invalid] = np.nan
 
