@@ -1411,4 +1411,44 @@ Memvalidasi keandalan integrasi subsistem navigasi otonom Nav2 saat menghadapi r
      - Shutdown: Menampilkan hitung mundur 8 detik dengan instruksi visual, lalu beralih ke status *"SYSTEM OFFLINE / POWERED OFF"*.
      - Reboot: Menampilkan hitung mundur dan secara otomatis melakukan polling status server setiap 3 detik. Begitu Jetson menyala kembali, dashboard langsung memuat ulang halaman secara otomatis.
 
+---
+
+## 41. Visualisasi Sasis Fisik Kotak 20x20 cm di Dalam Lingkaran Batas Aman Nav2 Radius 30 cm (08 November 2026)
+
+### A. Latar Belakang & Kebutuhan Desain
+1. **Dimensi Fisik Nyata Sasis Robot vs Parameter Nav2**:
+   - Sasis kotak fisik robot memiliki dimensi aktual **$20\text{ cm} \times 20\text{ cm}$** ($0.20\text{ m} \times 0.20\text{ m}$).
+   - Parameter navigasi Nav2 di [`nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml) sengaja dipertahankan pada **`robot_radius: 0.30`** ($30\text{ cm}$):
+     - Tiang struktur robot memiliki radius putar terluar sekitar $28.x\text{ cm}$ dari titik pusat putar robot saat melakukan rotasi di tempat (*in-place rotation*).
+     - Model tabrakan lingkaran (*circular footprint*) jauh lebih ringan secara komputasi bagi prosesor Jetson Nano dibanding model poligon (*footprint polygon*).
+     - Radius $30\text{ cm}$ memberikan zona penyangga aman (*safety clearance buffer*) terhadap rintangan di koridor sempit.
+2. **Kebutuhan Visualisasi Operator**:
+   - Menampilkan bodi kotak sasis robot nyata $20\text{ cm} \times 20\text{ cm}$ di kanvas peta dashboard agar operator dapat memantau orientasi dan celah fisik robot secara realistis.
+   - Tetap menampilkan lingkaran radius $30\text{ cm}$ di sekelilingnya sebagai representasi visual batas aman (*collision bubble*) yang dihitung oleh algoritma Nav2/DWA.
+   - Roda tidak perlu digambar (*clean visual*) agar tampilan fokus dan tidak membingungkan.
+   - Titik pusat koordinat `(0, 0)` dan panah hadap harus tetap presisi di tengah sasis tanpa menutupi titik pusat saat kanvas di-zoom.
+
+### B. Implementasi Multi-Layer Rendering di [`src/amr_dashboard/static/js/map.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/map.js)
+Fungsi `drawRobot(ctx, x, y, yaw, zoom, customScale, overrideRadius)` diperbarui dengan arsitektur rendering 5 lapisan (*layering*):
+
+1. **Kalkulasi Resolusi & Skala Fisik (Pixels Per Meter / PPM)**:
+   - Dihitung dinamis dari resolusi SLAM ($0.05\text{ m/px}$) dan skala kanvas:
+     $$\text{PPM} = \frac{1.0}{\text{resolution}} \times \text{scale}$$
+   - Radius Lingkaran Aman: $R_{\text{safety}} = 0.30 \times \text{PPM}$ (dibatasi batas bawah $\max(3.5 \times s, R_{\text{safety}})$).
+   - Setengah Lebar Bodi Kotak: $\text{boxHalf} = 0.10 \times \text{PPM}$ (dibatasi batas bawah $\max(2.2 \times s, \text{boxHalf})$).
+2. **Layer 1: Lingkaran Batas Aman Nav2 ($30\text{ cm}$)**:
+   - Menggambar lingkaran putus-putus (*dashed line* `[4*s, 3*s]`) berwarna amber transparan (`rgba(245, 158, 11, 0.08)` dan border `rgba(245, 158, 11, 0.55)`).
+   - Memberi sinyal visual jelas batas inflasi/ruang halang Nav2.
+3. **Layer 2: Bodi Kotak Sasis Fisik Nyata ($20\text{ cm} \times 20\text{ cm}$)**:
+   - Menggambar persegi dengan sudut membulat (*rounded rect*) tepat di pusat robot: lebar $2 \times \text{boxHalf}$, tinggi $2 \times \text{boxHalf}$.
+   - Warna latar bodi gelap solid (`rgba(24, 24, 27, 0.90)`) dengan garis tepi amber tegas (`#f59e0b`, ketebalan $1.5 \times s$) agar kontras tinggi dengan warna latar peta SLAM.
+   - **Aksen Bumper Depan**: Garis tebal berwarna neon cyan (`#38bdf8`) di sisi depan sasis ($+X$) sebagai penanda jelas haluan robot.
+4. **Layer 3: Precision Center Reticle & Pinpoint Dot di `(0, 0)`**:
+   - Micro-crosshair dan dot putih terang berkontur gelap di titik pusat absolut sasis robot (`base_footprint`), memungkinkan operator mengetahui koordinat pasti robot hingga tingkat pixel.
+5. **Layer 4: Panah Arah Hadap Kompak**:
+   - Panah directional segitiga aerodinamis diletakkan di depan center dot (`arrowStart` di depan titik pusat), tidak menutupi titik tengah, dan ukurannya dibatasi zoom sehingga tidak pernah membesar masif saat peta diperbesar.
+6. **Layer 5: Hairline Heading Ray**:
+   - Garis haluan tipis memanjang dari bibir lingkaran $30\text{ cm}$ ke arah depan untuk membantu verifikasi orientasi hadap robot dari kejauhan.
+7. **Sinkronisasi Mode Standby Grid**:
+   - Parameter pemanggilan `drawRobot` pada radar grid standby diperbarui menggunakan `0.30 * ppm` agar skala lingkaran dan sasis konsisten di seluruh tampilan dashboard.
 

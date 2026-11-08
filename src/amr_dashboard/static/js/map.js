@@ -420,35 +420,65 @@ function drawTaskMarker(ctx, x, y, type, number, zoom = 1.0) {
 function drawRobot(ctx, x, y, yaw, zoom = 1.0, customScale = null, overrideRadius = null) {
     const s = 1.0 / (zoom || 1.0);
 
-    // Hitung radius fisik sasis robot (0.29m radius = 0.58m diameter fisik nyata)
-    let physicalRadius;
+    // Hitung piksel per meter (PPM) dari resolusi peta SLAM
+    let ppm;
     if (overrideRadius !== null) {
-        physicalRadius = overrideRadius;
+        ppm = overrideRadius / 0.30;
     } else {
         const res = (MAP_STATE.metadata && MAP_STATE.metadata.resolution) ? MAP_STATE.metadata.resolution : 0.05;
         const scale = (customScale !== null) ? customScale : (MAP_STATE.scale || 1.0);
-        physicalRadius = (0.29 / res) * scale;
+        ppm = (1.0 / res) * scale;
     }
 
-    // Radius lingkaran sasis robot: proporsional dengan skala peta fisik (0.29m)
-    // Diberi batas bawah 3.5 * s agar tetap tampak jika di-zoom out sangat jauh
-    const r = Math.max(3.5 * s, physicalRadius);
+    // 1. Lingkaran Batas Aman Nav2 (Radius 0.30m = 30 cm)
+    const safetyRadius = 0.30 * ppm;
+    const r = Math.max(3.5 * s, safetyRadius);
+
+    // 2. Dimensi Bodi Kotak Sasis Fisik (20 cm x 20 cm -> setengah lebar = 10 cm = 0.10m)
+    const boxHalf = 0.10 * ppm;
+    const bw = Math.max(2.2 * s, boxHalf);
+    const bh = Math.max(2.2 * s, boxHalf);
 
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(-yaw);
 
-    // 1. Lingkaran Fisik Sasis Robot (Ukuran Nyata 0.29m terhadap lingkungan peta)
+    // ================= LAYER 1: Lingkaran Batas Aman 30 cm (Nav2 Collision Bubble) =================
     ctx.beginPath();
     ctx.arc(0, 0, r, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(245, 158, 11, 0.18)';
+    ctx.fillStyle = 'rgba(245, 158, 11, 0.08)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.55)';
+    ctx.lineWidth = Math.max(0.75, 1.2 * s);
+    ctx.setLineDash([4 * s, 3 * s]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // ================= LAYER 2: Bodi Kotak Sasis Fisik Robot (20cm x 20cm) =================
+    const cornerR = Math.min(2.5 * s, bw * 0.25);
+    ctx.beginPath();
+    if (ctx.roundRect) {
+        ctx.roundRect(-bw, -bh, bw * 2, bh * 2, cornerR);
+    } else {
+        ctx.rect(-bw, -bh, bw * 2, bh * 2);
+    }
+    // Isi bodi gelap kontras dengan border amber tegas
+    ctx.fillStyle = 'rgba(24, 24, 27, 0.90)';
     ctx.fill();
     ctx.strokeStyle = '#f59e0b';
-    ctx.lineWidth = Math.max(0.8, 1.4 * s);
+    ctx.lineWidth = Math.max(1.0, 1.5 * s);
     ctx.stroke();
 
-    // 2. Precision Micro Crosshair & Center Dot di (0,0) — Titik Pasti Koordinat Nyata Robot
-    const crosshairLen = Math.min(r * 0.45, 4.0 * s);
+    // Aksen Bumper Depan (Arah Hadap Maju +X)
+    ctx.beginPath();
+    ctx.moveTo(bw, -bh * 0.7);
+    ctx.lineTo(bw, bh * 0.7);
+    ctx.strokeStyle = '#38bdf8'; // Cyan neon indikator depan
+    ctx.lineWidth = Math.max(1.2, 2.0 * s);
+    ctx.stroke();
+
+    // ================= LAYER 3: Precision Reticle & Pinpoint Dot di (0,0) =================
+    const crosshairLen = Math.min(bw * 0.75, 3.5 * s);
     ctx.beginPath();
     ctx.moveTo(-crosshairLen, 0);
     ctx.lineTo(crosshairLen, 0);
@@ -458,8 +488,8 @@ function drawRobot(ctx, x, y, yaw, zoom = 1.0, customScale = null, overrideRadiu
     ctx.lineWidth = Math.max(0.6, 0.8 * s);
     ctx.stroke();
 
-    // Center pinpoint dot (putih terang dengan kontras border gelap)
-    const dotR = Math.min(1.6 * s, r * 0.18);
+    // Center pinpoint dot (putih terang berkontras gelap tepat di titik koordinat nyata)
+    const dotR = Math.min(1.5 * s, bw * 0.25);
     ctx.beginPath();
     ctx.arc(0, 0, Math.max(1.0 * s, dotR), 0, Math.PI * 2);
     ctx.fillStyle = '#ffffff';
@@ -468,12 +498,11 @@ function drawRobot(ctx, x, y, yaw, zoom = 1.0, customScale = null, overrideRadiu
     ctx.lineWidth = Math.max(0.6, 0.8 * s);
     ctx.stroke();
 
-    // 3. Panah Arah Hadap Kompak (Sleek Directional Arrowhead di Depan Titik Pusat)
-    // Berada di tengah-ke-depan lingkaran, TIDAK menutupi titik pusat (0,0), dan TIDAK membesar memenuhi lingkaran saat di-zoom
-    const arrowStart = Math.max(2.2 * s, r * 0.22);
-    const arrowLen = Math.min(r * 0.55, 7.5 * s);
-    const arrowTip = arrowStart + arrowLen;
-    const arrowHalfW = Math.min(r * 0.28, 3.5 * s);
+    // ================= LAYER 4: Panah Arah Hadap Kompak di Depan Titik Pusat =================
+    const arrowStart = Math.max(1.8 * s, bw * 0.25);
+    const arrowTip = Math.min(r * 0.85, bw + 5.0 * s);
+    const arrowLen = arrowTip - arrowStart;
+    const arrowHalfW = Math.min(bh * 0.45, 3.2 * s);
 
     ctx.beginPath();
     ctx.moveTo(arrowTip, 0);
@@ -487,9 +516,9 @@ function drawRobot(ctx, x, y, yaw, zoom = 1.0, customScale = null, overrideRadiu
     ctx.lineWidth = Math.max(0.6, 0.8 * s);
     ctx.stroke();
 
-    // 4. Hairline Heading Ray ke depan batas sasis
+    // ================= LAYER 5: Hairline Heading Ray ke Depan Bibir Lingkaran 30 cm =================
     const rayStart = r;
-    const rayEnd = r + Math.min(r * 0.35, 6.0 * s);
+    const rayEnd = r + Math.min(r * 0.35, 5.5 * s);
     ctx.beginPath();
     ctx.moveTo(rayStart, 0);
     ctx.lineTo(rayEnd, 0);
@@ -1131,7 +1160,7 @@ function drawLiveSlamMap(canvas, ctx) {
 
     // Draw Robot on Standby Grid
     const rPt = toStandbyPixel(APP.pose.x || 0, APP.pose.y || 0);
-    drawRobot(ctx, rPt.px, rPt.py, APP.pose.yaw || 0, 1.0, null, 0.29 * ppm);
+    drawRobot(ctx, rPt.px, rPt.py, APP.pose.yaw || 0, 1.0, null, 0.30 * ppm);
 
     // Info banner at top of canvas
     ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
