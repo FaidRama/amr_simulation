@@ -6,16 +6,40 @@ operation_mode: real
 predefined_points:
 - &id001
   description: ''
-  name: uji 1
-  type: pickup
-  x: 8.4
-  y: -2.55
-- &id002
-  description: ''
   name: titik awal
   type: pickup
   x: 0.0
   y: 0.0
+- &id002
+  description: ''
+  name: titik 1
+  type: pickup
+  x: -5.0
+  y: -1.0
+- &id003
+  description: ''
+  name: titik 2
+  type: pickup
+  x: 4.0
+  y: -3.0
+- &id004
+  description: ''
+  name: titik 3
+  type: pickup
+  x: -11.0
+  y: 0.0
+- &id005
+  description: ''
+  name: titik 4
+  type: pickup
+  x: 8.0
+  y: 2.0
+- &id006
+  description: ''
+  name: titik2
+  type: delivery
+  x: 4.0
+  y: -3.0
 profiles:
   real:
     home_position:
@@ -28,6 +52,10 @@ profiles:
     predefined_points:
     - *id001
     - *id002
+    - *id003
+    - *id004
+    - *id005
+    - *id006
     settings:
       arrival_sound_mode: human
       max_angular_speed: 0.5
