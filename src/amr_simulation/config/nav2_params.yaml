@@ -143,8 +143,8 @@ controller_server:
         ["RotateToGoal", "BaseObstacle", "PathAlign", "PathDist", "GoalDist"]
 
       BaseObstacle.scale: 0.05
-      PathAlign.scale: 1.0
-      PathAlign.forward_point_distance: 0.10
+      PathAlign.scale: 32.0
+      PathAlign.forward_point_distance: 0.35
       PathDist.scale: 24.0
       GoalDist.scale: 20.0
       RotateToGoal.scale: 32.0
