@@ -3715,6 +3715,31 @@ function renderSettings() {
                         </div>
                     </div>
                 </div>
+
+                <div class="page-section">
+                    <div class="section-title">
+                        <span>07 // KONTROL DAYA HARDWARE (JETSON NANO)</span>
+                        <span class="mono" id="sys-uptime-badge" style="color:var(--text-muted); font-size:0.68rem;">UPTIME: --</span>
+                    </div>
+                    <div class="panel">
+                        <div class="setting-row" style="flex-direction:column; align-items:flex-start; gap:8px;">
+                            <div>
+                                <div class="setting-label">Manajemen Daya Sistem Operasi</div>
+                                <div class="setting-desc">
+                                    Matikan (power off) atau restart (reboot) Jetson Nano secara aman langsung dari antarmuka web tanpa perlu login SSH untuk mengetik <code>sudo poweroff</code>.
+                                </div>
+                            </div>
+                            <div style="display:flex; gap:8px; width:100%; margin-top:6px; flex-wrap:wrap;">
+                                <button type="button" class="btn btn-outline btn-sm" onclick="confirmSystemPower('reboot')" style="flex:1; border-color:rgba(245, 158, 11, 0.4); color:#f59e0b;">
+                                    ${getIcon('refresh', 13)} Mulai Ulang (Reboot)
+                                </button>
+                                <button type="button" class="btn btn-danger btn-sm" onclick="confirmSystemPower('poweroff')" style="flex:1;">
+                                    ${getIcon('power', 13)} Matikan Jetson (Power Off)
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     `;
@@ -4576,6 +4601,13 @@ async function updateSystemInfo() {
             }
         }
     }
+    const uptimeBadge = document.getElementById('sys-uptime-badge');
+    if (uptimeBadge && data && data.uptime) {
+        const u = data.uptime;
+        const h = Math.floor(u / 3600);
+        const m = Math.floor((u % 3600) / 60);
+        uptimeBadge.textContent = `UPTIME: ${h > 0 ? `${h}j ` : ''}${m}m`;
+    }
 }
 
 // ====================== GLOBAL STATUS POLLING ======================
@@ -5168,5 +5200,244 @@ async function init() {
         }
     }, 100);
 }
+
+// ====================== SYSTEM POWER MANAGEMENT (JETSON NANO) ======================
+let powerCountdownInterval = null;
+
+async function openSystemPowerModal() {
+    const overlay = document.getElementById('power-modal-overlay');
+    const body = document.getElementById('power-modal-body');
+    const titleTag = document.getElementById('power-modal-status-text');
+    if (!overlay || !body) return;
+
+    if (titleTag) titleTag.textContent = 'JETSON NANO // POWER MGMT';
+
+    // Ambil status sistem (uptime, suhu CPU)
+    let uptimeText = 'Memuat...';
+    let tempText = '';
+    const sysData = await apiGet('/api/system/status');
+    if (sysData) {
+        uptimeText = sysData.uptime_text || 'Aktif';
+        if (sysData.cpu_temp !== null && sysData.cpu_temp !== undefined) {
+            tempText = ` • Suhu SOC: <strong style="color:var(--text-bright);">${sysData.cpu_temp}°C</strong>`;
+        }
+    }
+
+    body.innerHTML = `
+        <div style="display:flex; flex-direction:column; gap:14px;">
+            <div class="power-meta-bar">
+                <div>
+                    ${getIcon('cpu', 13)} Host: <strong>Jetson Nano</strong> (Linux Ubuntu)
+                </div>
+                <div>
+                    ${getIcon('clock', 13)} Uptime: <strong style="color:var(--accent-bright);">${uptimeText}</strong>${tempText}
+                </div>
+            </div>
+
+            <div style="font-size:0.78rem; color:var(--text-secondary); line-height:1.4;">
+                Pilih tindakan manajemen daya sistem operasi Jetson Nano pada robot AMR:
+            </div>
+
+            <!-- ACTION CARDS GRID -->
+            <div class="power-action-grid">
+                <!-- SHUTDOWN CARD -->
+                <div class="power-action-card power-card-shutdown" onclick="confirmSystemPower('poweroff')" role="button" tabindex="0">
+                    <div class="power-card-header">
+                        <div class="power-card-icon">${getIcon('power', 18)}</div>
+                        <span class="power-card-badge">sudo poweroff</span>
+                    </div>
+                    <div class="power-card-title">Matikan Jetson (Power Off)</div>
+                    <div class="power-card-desc">
+                        Hentikan seluruh proses AMR, simpan filesystem, dan matikan daya Jetson Nano secara aman.
+                    </div>
+                </div>
+
+                <!-- REBOOT CARD -->
+                <div class="power-action-card power-card-reboot" onclick="confirmSystemPower('reboot')" role="button" tabindex="0">
+                    <div class="power-card-header">
+                        <div class="power-card-icon">${getIcon('refresh', 18)}</div>
+                        <span class="power-card-badge">sudo reboot</span>
+                    </div>
+                    <div class="power-card-title">Mulai Ulang (Reboot)</div>
+                    <div class="power-card-desc">
+                        Restart sistem operasi Jetson Nano. Dashboard akan otomatis mencoba terhubung kembali setelah online.
+                    </div>
+                </div>
+            </div>
+
+            <div style="display:flex; align-items:flex-start; gap:8px; padding:10px 12px; background:rgba(0,0,0,0.25); border:1px solid var(--border-subtle); border-radius:8px; font-size:0.73rem; color:var(--text-muted); line-height:1.4;">
+                <div style="color:var(--accent-bright); flex-shrink:0;">${getIcon('lightbulb', 14)}</div>
+                <div>
+                    <strong>Prosedur Aman:</strong> Selalu matikan Jetson terlebih dahulu melalui menu ini (safe shutdown) sebelum mematikan saklar baterai fisik robot untuk mencegah kerusakan microSD/eMMC.
+                </div>
+            </div>
+        </div>
+    `;
+
+    overlay.classList.remove('hidden');
+}
+
+function closePowerModal() {
+    const overlay = document.getElementById('power-modal-overlay');
+    if (overlay) overlay.classList.add('hidden');
+    if (powerCountdownInterval) {
+        clearInterval(powerCountdownInterval);
+        powerCountdownInterval = null;
+    }
+}
+
+function closePowerModalOnBackdrop(event) {
+    if (event.target && event.target.id === 'power-modal-overlay') {
+        closePowerModal();
+    }
+}
+
+function confirmSystemPower(action) {
+    const isShutdown = action === 'poweroff';
+    const title = isShutdown ? 'Konfirmasi: Matikan Jetson Nano?' : 'Konfirmasi: Mulai Ulang (Reboot) Jetson?';
+    const tag = isShutdown ? 'SYS // SHUTDOWN' : 'SYS // REBOOT';
+
+    const bodyHtml = `
+        <div style="padding:4px 0;">
+            <div style="display:flex; align-items:flex-start; gap:12px; padding:12px; border-radius:8px; background:${isShutdown ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.12)'}; border:1px solid ${isShutdown ? 'rgba(239,68,68,0.35)' : 'rgba(245,158,11,0.35)'}; margin-bottom:12px;">
+                <div style="color:${isShutdown ? '#ef4444' : '#f59e0b'}; flex-shrink:0; margin-top:2px;">
+                    ${getIcon('warning', 24)}
+                </div>
+                <div style="font-size:0.83rem; color:var(--text-primary); line-height:1.45;">
+                    <strong>${isShutdown ? 'PERINGATAN MEMATIKAN SISTEM' : 'PERINGATAN REBOOT SISTEM'}:</strong><br>
+                    Perintah <code>${isShutdown ? 'sudo poweroff' : 'sudo reboot'}</code> akan dijalankan pada komputer Jetson Nano.
+                    ${isShutdown 
+                        ? 'Seluruh proses navigasi, SLAM, dan komunikasi robot akan dihentikan secara aman. Dashboard web akan terputus.' 
+                        : 'Sistem operasi Jetson akan di-restart dan dimuat ulang. Dashboard akan offline sementara.'}
+                </div>
+            </div>
+            <p style="font-size:0.78rem; color:var(--text-secondary); margin:0; line-height:1.4;">
+                ${isShutdown 
+                    ? 'Setelah menekan konfirmasi, tunggu hingga lampu indikator LED pada board Jetson padam sebelum mematikan saklar utama robot.' 
+                    : 'Dashboard web akan secara otomatis memantau status Jetson dan memuat ulang antarmuka saat sistem kembali menyala.'}
+            </p>
+        </div>
+    `;
+
+    showModal(title, bodyHtml, [
+        {
+            label: `${getIcon('x', 13)} Batal`,
+            class: 'btn-outline',
+            action: () => {}
+        },
+        {
+            label: isShutdown ? `${getIcon('power', 14)} Ya, Matikan Sekarang` : `${getIcon('refresh', 14)} Ya, Reboot Sekarang`,
+            class: isShutdown ? 'btn-danger' : 'btn-warning',
+            action: () => executeSystemPower(action)
+        }
+    ], tag);
+}
+
+async function executeSystemPower(action) {
+    const isShutdown = action === 'poweroff';
+    closePowerModal();
+
+    // Tampilkan screen status proses power-down
+    const overlay = document.getElementById('power-modal-overlay');
+    const body = document.getElementById('power-modal-body');
+    const titleTag = document.getElementById('power-modal-status-text');
+
+    if (overlay && body) {
+        if (titleTag) {
+            titleTag.textContent = isShutdown ? 'MEMATIKAN JETSON NANO...' : 'REBOOTING JETSON NANO...';
+        }
+
+        let secondsLeft = isShutdown ? 8 : 12;
+        body.innerHTML = `
+            <div style="text-align:center; padding:16px 8px;">
+                <div style="width:60px; height:60px; border-radius:50%; background:${isShutdown ? 'rgba(239,68,68,0.18)' : 'rgba(245,158,11,0.18)'}; border:2px solid ${isShutdown ? '#ef4444' : '#f59e0b'}; display:flex; align-items:center; justify-content:center; margin:0 auto 16px; color:${isShutdown ? '#ef4444' : '#f59e0b'}; animation:pulse 1.2s infinite;">
+                    ${getIcon(isShutdown ? 'power' : 'refresh', 30)}
+                </div>
+                <h3 style="font-size:1.1rem; font-weight:700; margin-bottom:8px; color:var(--text-primary);">
+                    ${isShutdown ? 'Sedang Mematikan Sistem Jetson...' : 'Sedang Memulai Ulang Jetson...'}
+                </h3>
+                <p style="font-size:0.8rem; color:var(--text-secondary); max-width:400px; margin:0 auto 14px; line-height:1.45;">
+                    ${isShutdown 
+                        ? 'Sistem sedang menyimpan filesystem dan menghentikan seluruh layanan hardware. Hubungan dashboard akan terputus.' 
+                        : 'Sistem sedang memuat ulang kernel. Dashboard akan otomatis mencoba reconnect...'}
+                </p>
+
+                <div style="font-family:var(--font-mono); font-size:1.2rem; font-weight:700; color:${isShutdown ? '#ef4444' : '#f59e0b'}; margin-bottom:12px;" id="power-countdown-timer">
+                    ${secondsLeft}s
+                </div>
+
+                <div style="padding:10px; border-radius:8px; background:rgba(0,0,0,0.3); border:1px solid var(--border-subtle); font-size:0.74rem; color:var(--text-muted); line-height:1.4;">
+                    ${isShutdown 
+                        ? '⚠️ Jangan mencabut kabel baterai sampai lampu hijau LED pada Jetson Nano benar-benar mati.' 
+                        : '🔄 Jangan mematikan saklar daya saat proses reboot sedang berlangsung.'}
+                </div>
+            </div>
+        `;
+        overlay.classList.remove('hidden');
+
+        // Countdown timer di UI
+        if (powerCountdownInterval) clearInterval(powerCountdownInterval);
+        powerCountdownInterval = setInterval(() => {
+            secondsLeft -= 1;
+            const timerEl = document.getElementById('power-countdown-timer');
+            if (timerEl) {
+                timerEl.textContent = `${Math.max(0, secondsLeft)}s`;
+            }
+            if (secondsLeft <= 0) {
+                clearInterval(powerCountdownInterval);
+                powerCountdownInterval = null;
+                if (isShutdown) {
+                    if (titleTag) titleTag.textContent = 'SYSTEM OFFLINE / POWERED OFF';
+                    body.innerHTML = `
+                        <div style="text-align:center; padding:20px 8px;">
+                            <div style="color:var(--text-muted); margin-bottom:12px;">${getIcon('power', 36)}</div>
+                            <h3 style="font-size:1.05rem; font-weight:700; margin-bottom:8px; color:var(--text-primary);">
+                                Jetson Nano Telah Dimatikan
+                            </h3>
+                            <p style="font-size:0.8rem; color:var(--text-secondary); max-width:400px; margin:0 auto; line-height:1.45;">
+                                Sistem operasi telah mati secara aman. Anda sekarang dapat mematikan saklar daya fisik robot. Nyalakan kembali saklar daya untuk mengoperasikan robot berikutnya.
+                            </p>
+                        </div>
+                    `;
+                }
+            }
+        }, 1000);
+    }
+
+    showToast(`Mengirim perintah ${isShutdown ? 'poweroff' : 'reboot'} ke Jetson...`, 'info');
+
+    // Kirim request ke backend
+    const res = await apiPost('/api/system/power', { action });
+    if (!res.success) {
+        showToast(`Gagal: ${res.error || 'Server menolak perintah power'}`, 'error');
+        return;
+    }
+
+    showToast(`Perintah ${action} berhasil diterima Jetson`, 'success');
+
+    // Jika reboot: lakukan polling reconnect otomatis
+    if (!isShutdown) {
+        setTimeout(() => {
+            const reconnectTimer = setInterval(async () => {
+                try {
+                    const check = await apiGet('/api/status?t=' + Date.now());
+                    if (check && check.connected) {
+                        clearInterval(reconnectTimer);
+                        showToast('Jetson telah menyala kembali! Memuat ulang dashboard...', 'success');
+                        setTimeout(() => window.location.reload(), 1500);
+                    }
+                } catch {
+                    // Masih rebooting
+                }
+            }, 3000);
+        }, 15000); // Mulai polling setelah 15 detik
+    }
+}
+
+window.openSystemPowerModal = openSystemPowerModal;
+window.closePowerModal = closePowerModal;
+window.closePowerModalOnBackdrop = closePowerModalOnBackdrop;
+window.confirmSystemPower = confirmSystemPower;
+window.executeSystemPower = executeSystemPower;
 
 document.addEventListener('DOMContentLoaded', init);
