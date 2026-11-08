@@ -18,7 +18,7 @@ amcl:
     do_beamskip: false
     global_frame_id: "map"
     lambda_short: 0.1
-    laser_likelihood_max_dist: 2.0
+    laser_likelihood_max_dist: 2.5
     laser_max_range: 8.0
     laser_min_range: -1.0
     laser_model_type: "likelihood_field"
@@ -28,7 +28,7 @@ amcl:
     odom_frame_id: "odom"
     pf_err: 0.05
     pf_z: 0.99
-    recovery_alpha_fast: 0.1
+    recovery_alpha_fast: 0.15
     recovery_alpha_slow: 0.001
     resample_interval: 1
     robot_model_type: "differential"
