@@ -244,20 +244,56 @@ class EvaluasiAMCLDinamisNode(Node):
             }
 
     def on_delivery_status(self, msg: String):
-        """Membaca status pengiriman dari waypoint_manager dashboard."""
+        """Membaca status pengiriman misi dari waypoint_manager dashboard (mendukung 1x Antar & Antar-Jemput)."""
         try:
             data = json.loads(msg.data)
-            # Jika waypoint_manager sedang menuju titik
-            dest = data.get('destination') or {}
-            if dest and dest.get('name') and not self.is_navigating:
-                with self.lock:
-                    self.active_goal = {
-                        'name': dest.get('name', 'Delivery Target'),
-                        'x': float(dest.get('x', 0.0)),
-                        'y': float(dest.get('y', 0.0)),
-                        'yaw': float(dest.get('yaw', 0.0)),
-                        'source': 'dashboard'
+            mission = data.get('mission')
+            if not mission or mission.get('status') != 'running':
+                return
+
+            phase = mission.get('current_phase', 'idle')
+            tasks = mission.get('tasks', [])
+            idx = mission.get('current_task_index', 0)
+
+            target_info = None
+            if 0 <= idx < len(tasks):
+                task = tasks[idx]
+                if phase == 'navigating_pickup':
+                    pk = task.get('pickup') or {}
+                    target_info = {
+                        'name': f"[PICKUP] {pk.get('name', f'Titik Pickup {idx+1}')}",
+                        'x': float(pk.get('x', 0.0)),
+                        'y': float(pk.get('y', 0.0)),
+                        'yaw': float(pk.get('yaw', 0.0)),
+                        'source': 'dashboard_pickup'
                     }
+                elif phase == 'navigating_delivery':
+                    dl = task.get('delivery') or task.get('destination') or {}
+                    prefix = "[DELIVERY]" if task.get('pickup') else "[SEKALI ANTAR]"
+                    target_info = {
+                        'name': f"{prefix} {dl.get('name', f'Titik Tujuan {idx+1}')}",
+                        'x': float(dl.get('x', 0.0)),
+                        'y': float(dl.get('y', 0.0)),
+                        'yaw': float(dl.get('yaw', 0.0)),
+                        'source': 'dashboard_delivery'
+                    }
+
+            elif phase == 'returning_home':
+                # Cari koordinat home
+                home_wp = self.waypoints[0] if self.waypoints else {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+                target_info = {
+                    'name': "[HOME] Stasiun Pangkalan",
+                    'x': float(home_wp['x']),
+                    'y': float(home_wp['y']),
+                    'yaw': float(home_wp['yaw']),
+                    'source': 'dashboard_home'
+                }
+
+            if target_info:
+                with self.lock:
+                    # Update active goal jika nama/fase berubah
+                    if not self.active_goal or self.active_goal.get('name') != target_info['name']:
+                        self.active_goal = target_info
         except Exception:
             pass
 
