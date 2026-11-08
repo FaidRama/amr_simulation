@@ -1697,21 +1697,21 @@ Pada uji navigasi di area fisik:
 ### C. Solusi: Upgrade ke Geometri Persegi (Box Filter) Berkecepatan Tinggi
 1. **Implementasi Box Filter di [`src/amr_simulation/scripts/laser_filter_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/laser_filter_node.py)**:
    - Mengubah penyaringan dari radial polar ($r < R$) ke koordinat kartesian robot $X_{base}, Y_{base}$ dengan memperhitungkan offset rotasi RPLiDAR ($yaw = 3.14159\text{ rad}$).
-   - Kotak filter dibatasi pada:
-     - $X \in [-0.215, +0.215]\text{ m}$
-     - $Y \in [-0.215, +0.215]\text{ m}$
-     - Toleransi margin $1.5\text{ cm}$ di luar profil sasis ($20\text{ cm}$) membungkus sempurna ke-4 tiang aluminium pojok ($R_{corner} = 28.3\text{ cm} \le \sqrt{0.215^2 + 0.215^2} = 30.4\text{ cm}$).
-   - Titik-titik di luar batas kotak $[-0.215, +0.215]$ **TETAP DIPERTAHANKAN (`ranges[i]`)** dan tidak dibuang menjadi `NaN`.
-   - Menggunakan vektorisasi NumPy dengan *cached trigonometry look-up tables* sehingga eksekusi per scan scan berlangsung dalam **$< 0.05\text{ ms}$ (beban CPU $< 0.05\%$)**.
+   - Kotak filter disetel asimetris menyesuaikan posisi fisik RPLiDAR yang sedikit lebih mundur ke belakang:
+     - $X \in [-0.22, +0.26]\text{ m}$ (Tiang belakang di $\sim 18\text{ cm}$, tiang depan di $\sim 23 - 24\text{ cm}$, terbungkus rapi sampai $+26\text{ cm}$)
+     - $Y \in [-0.26, +0.26]\text{ m}$ (Lebar sasis mencakup kedua sisi tiang hingga $26\text{ cm}$)
+   - Titik-titik di luar batas kotak $[-0.22, 0.26] \times [-0.26, 0.26]$ **TETAP DIPERTAHANKAN (`ranges[i]`)** dan tidak dibuang menjadi `NaN`.
+   - Menggunakan vektorisasi NumPy dengan *cached trigonometry look-up tables* sehingga eksekusi per scan berlangsung dalam **$< 0.05\text{ ms}$ (beban CPU $< 0.05\%$)**.
 2. **Sinkronisasi Parameter Launch & Mapper**:
-   - [`src/amr_simulation/launch/real_navigation.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/real_navigation.launch.py): Menghapus parameter warisan `min_range: 0.29` yang sebelumnya menimpa logika box menjadi lingkaran $29\text{ cm}$. Menggantinya dengan parameter `filter_type: 'box'`, batas kotak $[-0.215, 0.215]$, dan `sensor_min_range: 0.05`.
-   - [`src/amr_simulation/launch/real_mapping.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/real_mapping.launch.py): Menghapus warisan `min_range: 0.34` dan menggantinya dengan parameter box filter.
-   - [`src/amr_simulation/launch/rplidar.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/rplidar.launch.py): Diberi parameter `filter_type: 'box'`, batas kotak $[-0.215, 0.215]$, dan `sensor_min_range: 0.05`.
+   - [`src/amr_simulation/launch/real_navigation.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/real_navigation.launch.py): Parameter box diupdate ke $X[-0.22, 0.26]$ dan $Y[-0.26, 0.26]$.
+   - [`src/amr_simulation/launch/real_mapping.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/real_mapping.launch.py): Parameter box diupdate identik.
+   - [`src/amr_simulation/launch/rplidar.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/rplidar.launch.py): Parameter box diupdate identik.
    - [`src/amr_simulation/config/mapper_params_online_async.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/mapper_params_online_async.yaml): `min_laser_range` diturunkan dari `0.34` menjadi `0.10` meter agar SLAM Toolbox tidak membuang data laser jarak dekat yang valid.
    - **Fix `msg.range_min` di ROS 2**: Pada mode box, `msg.range_min` dikunci ke batas fisik sensor `sensor_min_range = 0.05` m sehingga RViz maupun Costmap tidak lagi memotong titik laser secara lingkaran di atas $0.05\text{ m}$.
-3. **Hasil Eliminasi Zona Buta**:
-   - Zona buta di depan bemper terpangkas drastis dari **$12\text{ cm}$ menjadi hanya $1.5\text{ cm}$** (penurunan $87.5\%$).
-   - Fenomena bidang datar (seperti laptop) yang sebelumnya "hilang di tengah lebih dulu" berhasil diatasi: kini bidang datar terdeteksi dan terpotong lurus sejajar bemper tanpa lengkungan busur lingkaran.
+3. **Hasil Eliminasi Tiang Depan & Zona Buta**:
+   - Kedua tiang depan yang sebelumnya tembus di $X \approx +23.0\text{ cm}$ (jarak $27.6\text{ cm}$ dan $26.3\text{ cm}$) kini **bersih terpotong 100%**.
+   - Bidang datar di depan bemper (seperti laptop atau kaki kursi) tetap terdeteksi lurus tanpa ada fenomena busur lingkaran / hilang di tengah.
+
 
 
 

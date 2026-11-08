@@ -174,10 +174,10 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'filter_type': 'box',
-            'box_min_x': -0.215,
-            'box_max_x': 0.215,
-            'box_min_y': -0.215,
-            'box_max_y': 0.215,
+            'box_min_x': -0.22,
+            'box_max_x': 0.26,
+            'box_min_y': -0.26,
+            'box_max_y': 0.26,
             'laser_yaw_offset': 3.14159,
             'sensor_min_range': 0.05,
             'max_range': 12.0

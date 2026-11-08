@@ -23,13 +23,13 @@ class LaserFilterNode(Node):
         self.declare_parameter('filter_type', 'box')
         
         # Batas kotak sasis robot (dalam kerangka base_link, satuan meter)
-        # Sasis fisik berukuran 40x40 cm (setengah sisi 20 cm = 0.20m).
-        # Diberi margin aman 1.5 cm -> [-0.215, 0.215] meter.
-        # Batas ini membungkus sempurna ke-4 tiang aluminium sasis di pojok (jarak sqrt(20^2+20^2) = 28.3 cm).
-        self.declare_parameter('box_min_x', -0.215)
-        self.declare_parameter('box_max_x', 0.215)
-        self.declare_parameter('box_min_y', -0.215)
-        self.declare_parameter('box_max_y', 0.215)
+        # Sasis fisik 40x40 cm dengan posisi LiDAR sedikit lebih ke belakang:
+        # Tiang belakang berada di ~18 cm, tiang depan berada di ~23-24 cm (jarak diagonal ~27.6 cm).
+        # Disetel ke X: [-0.22, 0.26] dan Y: [-0.26, 0.26] agar ke-4 tiang bersih sempurna tanpa zona buta.
+        self.declare_parameter('box_min_x', -0.22)
+        self.declare_parameter('box_max_x', 0.26)
+        self.declare_parameter('box_min_y', -0.26)
+        self.declare_parameter('box_max_y', 0.26)
 
         # Offset sudut RPLidar terhadap base_link (RPLidar terpasang membelakangi base_link, yaw = pi rad)
         self.declare_parameter('laser_yaw_offset', 3.141592653589793)
