@@ -3,11 +3,11 @@
   "target_name": "Acome A1",
   "auto_reconnect": true,
   "reconnect_interval_s": 5,
+  "keepalive_interval_s": 25,
   "obstacle_voice_delay_s": 5,
   "obstacle_voice_repeat_s": 20,
   "obstacle_phrase": "Permisi, saya mau lewat. Mohon beri jalan.",
   "arrival_phrase": "Deliver tiba. Robot sudah sampai di titik tujuan, silakan ambil barang.",
   "pickup_phrase": "Pickup tiba. Robot sudah sampai di titik pickup, silakan muat barang.",
-  "home_phrase": "Misi selesai. Robot kembali ke stasiun pangkalan.",
-  "keepalive_interval_s": 45
+  "home_phrase": "Misi selesai. Robot kembali ke stasiun pangkalan."
 }

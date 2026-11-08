@@ -1259,3 +1259,196 @@ Memvalidasi keandalan integrasi subsistem navigasi otonom Nav2 saat menghadapi r
    - **Cockpit Quick Dispatch ([`monitoring.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/monitoring.js))**:
      - Tombol cepat titik lokasi di halaman Cockpit langsung mengirim robot tanpa meminta konfirmasi pickup di posisi awal.
 
+---
+
+## 📌 36. Perbaikan Anti-Power-Off Speaker Bluetooth Acome A1 (Sub-Audible 18 Hz Keep-Alive) & Standarisasi Ikon SVG Dashboard
+
+### 1. Perbaikan Speaker Bluetooth Acome A1 Auto-Power-Off (`test_robot_voice.py` & `app.py`):
+- **Akar Masalah Speaker Mati Sendiri Meskipun Ada Heartbeat**:
+  1. **Zero-Amplitude Digital Silence Filtering**: Sebelumnya `generate_silence_wav()` menghasilkan PCM 16-bit bernilai `0x0000` murni. Chip DSP pada speaker Bluetooth modern (termasuk Acome A1 `0E:21:D5:E9:AB:5F`) memiliki *digital zero-crossing / noise gate detector* yang menganggap sampel nol mutlak sebagai "tidak ada sinyal audio", sehingga timer *auto-sleep* internal speaker (10–15 menit) tetap berjalan dan mematikan speaker.
+  2. **PulseAudio `module-suspend-on-idle`**: Daemon PulseAudio di Linux secara default menutup *sink* A2DP (`AVDTP_SUSPEND`) setelah 5 detik hening, membuat koneksi Bluetooth turun ke mode *idle*.
+  3. **Node Suara Belum Tentu Aktif & Crash Argumen ROS 2**: `parser.parse_args()` pada [`test_robot_voice.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/test_robot_voice.py) sebelumnya gagal ketika `ros2 launch` menyertakan `--ros-args`, dan ketika hanya dashboard yang berjalan tanpa `real_navigation.launch.py`, tidak ada proses yang mengirim sinyal *keep-alive*.
+- **Solusi Teknis 4 Lapis**:
+  1. **Sub-Audible 18 Hz Infrasonic Sine Wave (`generate_silence_wav`)**: Mengganti sampel `0x0000` dengan gelombang sinus infrasonik **18 Hz** berdurasi `0.8` detik (amplitudo puncak `450` $\approx -37.2\text{ dBFS}$ dengan amplop $\sin^2$ *fade-in/out*). Sinyal ini menjaga DAC dan amplifier speaker Bluetooth 100% aktif namun **sama sekali tidak terdengar oleh telinga manusia** dan di bawah respons frekuensi konus speaker kecil (tidak ada suara *pop/click/hum*).
+  2. **Penonaktifan Suspend Idle PulseAudio (`disable_pulseaudio_idle_suspend`)**: Otomatis membongkar `module-suspend-on-idle` via `pactl unload-module` dan memaksa `pactl suspend-sink <sink> 0` serta profil `a2dp_sink` agar stream A2DP tidak pernah di-suspend oleh OS.
+  3. **Interval Keep-Alive Dipercepat ke 25 Detik**: Diperbarui dari `45` detik menjadi `25` detik pada [`voice_config.json`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/voice_config.json), [`test_robot_voice.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/test_robot_voice.py), dan [`app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py).
+  4. **Auto-Supervisor di Backend Dashboard (`ensure_voice_node_running`)**: [`app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py) kini otomatis menyalakan dan mengawasi daemon `test_robot_voice.py --node` sejak dashboard dijalankan, ditambah *fallback* pemicu `--keepalive` setiap 25 detik dan perbaikan `parser.parse_known_args()`.
+
+### 2. Standarisasi Penuh Ikon Vektor SVG pada Web Dashboard (`icons.js`, `index.html`, `map.js`, `app.js`):
+- Mengganti **seluruh emoji ketikan Unicode** (`🚀`, `📦`, `🛑`, `⏳`, `🟢`, `📷`, `👁️`, `⚡`, `🔄`, `🧹`, `💾`, `📡`, `🗺️`, `🎮`, `🤖`, `📍`, `⚠️`, `✅`, `❌`, `🔒`, `💡`, `⬆️`, `⬇️`, `⬅️`, `➡️`, `⏹️`) di seluruh halaman, modal, tombol kontrol, peta 2D, dan notifikasi *toast* menjadi ikon vektor SVG Feather/Lucide yang tajam dan konsisten melalui helper `getIcon(...)` di [`icons.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/icons.js).
+
+---
+
+## 📌 37. Perapian UI Modal Tetapkan Koordinat Peta & Layout Dispatch Dashboard (`map.js`, `app.js`, `style.css`, `index.html`)
+
+### 1. Masalah pada Modal Tetapkan Koordinat Peta (`openPointModal`):
+- Pada halaman Dispatch Pengiriman (`/dispatch`), saat operator mengklik koordinat mana saja pada kanvas peta 2D, fungsi `openPointModal(wx, wy)` memunculkan dialog modal bawaan `showModal()`.
+- Sebelumnya, seluruh 5 tombol opsi aksi (`Langsung Antar ke Sini`, `Set Tujuan (Delivery)`, `Set Pickup`, `Set Posisi Awal Robot (AMCL)`, `Simpan ke Daftar Lokasi`) dimasukkan ke dalam array `actions` di bagian footer modal (`#modal-actions`).
+- Karena `#modal-actions` memiliki `display: flex; gap: 8px;` dengan `#modal-box` berukuran `max-width: 400px;` tanpa `flex-wrap: wrap`, kelima tombol dipaksa berjejer dalam satu baris horizontal. Akibatnya, tombol ke-4 (`Set Posisi Awal Robot`) dan tombol ke-5 (`Simpan ke Daftar Lokasi`) **meluap (overflow) jauh ke luar batas kartu modal** hingga tembus ke background gelap, dengan teks yang terpotong dan tampilan yang tidak rapi.
+- Selain itu, modal belum memiliki tombol close (✕) di pojok kanan atas header dan tidak memiliki hierarki visual antara aksi instan (*1-Click Dispatch*), pemilihan waypoint formulir, serta aksi sistem/AMCL.
+
+### 2. Solusi & Pembaruan Desain Terstruktur:
+1. **Redesain Kartu Aksi Terstruktur (`openPointModal` di [`map.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/map.js))**:
+   - Kelima tindakan kini ditata di dalam `#modal-body` sebagai **Action Card Grid** yang elegan dengan hierarki jelas:
+     - **Bar Koordinat & Jarak Real-Time**: Menampilkan koordinat klik presisi (`X: -2.68m, Y: 0.08m`) dan jarak Euclidean dari posisi robot terkini (`~2.68m dari robot`).
+     - **Hero Action Card (Emerald Highlight)**: `🚀 Langsung Antar ke Sini` (*1-Click Auto Dispatch*), untuk langsung memberangkatkan robot tanpa antrean.
+     - **Waypoint Form Actions (2 Kolom - Biru & Amber)**: `🎯 Set Titik Tujuan (Delivery)` dan `📦 Set Titik Muat (Pickup)`.
+     - **System & Database Actions (2 Kolom - Cyan & Purple)**: `📍 Posisi Awal (AMCL)` (membuka konfigurasi 2D pose estimate) dan `💾 Simpan ke Daftar Lokasi` (membuka dialog simpan ke database).
+   - Menambahkan handler global `window.execPointModalAction(action, wx, wy)` untuk eksekusi cepat aksi dengan otomatis menutup modal (`hideModal()`).
+   - Bagian footer modal hanya menyisakan satu tombol bersih: `Tutup / Batal`.
+2. **Peningkatan Sistem Modal Global ([`style.css`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/css/style.css) & [`index.html`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/templates/index.html))**:
+   - **Tombol Close Universal (✕)**: Ditambahkan pada header `.modal-header-line` di [`index.html`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/templates/index.html) sehingga pengguna dapat menutup modal apa pun dengan sekali klik atau tombol Esc.
+   - **Dimensi & Responsivitas `#modal-box`**: Diperlebar dari `400px` menjadi `width: min(520px, 94vw); max-width: 520px; border-radius: 12px;` dengan `box-shadow` modern dan `max-height: 90vh; overflow-y: auto;`.
+   - **Perbaikan `#modal-actions`**: Ditambahkan `flex-wrap: wrap; justify-content: flex-end; gap: 10px;` sehingga tombol apa pun tidak akan pernah meluap ke luar kartu.
+   - **Responsivitas Mobile**: Pada layar `< 480px`, grid 2-kolom otomatis bertumpuk menjadi 1-kolom yang nyaman di-tap pada smartphone.
+3. **Penyempurnaan Bar Nav2 Controller & Utilitas Flex ([`style.css`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/css/style.css))**:
+   - Menambahkan definisi `.flex-between` dan `.nav-ctrl-bar` dengan `flex-wrap: wrap; gap: 12px;` agar status Nav2 dan tombol Start/Stop navigasi di halaman dispatch tidak terjepit pada resolusi sempit.
+
+---
+
+## 📌 38. Solusi Manuver Melingkar / Orbit (Loop-the-Loop) & Putar Balik 180° Tersendat pada Nav2 DWB
+
+### 1. Gejala & Masalah di Lapangan:
+- **Jejak Melingkar (*Orbit / Loop-de-Loop*)**: Saat robot bergerak menuju titik tujuan (misal `titik awal`), alih-alih melaju lurus lalu memutar badan di tempat, robot melakukan putaran melingkar besar (360° loop) di tengah ruangan sebelum masuk ke titik target.
+- **Tersendat & Berdengung (*Stiction / Ngeng-Ngeng*)**: Saat hendak putar balik 180° (*U-turn*), robot menoleh 5°–10° lalu kembali ke 0°, mengeluarkan suara motor berdengung putus-putus, dan tertahan hingga ~26 detik sebelum recovery `Failed to make progress` membersihkan local costmap.
+
+### 2. Akar Masalah Teknis:
+1. **Skala Critic `GoalAlign` Ekstrem (`24.0`) di DWB**:
+   - Critic `GoalAlign` memaksa robot untuk menyelaraskan arah hadapnya dengan target *final yaw* (misal -59.9°) saat robot masih melaju di jalur.
+   - Karena robot adalah diferensial non-holonomik yang dilarang mundur (`min_vel_x: 0.0`), untuk mencapai sudut hadap tersebut sambil tetap bergerak maju, DWB memilih trajektori kurva melengkung melingkar ke bawah.
+2. **Pemotongan Kecepatan Setir (*Understeer*) di [`adaptive_velocity_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/adaptive_velocity_node.py)**:
+   - Rumus sebelumnya: `scale = max(0.4, min(1.0, actual_v / orig_v)); out.angular.z = orig_w * scale`.
+   - Saat robot melambat mendekati tujuan, kecepatan setir $\omega$ dipotong hingga 60%. Hal ini memperbesar radius putar ($R = v / \omega$), membuat robot *understeer* (melebar), bablas dari mulut titik tujuan, dan terpaksa memutar melingkar penuh untuk kembali.
+3. **`OscillationCritic` Membekukan Rotasi di Tempat**:
+   - Pada rotasi murni, perpindahan linier robot $\Delta x, \Delta y \approx 0\text{ m}$.
+   - Karena syarat reset bendera `OscillationCritic` membutuhkan perpindahan linier $\ge 0.05\text{ m}$, critic mengira rotasi murni sebagai osilasi bahaya, sehingga memotong kecepatan sudut $\omega$ dan menyebabkan robot menoleh sedikit lalu ditarik mundur ke 0°.
+4. **Kecepatan Sudut Minimum Kurang Mengatasi Gesekan Statis Ban (`min_speed_theta: 0.20`)**:
+   - Torsi motor DC pada kecepatan sudut rendah tidak cukup kuat memutar sasis robot di lantai, memicu getaran dengung (*stiction*).
+
+### 3. Solusi Parameter & Kode yang Diterapkan:
+1. **Pembaruan [`adaptive_velocity_node.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/adaptive_velocity_node.py)**:
+   - Menghapus pemotongan `scale` pada kecepatan sudut. Kecepatan setir `orig_w` dari Nav2 kini diteruskan utuh 1:1 (`out.angular.z = orig_w`), menghilangkan total gejala *understeer* saat melambat.
+2. **Pembaruan DWB Local Planner di [`nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml)**:
+   - **`GoalAlign.scale: 0.0`** (Sebelumnya: `24.0`): Robot dibebaskan dari keharusan menyelaraskan sudut hadap sambil melaju; robot melaju pada garis lurus terpendek menuju koordinat target $(X, Y)$, lalu memutar badan di tempat menuju YAW target via `RotateToGoal`.
+   - **`PathAlign.scale: 4.0`** (Sebelumnya: `16.0`): Mengurangi penalti hadap berlebih saat jalur berbelok atau di belakang robot.
+   - **`PathDist.scale: 24.0`** (Sebelumnya: `32.0`) & **`GoalDist.scale: 20.0`** (Sebelumnya: `24.0`): Memberikan ruang gerak yang proporsional.
+   - **Hapus `Oscillation` dari daftar `critics`**: Menghilangkan *false positive* pembatalan rotasi di tempat.
+   - **`max_vel_theta: 0.80`** (Sebelumnya: `0.60`) & **`min_speed_theta: 0.28`** (Sebelumnya: `0.20`): Memberikan torsi putar awal yang tegas untuk memecahkan gesekan ban di lantai.
+   - **`acc_lim_theta: 2.5`** & **`decel_lim_theta: -2.0`**: Manuver putar lebih responsif dan gesit.
+
+---
+
+## 39. Refaktorisasi Visualisasi Peta 2D Canvas: Dynamic Zoom Scaling, Physical Robot Footprint & Precision Center Reticle (08 November 2026)
+
+### A. Masalah & Kebutuhan Pengguna
+1. **Marker dan Label Menggelembung Saat Zoom-In**:
+   - Sebelumnya, saat operator melakukan zoom-in (misal 2.5x hingga 6.0x) pada peta pengiriman (`delivery-map-canvas`), fungsi `drawMap` menerapkan `ctx.scale(viewport.zoom, viewport.zoom)`.
+   - Akibatnya, seluruh elemen overlay vektor seperti pin waypoint (`drawWaypointMarker`), stasiun home (`drawHomeMarker`), antrean tugas (`drawTaskMarker`), serta label teks nama meja membesar berlipat ganda menutupi koridor, dinding, dan rintangan peta.
+   - Operator kesulitan melihat posisi presisi titik koordinat karena tertutup lingkaran dan boks label yang terlalu besar.
+2. **Representasi Visual Robot Tidak Sesuai Fisik & Menutupi Titik Pusat**:
+   - Gambar robot sebelumnya menggunakan segitiga/chevron statis (`size = 8`, jangkauan `1.45 * size = 11.6px`) yang membesar masif saat di-zoom.
+   - Chevron tersebut memotong dan menutupi tepat di titik tengah `(0, 0)`, sehingga operator tidak dapat mengetahui letak pasti titik koordinat $(X, Y)$ robot dan harus terus "menebak-nebak".
+   - Lingkaran robot tidak merefleksikan radius fisik sasis nyata robot (0.29 meter).
+
+### B. Solusi & Perubahan Kode di [`src/amr_dashboard/static/js/map.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/map.js)
+1. **Skala Invers Zoom (`s = 1.0 / zoom`) untuk Marker & UI Overlays**:
+   - Seluruh dimensi pin, radius lingkaran, padding label, ketebalan border (`lineWidth`), dan ukuran font teks dikalikan dengan `s = 1.0 / zoom`.
+   - Hasilnya, saat operator melakukan zoom-in hingga 600%, ukuran visual marker dan label di layar monitor tetap konstan, tajam, kompak, dan proporsional (font tetap setara 9px, pin tetap ~10px diameter), tanpa pernah menutupi koridor peta.
+   - Ketebalan garis rute tugas (`taskQueue`), jejak robot (`robotTrail`), dan lintasan terencana Nav2 (`/plan`) diskalakan dengan `invZoom` agar tidak berubah menjadi balok tebal.
+2. **Titik Pusat Presisi (Precision Reticle & Pinpoint Dot)**:
+   - Menambahkan titik pinpoint putih berkontras gelap (`#ffffff` border `#09090b`) di koordinat exact `(x, y)` pada semua marker waypoint, stasiun Home, dan antrean tugas.
+   - Menambahkan micro-crosshairs (garis bidik 4 arah) di sekeliling titik tengah agar operator dapat memverifikasi sel grid map secara presisi hingga tingkat pixel/centimeter.
+3. **Lingkaran Sasis Robot Sesuai Ukuran Fisik Nyata (0.29 Meter)**:
+   - Dihitung langsung dari metadata resolusi peta SLAM: `physicalRadius = (0.29 / resolution) * scale`.
+   - Diberikan batas proteksi `Math.max(3.5 * s, physicalRadius)` agar tetap terlihat jelas saat zoom-out jauh.
+   - Lingkaran sasis diberi warna semi-transparan amber `rgba(245, 158, 11, 0.18)` dengan outline tegas `#f59e0b`, merepresentasikan ruang fisik yang ditempati robot di lorong gudang/restoran.
+4. **Panah Arah Hadap Kompak & Reticle Tengah Robot**:
+   - **Pusat Robot (0,0)**: Dilengkapi dengan micro-crosshair `(-crosshairLen, 0)` & `(0, -crosshairLen)` serta titik pinpoint putih di `(0,0)` (posisi `base_footprint`).
+   - **Panah Hadap**: Mengganti chevron raksasa dengan directional arrowhead ramping aerodinamis yang diposisikan di depan titik pusat (`arrowStart = Math.max(2.2 * s, r * 0.22)` ke `arrowTip = arrowStart + arrowLen`).
+   - Panah tidak menyentuh atau menutupi titik pusat `(0, 0)`, dan ukurannya dibatasi oleh faktor zoom sehingga tidak pernah membesar memenuhi lingkaran robot saat di-zoom.
+   - Ditambahkan hairline heading ray dari bibir depan sasis (`r` ke `r + 6*s`) sebagai panduan visual hadap robot yang jelas dari kejauhan.
+5. **Dukungan Penuh untuk SLAM View & Standby Grid**:
+   - `drawLiveSlamMap`: Mengirimkan `fitScale` ke `drawRobot` sehingga ukuran sasis robot proporsional dengan skala kanvas SLAM.
+   - Standby Radar Grid: Mengirimkan `overrideRadius = 0.29 * ppm` (di mana `ppm = 40px/m`) sehingga ukuran sasis di radar standby tepat 0.29m (11.6px radius).
+
+---
+
+## 40. Fitur Manajemen Daya Hardware Jetson Nano (Web-Based Power Off & Reboot) (08 November 2026)
+
+### A. Latar Belakang & Kebutuhan
+- Sebelumnya, operator harus selalu membuka terminal SSH secara manual dan mengetik `sudo poweroff` atau `sudo reboot` setiap kali ingin mematikan komputer Jetson Nano di robot AMR setelah pengoperasian selesai.
+- Hal ini kurang praktis saat robot dioperasikan di lapangan atau diuji menggunakan tablet/smartphone tanpa akses SSH langsung.
+- Diperlukan fitur kendali daya (*hardware power management*) terintegrasi langsung di dashboard web, dengan prosedur keselamatan (*safe shutdown*) untuk mencegah kerusakan file sistem pada microSD/eMMC Jetson Nano.
+
+### B. Implementasi Backend ([`src/amr_dashboard/amr_dashboard/app.py`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/amr_dashboard/app.py))
+1. **Fungsi `execute_system_power(action='poweroff')`**:
+   - **Safety Stop Robot**: Mengirimkan perintah kecepatan nol (`linear=0, angular=0`) sebanyak 3 kali berturut-turut ke `/cmd_vel` dan membatalkan navigasi aktif Nav2 (`cancel_navigation`) agar robot tidak sedang melaju saat sistem dimatikan.
+   - **Audio Announcement**: Mengirim notifikasi TTS/suara ke speaker robot via topic `/robot_voice/say` ("*Mematikan sistem Jetson Nano. Sampai jumpa.*").
+   - **Eksekusi Asinkron**: Menjalankan eksekusi sistem di background thread dengan jeda waktu 1.2 detik agar Flask server sempat mengembalikan respons HTTP 200 OK ke browser pengguna.
+   - **Fallback Perintah Bertingkat**:
+     1. `systemctl poweroff/reboot -i` (metode standar systemd, `-i` mengabaikan inhibitor sessions).
+     2. D-Bus login1 method call (`org.freedesktop.login1.Manager.PowerOff` / `Reboot`).
+     3. `sudo -n poweroff` / `sudo -n shutdown -h now`.
+     4. `poweroff` / `reboot` fallback langsung.
+2. **REST Endpoints Baru**:
+   - `GET /api/system/status`: Mengembalikan data telemetry sistem Jetson (uptime detik & format teks "X jam Y menit", suhu SOC/CPU dari thermal zones `/sys/devices/virtual/thermal/thermal_zone*/temp`, dan flag `can_poweroff`).
+   - `POST /api/system/power`: Menerima payload `{"action": "poweroff"}` atau `{"action": "reboot"}`.
+   - `POST /api/system/poweroff` & `POST /api/system/reboot`: Alias cepat untuk kemudahan integrasi.
+3. **Integrasi Voice AI Assistant**:
+   - Menambahkan *offline fast-path* di `api_voice_command()` untuk frasa *"matikan robot"*, *"matikan jetson"*, *"power off"*, *"shutdown"*, dan *"reboot robot"*, sehingga operator juga bisa mematikan Jetson via perintah suara.
+
+### C. Implementasi Frontend
+1. **Tombol Topbar (`btn-topbar-power`) di [`index.html`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/templates/index.html)**:
+   - Diletakkan di samping tombol E-STOP pada header atas dengan ikon `${getIcon('power', 14)}`.
+   - Mengklik tombol ini memanggil `openSystemPowerModal()`.
+2. **Section 07 di Halaman Pengaturan ([`app.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/app.js))**:
+   - Ditambahkan panel khusus **"07 // KONTROL DAYA HARDWARE (JETSON NANO)"** dengan badge Uptime real-time.
+   - Menyediakan tombol aksi **"Mulai Ulang (Reboot)"** dan **"Matikan Jetson (Power Off)"**.
+3. **Modal Dialog Konfirmasi & Layar Power-Down**:
+   - **Modal Kartu Aksi**: Memperlihatkan metadata Jetson (Uptime, Suhu SOC), kartu *Safe Shutdown*, kartu *Reboot*, dan catatan keselamatan agar saklar fisik baterai tidak langsung dimatikan sebelum LED padam.
+   - **Konfirmasi Bertingkat**: Mencegah klik tidak sengaja dengan dialog peringatan bertanda merah.
+   - **Layar Hitung Mundur & Auto-Reconnect**:
+     - Shutdown: Menampilkan hitung mundur 8 detik dengan instruksi visual, lalu beralih ke status *"SYSTEM OFFLINE / POWERED OFF"*.
+     - Reboot: Menampilkan hitung mundur dan secara otomatis melakukan polling status server setiap 3 detik. Begitu Jetson menyala kembali, dashboard langsung memuat ulang halaman secara otomatis.
+
+---
+
+## 41. Visualisasi Sasis Fisik Kotak 20x20 cm di Dalam Lingkaran Batas Aman Nav2 Radius 30 cm (08 November 2026)
+
+### A. Latar Belakang & Kebutuhan Desain
+1. **Dimensi Fisik Nyata Sasis Robot vs Parameter Nav2**:
+   - Sasis kotak fisik robot memiliki dimensi aktual **$20\text{ cm} \times 20\text{ cm}$** ($0.20\text{ m} \times 0.20\text{ m}$).
+   - Parameter navigasi Nav2 di [`nav2_params.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/config/nav2_params.yaml) sengaja dipertahankan pada **`robot_radius: 0.30`** ($30\text{ cm}$):
+     - Tiang struktur robot memiliki radius putar terluar sekitar $28.x\text{ cm}$ dari titik pusat putar robot saat melakukan rotasi di tempat (*in-place rotation*).
+     - Model tabrakan lingkaran (*circular footprint*) jauh lebih ringan secara komputasi bagi prosesor Jetson Nano dibanding model poligon (*footprint polygon*).
+     - Radius $30\text{ cm}$ memberikan zona penyangga aman (*safety clearance buffer*) terhadap rintangan di koridor sempit.
+2. **Kebutuhan Visualisasi Operator**:
+   - Menampilkan bodi kotak sasis robot nyata $20\text{ cm} \times 20\text{ cm}$ di kanvas peta dashboard agar operator dapat memantau orientasi dan celah fisik robot secara realistis.
+   - Tetap menampilkan lingkaran radius $30\text{ cm}$ di sekelilingnya sebagai representasi visual batas aman (*collision bubble*) yang dihitung oleh algoritma Nav2/DWA.
+   - Roda tidak perlu digambar (*clean visual*) agar tampilan fokus dan tidak membingungkan.
+   - Titik pusat koordinat `(0, 0)` dan panah hadap harus tetap presisi di tengah sasis tanpa menutupi titik pusat saat kanvas di-zoom.
+
+### B. Implementasi Multi-Layer Rendering di [`src/amr_dashboard/static/js/map.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/map.js)
+Fungsi `drawRobot(ctx, x, y, yaw, zoom, customScale, overrideRadius)` diperbarui dengan arsitektur rendering 5 lapisan (*layering*):
+
+1. **Kalkulasi Resolusi & Skala Fisik (Pixels Per Meter / PPM)**:
+   - Dihitung dinamis dari resolusi SLAM ($0.05\text{ m/px}$) dan skala kanvas:
+     $$\text{PPM} = \frac{1.0}{\text{resolution}} \times \text{scale}$$
+   - Radius Lingkaran Aman: $R_{\text{safety}} = 0.30 \times \text{PPM}$ (dibatasi batas bawah $\max(3.5 \times s, R_{\text{safety}})$).
+   - Setengah Lebar Bodi Kotak: $\text{boxHalf} = 0.10 \times \text{PPM}$ (dibatasi batas bawah $\max(2.2 \times s, \text{boxHalf})$).
+2. **Layer 1: Lingkaran Batas Aman Nav2 ($30\text{ cm}$)**:
+   - Menggambar lingkaran putus-putus (*dashed line* `[4*s, 3*s]`) berwarna amber transparan (`rgba(245, 158, 11, 0.08)` dan border `rgba(245, 158, 11, 0.55)`).
+   - Memberi sinyal visual jelas batas inflasi/ruang halang Nav2.
+3. **Layer 2: Bodi Kotak Sasis Fisik Nyata ($20\text{ cm} \times 20\text{ cm}$)**:
+   - Menggambar persegi dengan sudut membulat (*rounded rect*) tepat di pusat robot: lebar $2 \times \text{boxHalf}$, tinggi $2 \times \text{boxHalf}$.
+   - Warna latar bodi gelap solid (`rgba(24, 24, 27, 0.90)`) dengan garis tepi amber tegas (`#f59e0b`, ketebalan $1.5 \times s$) agar kontras tinggi dengan warna latar peta SLAM.
+   - **Aksen Bumper Depan**: Garis tebal berwarna neon cyan (`#38bdf8`) di sisi depan sasis ($+X$) sebagai penanda jelas haluan robot.
+4. **Layer 3: Precision Center Reticle & Pinpoint Dot di `(0, 0)`**:
+   - Micro-crosshair dan dot putih terang berkontur gelap di titik pusat absolut sasis robot (`base_footprint`), memungkinkan operator mengetahui koordinat pasti robot hingga tingkat pixel.
+5. **Layer 4: Panah Arah Hadap Kompak**:
+   - Panah directional segitiga aerodinamis diletakkan di depan center dot (`arrowStart` di depan titik pusat), tidak menutupi titik tengah, dan ukurannya dibatasi zoom sehingga tidak pernah membesar masif saat peta diperbesar.
+6. **Layer 5: Hairline Heading Ray**:
+   - Garis haluan tipis memanjang dari bibir lingkaran $30\text{ cm}$ ke arah depan untuk membantu verifikasi orientasi hadap robot dari kejauhan.
+7. **Sinkronisasi Mode Standby Grid**:
+   - Parameter pemanggilan `drawRobot` pada radar grid standby diperbarui menggunakan `0.30 * ppm` agar skala lingkaran dan sasis konsisten di seluruh tampilan dashboard.
+

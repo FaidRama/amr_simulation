@@ -395,17 +395,40 @@ class EvaluasiAMCLNode(Node):
         amcl_yaw = final_pose['yaw']
         amcl_yaw_deg = math.degrees(amcl_yaw)
 
-        # Hitung sudut hadap aktual fisik saat robot berhenti:
-        # Sudut Hadap Nyata = Sudut Awal Datum + Delta Putaran Roda (Odometry)
+        # Hitung sudut hadap estimasi dari odometri roda
         if start_odom_yaw is not None and stop_odom_yaw is not None:
             delta_rot_rad = normalize_angle(stop_odom_yaw - start_odom_yaw)
-            actual_yaw_rad = normalize_angle(gt_yaw_rad + delta_rot_rad)
+            odom_yaw_rad = normalize_angle(gt_yaw_rad + delta_rot_rad)
         else:
             delta_rot_rad = rot_speed * t_converge
-            actual_yaw_rad = normalize_angle(gt_yaw_rad + delta_rot_rad)
+            odom_yaw_rad = normalize_angle(gt_yaw_rad + delta_rot_rad)
 
-        actual_yaw_deg = math.degrees(actual_yaw_rad)
+        odom_yaw_deg = math.degrees(odom_yaw_rad)
         delta_rot_deg = math.degrees(delta_rot_rad)
+
+        # Opsi Input Sudut Fisik Aktual (Manual Ground Truth)
+        print("-" * 78)
+        print("📐 VERIFIKASI GROUND TRUTH SUDUT HADAP (HEADING):")
+        print(f"  • Estimasi Deteksi AMCL       : {amcl_yaw_deg:+.1f}°")
+        print(f"  • Estimasi Putaran Roda (Odom): {odom_yaw_deg:+.1f}° (Rentan selip roda saat rotasi)")
+        print(f"  💡 Pengukuran fisik manual (busur/meteran) jauh lebih valid secara ilmiah sebagai Ground Truth.")
+        user_in = input(f"  👉 Masukkan Sudut Aktual Fisik Hasil Ukur Manual (°) [ENTER = pakai odom {odom_yaw_deg:+.1f}°]: ").strip()
+
+        if user_in:
+            try:
+                actual_yaw_deg = float(user_in)
+                actual_yaw_rad = math.radians(actual_yaw_deg)
+                sudut_sumber = f"Ukur Manual ({actual_yaw_deg:+.1f}°)"
+                print(f"  ✅ Menggunakan Sudut Aktual Manual Ground Truth: {actual_yaw_deg:+.1f}°")
+            except ValueError:
+                print(f"  ⚠️ Input tidak valid, beralih ke estimasi odom: {odom_yaw_deg:+.1f}°")
+                actual_yaw_deg = odom_yaw_deg
+                actual_yaw_rad = odom_yaw_rad
+                sudut_sumber = f"Odometri Roda ({delta_rot_deg:+.1f}°)"
+        else:
+            actual_yaw_deg = odom_yaw_deg
+            actual_yaw_rad = odom_yaw_rad
+            sudut_sumber = f"Odometri Roda ({delta_rot_deg:+.1f}°)"
 
         dx = amcl_x - gt_x
         dy = amcl_y - gt_y
@@ -426,7 +449,7 @@ class EvaluasiAMCLNode(Node):
         print(f"  • Waktu Konvergensi (t_conv) : {t_converge:.2f} detik  (Batas: <= {PASS_MAX_TCONV:.1f}s) -> [{status_tconv}]")
         print(f"  • Posisi Nyata vs Estimasi  : GT=({gt_x:.3f}, {gt_y:.3f}) | AMCL=({amcl_x:.3f}, {amcl_y:.3f})")
         print(f"  • Galat Posisi (e_pos)       : {e_pos_m:.3f} m ({e_pos_cm:.1f} cm)  (Batas: <= {PASS_AVG_EPOS*100:.1f} cm) -> [{status_epos}]")
-        print(f"  • Sudut Nyata saat Berhenti : {actual_yaw_deg:+.1f}° (Awal {gt_yaw_deg:+.1f}° + Putaran Roda {delta_rot_deg:+.1f}°)")
+        print(f"  • Sudut Nyata saat Berhenti : {actual_yaw_deg:+.1f}° [{sudut_sumber}]")
         print(f"  • Estimasi Sudut AMCL       : {amcl_yaw_deg:+.1f}°")
         print(f"  • Galat Orientasi (e_theta)  : {e_yaw_deg:.2f}°  (Batas: <= {PASS_AVG_EYAW:.1f}°) -> [{status_eyaw}]")
         print(f"  • KESIMPULAN RUN INI        : [{status_total}]")

@@ -700,7 +700,7 @@ class DashboardNode(Node):
                             'cancelled': 'Misi Pengantaran DIBATALKAN.'
                         }
                         desc = phase_names.get(cur_phase, f'Fase: {cur_phase}')
-                        _append_navigation_log(f'📦 [WAYPOINT] {desc}')
+                        _append_navigation_log(f'[WAYPOINT] {desc}')
 
                     # Simpan ke history jika misi selesai (hanya sekali per misi)
                     mission_id = data['mission'].get('mission_id', '')
@@ -1250,7 +1250,7 @@ def stop_slam_process():
         ['pkill', '-9', '-f', '(real_mapping\\.launch\\.py|async_slam_toolbox_node|rplidar_bridge\\.py|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py|static_transform_publisher)'],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
-    _append_mapping_log('🛑 Proses SLAM Mapping dihentikan.')
+    _append_mapping_log('[STOP] Proses SLAM Mapping dihentikan.')
 
 
 # =====================================================================
@@ -1370,7 +1370,7 @@ def stop_navigation_process():
         ['pkill', '-9', '-f', '(real_navigation\\.launch\\.py|localization_launch\\.py|navigation_launch\\.py|map_server|amcl|bt_navigator|controller_server|planner_server|recoveries_server|waypoint_follower|lifecycle_manager|adaptive_velocity_node|rplidar_bridge\\.py|rplidar_composition|arduino_bridge\\.py|laser_filter_node\\.py|static_transform_publisher)'],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
-    _append_navigation_log('🛑 Proses Navigasi (Nav2) dihentikan.')
+    _append_navigation_log('[STOP] Proses Navigasi (Nav2) dihentikan.')
 
 
 # =====================================================================
@@ -1639,7 +1639,7 @@ def api_mapping_start():
     try:
         with MAPPING_LOCK:
             MAPPING_LOGS.clear()
-            _append_mapping_log('🚀 Meluncurkan: ros2 launch amr_simulation real_mapping.launch.py ...')
+            _append_mapping_log('[START] Meluncurkan: ros2 launch amr_simulation real_mapping.launch.py ...')
             MAPPING_PROC = subprocess.Popen(
                 ['/bin/bash', '-c', full_cmd],
                 stdout=subprocess.PIPE,
@@ -1803,7 +1803,7 @@ def api_navigation_start():
             NAVIGATION_READY = False
             RUNTIME_CACHE['nav_ready'] = False
             NAVIGATION_LOGS.clear()
-            _append_navigation_log(f'🚀 Meluncurkan Navigasi dengan peta: {os.path.basename(map_to_use or "default")} ...')
+            _append_navigation_log(f'[START] Meluncurkan Navigasi dengan peta: {os.path.basename(map_to_use or "default")} ...')
             NAVIGATION_PROC = subprocess.Popen(
                 ['/bin/bash', '-c', full_cmd],
                 stdout=subprocess.PIPE,
@@ -1918,7 +1918,7 @@ def api_mapping_save():
             return jsonify({'success': False, 'error': 'Gagal menulis file peta ke disk'}), 500
 
         yaml_filename = f"{clean_name}.yaml"
-        _append_mapping_log(f'💾 Peta berhasil disimpan: {yaml_filename} ({width}x{height} px)')
+        _append_mapping_log(f'[SAVED] Peta berhasil disimpan: {yaml_filename} ({width}x{height} px)')
 
         if set_active:
             if 'profiles' in waypoints_config and 'real' in waypoints_config['profiles']:
@@ -2004,6 +2004,7 @@ def api_status():
                 'human_node_active': is_human_node_active(),
                 'human_node_ready': is_human_node_ready(),
                 'voice': get_voice_telemetry_status(),
+                'uptime': get_system_uptime_seconds(),
                 'connected': True,
                 'timestamp': time.time()
             })
@@ -2128,7 +2129,7 @@ def api_initialpose():
     set_as_home = bool(data.get('set_as_home', False))
 
     ros_node.send_initial_pose(x, y, yaw)
-    _append_navigation_log(f'📍 [AMCL] Initial Pose dikirim: X={x:.2f}m, Y={y:.2f}m, Yaw={math.degrees(yaw):.1f}°{" (disimpan sebagai Home)" if set_as_home else ""}')
+    _append_navigation_log(f'[AMCL] Initial Pose dikirim: X={x:.2f}m, Y={y:.2f}m, Yaw={math.degrees(yaw):.1f}°{" (disimpan sebagai Home)" if set_as_home else ""}')
 
     if set_as_home:
         home_obj = {'x': round(x, 3), 'y': round(y, 3), 'yaw': round(yaw, 3)}
@@ -2232,7 +2233,7 @@ def api_delivery_start():
         return jsonify({'error': 'Daftar task kosong'}), 400
     
     ros_node.send_delivery_tasks(tasks)
-    _append_navigation_log(f'🚀 [DISPATCH] Memulai eksekusi misi ({len(tasks)} task dikirim ke waypoint_manager).')
+    _append_navigation_log(f'[DISPATCH] Memulai eksekusi misi ({len(tasks)} task dikirim ke waypoint_manager).')
     for idx, t in enumerate(tasks):
         pk = t.get('pickup')
         dl = t.get('delivery') or t.get('destination') or {}
@@ -2256,7 +2257,7 @@ def api_delivery_control():
         return jsonify({'error': f'Perintah tidak valid: {command}'}), 400
     
     ros_node.send_control(command)
-    _append_navigation_log(f'🎮 [DISPATCH] Perintah operator: {command.upper()}')
+    _append_navigation_log(f'[DISPATCH] Perintah operator: {command.upper()}')
     return jsonify({'message': f'Perintah [{command}] terkirim', 'success': True})
 
 
@@ -2437,9 +2438,10 @@ DEFAULT_VOICE_CONFIG = {
     "target_name": "Acome A1",
     "auto_reconnect": True,
     "reconnect_interval_s": 5,
-    "obstacle_voice_delay_s": 10,
-    "obstacle_voice_repeat_s": 12,
-    "obstacle_phrase": "Permisi, robot mau lewat. Mohon beri jalan.",
+    "keepalive_interval_s": 25,
+    "obstacle_voice_delay_s": 5,
+    "obstacle_voice_repeat_s": 20,
+    "obstacle_phrase": "Permisi, saya mau lewat. Mohon beri jalan.",
     "arrival_phrase": "Deliver tiba. Robot sudah sampai di titik tujuan, silakan ambil barang.",
     "pickup_phrase": "Pickup tiba. Robot sudah sampai di titik pickup, silakan muat barang.",
     "home_phrase": "Misi selesai. Robot kembali ke stasiun pangkalan."
@@ -2551,16 +2553,23 @@ def is_bluetooth_device_connected(mac_address):
 
 
 _last_bt_check_time = 0.0
+_last_bt_ensure_time = 0.0
+_last_bt_fallback_ka_time = 0.0
 _cached_bt_status = {'connected': False, 'target_mac': '', 'target_name': ''}
 
 
 def get_voice_telemetry_status():
     """Dapatkan status Bluetooth riil untuk telemetri dashboard (akurat & realtime)."""
-    global _last_bt_check_time, _cached_bt_status
+    global _last_bt_check_time, _last_bt_ensure_time, _last_bt_fallback_ka_time, _cached_bt_status
     now = time.time()
     # Jika ada update dari topic /robot_voice/status dalam 3 detik terakhir, gunakan itu
     if ros_node and hasattr(ros_node, 'last_voice_status_time') and (now - getattr(ros_node, 'last_voice_status_time', 0) < 3.0):
         return ros_node.voice_status
+
+    # Pastikan node watchdog berjalan jika belum ada update ROS 2
+    if now - _last_bt_ensure_time > 15.0:
+        _last_bt_ensure_time = now
+        ensure_voice_node_running()
 
     # Jika tidak ada update ROS 2 node, periksa status fisik BlueZ langsung setiap 2.5 detik
     if now - _last_bt_check_time > 2.5:
@@ -2575,6 +2584,21 @@ def get_voice_telemetry_status():
                 'target_mac': target_mac,
                 'target_name': target_name
             }
+            # Fallback keep-alive langsung dari app.py jika node ROS 2 sedang tidak mengirim status
+            if conn and (now - _last_bt_fallback_ka_time >= 25.0):
+                _last_bt_fallback_ka_time = now
+                def _run_ka():
+                    for wr in get_workspace_roots():
+                        script = os.path.join(wr, 'src', 'amr_simulation', 'scripts', 'test_robot_voice.py')
+                        if os.path.exists(script):
+                            try:
+                                subprocess.run(['python3', script, '--keepalive'],
+                                               env=get_pulse_env(),
+                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=4)
+                            except Exception:
+                                pass
+                            break
+                threading.Thread(target=_run_ka, daemon=True).start()
         except Exception:
             pass
     return _cached_bt_status
@@ -3007,6 +3031,25 @@ def api_voice_command():
             'text': text
         })
 
+    # Rule-based offline fast path untuk matikan jetson / power off
+    if any(k in text_lower for k in ['matikan robot', 'matikan jetson', 'power off', 'shutdown', 'shut down']):
+        execute_system_power('poweroff')
+        return jsonify({
+            'success': True,
+            'action': 'poweroff',
+            'spoken_response': 'Mematikan sistem Jetson Nano. Sampai jumpa.',
+            'text': text
+        })
+
+    if any(k in text_lower for k in ['reboot robot', 'reboot jetson', 'restart robot', 'restart jetson', 'mulai ulang robot', 'mulai ulang jetson']):
+        execute_system_power('reboot')
+        return jsonify({
+            'success': True,
+            'action': 'reboot',
+            'spoken_response': 'Memulai ulang sistem Jetson Nano.',
+            'text': text
+        })
+
     # Cek API Key
     api_key = get_gemini_api_key()
     if not api_key:
@@ -3365,6 +3408,151 @@ def api_camera_snapshot():
 
 
 # =====================================================================
+# SYSTEM POWER MANAGEMENT (JETSON NANO / AMR HARDWARE)
+# =====================================================================
+def get_system_uptime_seconds():
+    """Membaca uptime sistem dari /proc/uptime."""
+    try:
+        with open('/proc/uptime', 'r') as f:
+            return float(f.readline().split()[0])
+    except Exception:
+        return 0.0
+
+
+def get_system_cpu_temp():
+    """Membaca suhu CPU / SOC (Celsius) dari thermal zones."""
+    try:
+        for z in ('thermal_zone0', 'thermal_zone1', 'thermal_zone2'):
+            p = f'/sys/devices/virtual/thermal/{z}/temp'
+            if os.path.exists(p):
+                with open(p, 'r') as f:
+                    val = float(f.read().strip())
+                    if val > 1000:
+                        val /= 1000.0
+                    return round(val, 1)
+    except Exception:
+        pass
+    return None
+
+
+def execute_system_power(action='poweroff'):
+    """
+    Eksekusi shutdown atau reboot pada sistem Linux (Jetson Nano / Host PC).
+    Aksi valid: 'poweroff' atau 'reboot'.
+    """
+    if action not in ('poweroff', 'reboot'):
+        return False, f"Aksi '{action}' tidak valid. Harus 'poweroff' atau 'reboot'."
+
+    global ros_node
+    # 1. Safety stop robot: kirim kecepatan 0 beberapa kali
+    if ros_node is not None:
+        try:
+            stop_msg = Twist()
+            for _ in range(3):
+                ros_node.cmd_vel_pub.publish(stop_msg)
+                time.sleep(0.04)
+            if hasattr(ros_node, 'cancel_navigation'):
+                ros_node.cancel_navigation()
+        except Exception as e:
+            print(f"[SYSTEM-POWER] Error stopping robot: {e}")
+
+    # 2. Mainkan notifikasi audio bila speaker aktif
+    try:
+        if ros_node and hasattr(ros_node, 'voice_say_pub'):
+            txt = 'Mematikan sistem Jetson Nano. Sampai jumpa.' if action == 'poweroff' else 'Memulai ulang sistem Jetson Nano.'
+            ros_node.voice_say_pub.publish(String(data=txt))
+    except Exception:
+        pass
+
+    # 3. Eksekusi perintah power di thread terpisah dengan jeda 1.2 detik
+    # agar HTTP response sempat kembali 200 OK ke antarmuka web browser
+    def _power_worker():
+        time.sleep(1.2)
+        print(f"[SYSTEM-POWER] Memulai proses {action} sistem...", flush=True)
+
+        if action == 'poweroff':
+            cmd_list = [
+                ['systemctl', 'poweroff', '-i'],
+                ['dbus-send', '--system', '--print-reply', '--dest=org.freedesktop.login1',
+                 '/org/freedesktop/login1', 'org.freedesktop.login1.Manager.PowerOff', 'boolean:true'],
+                ['sudo', '-n', 'poweroff'],
+                ['sudo', '-n', 'shutdown', '-h', 'now'],
+                ['poweroff'],
+            ]
+        else:
+            cmd_list = [
+                ['systemctl', 'reboot', '-i'],
+                ['dbus-send', '--system', '--print-reply', '--dest=org.freedesktop.login1',
+                 '/org/freedesktop/login1', 'org.freedesktop.login1.Manager.Reboot', 'boolean:true'],
+                ['sudo', '-n', 'reboot'],
+                ['sudo', '-n', 'shutdown', '-r', 'now'],
+                ['reboot'],
+            ]
+
+        for cmd in cmd_list:
+            try:
+                print(f"[SYSTEM-POWER] Menjalankan: {' '.join(cmd)}", flush=True)
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+                if res.returncode == 0:
+                    print(f"[SYSTEM-POWER] Berhasil dieksekusi via {' '.join(cmd)}", flush=True)
+                    return
+                else:
+                    print(f"[SYSTEM-POWER] Gagal ({res.returncode}): {res.stderr.strip()}", flush=True)
+            except Exception as ex:
+                print(f"[SYSTEM-POWER] Exception saat menjalankan {cmd[0]}: {ex}", flush=True)
+
+    t = threading.Thread(target=_power_worker, daemon=True)
+    t.start()
+    return True, f"Perintah {action} berhasil dijadwalkan."
+
+
+@app.route('/api/system/status')
+def api_system_status():
+    """Mengembalikan metrik sistem: uptime, suhu CPU, dan ketersediaan kontrol daya."""
+    uptime_sec = get_system_uptime_seconds()
+    hours = int(uptime_sec // 3600)
+    minutes = int((uptime_sec % 3600) // 60)
+    uptime_str = f"{hours}j {minutes}m" if hours > 0 else f"{minutes} menit"
+
+    return jsonify({
+        'uptime_seconds': uptime_sec,
+        'uptime_text': uptime_str,
+        'cpu_temp': get_system_cpu_temp(),
+        'can_poweroff': True,
+        'timestamp': time.time()
+    })
+
+
+@app.route('/api/system/power', methods=['POST'])
+def api_system_power():
+    """Endpoint kendali daya sistem Jetson Nano."""
+    data = request.get_json(silent=True) or {}
+    action = data.get('action', 'poweroff').strip().lower()
+    ok, msg = execute_system_power(action)
+    if ok:
+        return jsonify({'success': True, 'action': action, 'message': msg})
+    return jsonify({'success': False, 'action': action, 'error': msg}), 400
+
+
+@app.route('/api/system/poweroff', methods=['POST'])
+def api_system_poweroff():
+    """Alias cepat untuk mematikan Jetson Nano."""
+    ok, msg = execute_system_power('poweroff')
+    if ok:
+        return jsonify({'success': True, 'action': 'poweroff', 'message': msg})
+    return jsonify({'success': False, 'action': 'poweroff', 'error': msg}), 400
+
+
+@app.route('/api/system/reboot', methods=['POST'])
+def api_system_reboot():
+    """Alias cepat untuk me-reboot Jetson Nano."""
+    ok, msg = execute_system_power('reboot')
+    if ok:
+        return jsonify({'success': True, 'action': 'reboot', 'message': msg})
+    return jsonify({'success': False, 'action': 'reboot', 'error': msg}), 400
+
+
+# =====================================================================
 # MAIN — Jalankan Flask + ROS2
 # =====================================================================
 def main(args=None):
@@ -3398,6 +3586,7 @@ def main(args=None):
     
     ros_thread = threading.Thread(target=ros_spin, daemon=True)
     ros_thread.start()
+    ensure_voice_node_running()
     
     print(f'\n[SERVER] Templates: {TEMPLATE_DIR}')
     print(f'[SERVER] Static: {STATIC_DIR}')

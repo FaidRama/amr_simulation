@@ -144,6 +144,10 @@
                 <span class="badge-dot"></span>
                 <span class="badge-text">Offline</span>
             </div>
+            <button class="topbar-power-btn" id="btn-topbar-power" onclick="openSystemPowerModal()" title="Kelola Daya Jetson Nano (Shutdown / Reboot)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle; flex-shrink:0;"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path><line x1="12" y1="2" x2="12" y2="12"></line></svg>
+                <span>Power</span>
+            </button>
             <button class="topbar-estop-btn" onclick="emergencyStop()" title="Emergency Stop">E-STOP</button>
         </div>
     </header>
@@ -172,8 +176,11 @@
     <div id="modal-overlay" class="hidden" onclick="closeModal(event)">
         <div id="modal-box">
             <div class="modal-header-line">
-                <span class="modal-tag">SYS // PROMPT</span>
-                <h3 id="modal-title"></h3>
+                <div style="flex:1; min-width:0;">
+                    <span class="modal-tag" id="modal-tag">SYS // PROMPT</span>
+                    <h3 id="modal-title"></h3>
+                </div>
+                <button type="button" class="modal-close-btn" onclick="hideModal()" title="Tutup dialog">✕</button>
             </div>
             <div id="modal-body"></div>
             <div id="modal-actions"></div>
@@ -226,7 +233,23 @@
             </div>
 
             <div class="voice-modal-tips">
-                <span>💡 Contoh: <em>"Ambil barang di Rak 1A dan antar ke Meja 2"</em> • <em>"Kembali ke home"</em> • <em>"Stop robot"</em></span>
+                <span style="display:inline-flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M9 18h6"></path><path d="M10 22h4"></path><path d="M12 2a7 7 0 0 0-4 12.7V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.3A7 7 0 0 0 12 2z"></path></svg> Contoh: <em>"Ambil barang di Rak 1A dan antar ke Meja 2"</em> • <em>"Kembali ke home"</em> • <em>"Stop robot"</em></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ SYSTEM POWER MODAL ============ -->
+    <div id="power-modal-overlay" class="hidden" onclick="closePowerModalOnBackdrop(event)">
+        <div id="power-modal-box">
+            <div class="power-modal-header">
+                <div class="power-status-pill">
+                    <span class="power-status-dot"></span>
+                    <span id="power-modal-status-text">JETSON NANO // POWER MGMT</span>
+                </div>
+                <button class="power-close-btn" onclick="closePowerModal()" title="Tutup dialog">&times;</button>
+            </div>
+            <div id="power-modal-body">
+                <!-- Di-render dinamis oleh JavaScript -->
             </div>
         </div>
     </div>
@@ -268,10 +291,10 @@
     </nav>
 
     <!-- ============ JAVASCRIPT ============ -->
-    <script src="/static/js/icons.js?v=3.3_direct_dispatch"></script>
-    <script src="/static/js/app.js?v=3.3_direct_dispatch"></script>
-    <script src="/static/js/map.js?v=3.3_direct_dispatch"></script>
-    <script src="/static/js/joystick.js?v=3.3_direct_dispatch"></script>
-    <script src="/static/js/monitoring.js?v=3.3_direct_dispatch"></script>
+    <script src="/static/js/icons.js?v=3.4_icons"></script>
+    <script src="/static/js/app.js?v=3.4_icons"></script>
+    <script src="/static/js/map.js?v=3.4_icons"></script>
+    <script src="/static/js/joystick.js?v=3.4_icons"></script>
+    <script src="/static/js/monitoring.js?v=3.4_icons"></script>
 </body>
 </html>
