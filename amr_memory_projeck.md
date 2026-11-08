@@ -1516,3 +1516,31 @@ Dibuat artefak lengkap [`panduan_skenario1_evaluasi_pemetaan.md`](file:///home/f
 3. Prosedur 5 run pemetaan dan panduan langkah operasional tool interaktif.
 4. Template Tabel Bab 4.1 (Evaluasi 10 Landmark) dan Tabel 4.2 (Ringkasan Kelulusan).
 5. Strategi akademis menjawab 3 pertanyaan kritis dosen penguji (Quantization Error, RMSE vs MAE, dan Transparansi Bresenham Grid).
+
+---
+
+## 44. Koreksi Dimensi Sasis Robot 40x40 cm & Desain Visual Minimalis Transparan pada Web Dashboard (08 November 2026)
+
+### A. Latar Belakang & Koreksi Geometri
+1. **Koreksi Dimensi Fisik Nyata Sasis**:
+   - Dimensi fisik aktual robot adalah **$40\text{ cm} \times 40\text{ cm}$** ($0.40\text{ m} \times 0.40\text{ m}$), bukan $20\text{ cm} \times 20\text{ cm}$.
+   - Hubungan geometris terhadap radius aman Nav2 (`robot_radius: 0.30` atau radius lingkaran $30\text{ cm}$):
+     - Setengah lebar bodi sasis: $20\text{ cm}$ ($0.20\text{ m}$).
+     - Jarak titik pusat ke pojok sasis: $\sqrt{20^2 + 20^2} \approx 28.28\text{ cm}$.
+     - Karena $28.28\text{ cm} \le 30.0\text{ cm}$, maka bodi fisik sasis $40\text{ cm} \times 40\text{ cm}$ terbukti secara presisi pas berada di dalam lingkaran batas aman tabrakan Nav2 ($30\text{ cm}$) dengan celah bebas $1.72\text{ cm}$ pada tiap sudut sasis.
+2. **Kebutuhan Visual Minimalis & Transparan**:
+   - Pengguna meminta agar garis bodi kotak tidak terlalu tebal (*clean hairline outline*).
+   - Di dalam kotak tidak perlu gradasi/fill hitam pekat agar titik pusat koordinat `(0, 0)`, *reticle crosshair*, dan piksel peta SLAM di bawahnya tetap terlihat jelas tanpa terhalang blok hitam.
+
+### B. Implementasi di [`src/amr_dashboard/static/js/map.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/map.js)
+1. **Pembaruan Dimensi Sasis (`drawRobot`)**:
+   - `boxHalf = 0.20 * ppm` (setengah lebar $20\text{ cm}$ dari total lebar $40\text{ cm}$).
+   - `bw = Math.max(3.0 * s, boxHalf)`, `bh = Math.max(3.0 * s, boxHalf)`.
+2. **Desain Garis Kotak Tipis & Transparan**:
+   - Menghapus blok isi hitam (`ctx.fill()` hitam dihilangkan, interior bodi 100% transparan).
+   - Garis tepi kotak dibuat tipis dan tajam: `ctx.lineWidth = Math.max(0.75, 1.0 * s)` dengan warna amber `#f59e0b`.
+   - Bumper depan cyan neon (`#38bdf8`) diselaraskan dengan ketebalan tipis `Math.max(0.85, 1.3 * s)`.
+3. **Visibilitas Titik Pusat Koordinat**:
+   - Reticle crosshair dan center pinpoint dot putih (`#ffffff`) berkontur gelap kini sangat kontras dan langsung terlihat tanpa terhalang warna hitam bodi.
+   - Panah directional depan disesuaikan proporsinya agar ramping dan tidak mendominasi tampilan peta.
+
