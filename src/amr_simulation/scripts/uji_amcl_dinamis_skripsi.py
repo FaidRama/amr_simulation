@@ -87,14 +87,39 @@ def normalize_angle(angle):
     return angle
 
 
-# Standar Kelulusan Evaluasi Dinamis Skripsi
-PASS_MAX_EPOS_CM = 5.0     # Maksimum galat posisi berhenti: 5 cm (sesuai xy_goal_tolerance)
-PASS_MAX_EYAW_DEG = 11.5   # Maksimum galat sudut hadap berhenti: 11.5 derajat (~0.20 rad)
+def load_nav2_tolerances():
+    """Membaca parameter toleransi kedatangan langsung dari nav2_params.yaml."""
+    candidates = [
+        os.path.join(os.path.expanduser('~'), 'Documents', 'amr_ws', 'src', 'amr_simulation', 'config', 'nav2_params.yaml'),
+        os.path.join(os.path.expanduser('~'), 'deliver_amr', 'src', 'amr_simulation', 'config', 'nav2_params.yaml'),
+    ]
+    xy_tol = 0.05
+    yaw_tol = 0.20
+    for p in candidates:
+        if os.path.exists(p):
+            try:
+                with open(p, 'r') as f:
+                    cfg = yaml.safe_load(f) or {}
+                ctrl = cfg.get('controller_server', {}).get('ros__parameters', {})
+                checker = ctrl.get('general_goal_checker', {})
+                if 'xy_goal_tolerance' in checker:
+                    xy_tol = float(checker['xy_goal_tolerance'])
+                if 'yaw_goal_tolerance' in checker:
+                    yaw_tol = float(checker['yaw_goal_tolerance'])
+                break
+            except Exception:
+                pass
+    return xy_tol, yaw_tol
 
 
 class EvaluasiAMCLDinamisNode(Node):
     def __init__(self):
         super().__init__('evaluasi_amcl_dinamis_node')
+
+        # Toleransi Kelulusan Otomatis dari nav2_params.yaml
+        xy_tol, yaw_tol = load_nav2_tolerances()
+        self.pass_max_epos_cm = xy_tol * 100.0
+        self.pass_max_eyaw_deg = math.degrees(yaw_tol)
 
         # Direktori Output CSV
         self.out_dir = os.path.expanduser('~/hasil_pengujian_skripsi')
@@ -451,15 +476,15 @@ class EvaluasiAMCLDinamisNode(Node):
         else:
             final_yaw_deg = e_yaw_amcl_deg
 
-        # Evaluasi Kelulusan
-        status_epos = "LULUS" if final_pos_cm <= PASS_MAX_EPOS_CM else "GAGAL"
-        status_eyaw = "LULUS" if final_yaw_deg <= PASS_MAX_EYAW_DEG else "GAGAL"
+        # Evaluasi Kelulusan Berdasarkan nav2_params.yaml
+        status_epos = "LULUS" if final_pos_cm <= self.pass_max_epos_cm else "GAGAL"
+        status_eyaw = "LULUS" if final_yaw_deg <= self.pass_max_eyaw_deg else "GAGAL"
         status_total = "LULUS" if (status_epos == "LULUS" and status_eyaw == "LULUS") else "TIDAK LULUS"
 
         print("=" * 78)
-        print(f"📊 HASIL EVALUASI RUN INI:")
-        print(f"  • Galat Posisi Akhir   : {final_pos_cm:.1f} cm  (Target: <= {PASS_MAX_EPOS_CM:.1f} cm) -> [{status_epos}]")
-        print(f"  • Galat Sudut Hadap    : {final_yaw_deg:.1f}°  (Target: <= {PASS_MAX_EYAW_DEG:.1f}°) -> [{status_eyaw}]")
+        print(f"📊 HASIL EVALUASI RUN INI (Acuan nav2_params.yaml):")
+        print(f"  • Galat Posisi Akhir   : {final_pos_cm:.1f} cm  (Toleransi: <= {self.pass_max_epos_cm:.1f} cm) -> [{status_epos}]")
+        print(f"  • Galat Sudut Hadap    : {final_yaw_deg:.1f}°  (Toleransi: <= {self.pass_max_eyaw_deg:.1f}°) -> [{status_eyaw}]")
         print(f"  • Sumber Ground Truth  : {source_gt}")
         print(f"  • KESIMPULAN RUN INI   : [{status_total}]")
         print("=" * 78)
@@ -535,9 +560,9 @@ class EvaluasiAMCLDinamisNode(Node):
             print(f"🏆 RATA-RATA TOTAL ({total_runs} Pengujian):")
             print(f"  • Tingkat Keberhasilan (Success Rate) : {sr:.1f}% ({success_count}/{total_runs} Sukses)")
             print(f"  • Rata-rata Waktu Tempuh Navigasi     : {avg_t:.2f} detik")
-            print(f"  • Rata-rata Galat Posisi Kedatangan   : {avg_ep:.2f} cm   (Batas Toleransi: <= {PASS_MAX_EPOS_CM} cm)")
-            print(f"  • Rata-rata Galat Sudut Hadap         : {avg_ey:.2f}°     (Batas Toleransi: <= {PASS_MAX_EYAW_DEG}°)")
-            status_akhir = "MEMENUHI SYARAT KELULUSAN SKRIPSI" if (avg_ep <= PASS_MAX_EPOS_CM and sr >= 80.0) else "PERLU PENGUJIAN TAMBAHAN"
+            print(f"  • Rata-rata Galat Posisi Kedatangan   : {avg_ep:.2f} cm   (Batas Toleransi: <= {self.pass_max_epos_cm:.1f} cm)")
+            print(f"  • Rata-rata Galat Sudut Hadap         : {avg_ey:.2f}°     (Batas Toleransi: <= {self.pass_max_eyaw_deg:.1f}°)")
+            status_akhir = "MEMENUHI SYARAT KELULUSAN SKRIPSI" if (avg_ep <= self.pass_max_epos_cm and sr >= 80.0) else "PERLU PENGUJIAN TAMBAHAN"
             print(f"  • KESIMPULAN AKHIR                     : [{status_akhir}]")
         print("=" * 90)
 
@@ -589,6 +614,7 @@ def main(args=None):
             print("🤖 BENCHMARK SKRIPSI AMR-01: SKENARIO 2 (AMCL DINAMIS & ARRIVAL ACCURACY)")
             print("=" * 75)
             print(f"  Status Monitor      : 🟢 AKTIF (Otomatis mendeteksi saat navigasi jalan)")
+            print(f"  Toleransi nav2_params: Posisi <= {node.pass_max_epos_cm:.1f} cm | Sudut <= {node.pass_max_eyaw_deg:.1f}°")
             print(f"  File Log CSV        : {node.csv_path}")
             print(f"  Total Data Rekaman  : {node.get_total_csv_rows()} pengujian")
             print("-" * 75)
