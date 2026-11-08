@@ -1488,7 +1488,7 @@ Sesuai tugas sejati AMR pengantar barang (*delivery robot*), evaluasi dialihkan 
 1. **Validasi Geometris Peta 2D SLAM vs Ground Truth Fisik (Bab 3.5.1 Proposal)**:
    - Evaluasi akurasi geometris pemetaan `slam_toolbox` dilakukan dengan membandingkan 10 segmen landmark fisik nyata di lapangan (dinding lurus, lebar koridor, jarak antar-pilar, partisi boks) terhadap dimensi terukur pada peta okupansi grid 2D (.pgm / .yaml).
    - Standar ground truth menggunakan meteran pita baja ($\pm 1\text{ mm}$).
-   - Pengujian dilakukan sebanyak 5 kali run pemetaan independen pada kecepatan jelajah seragam ($0.20\text{ m/s}$).
+   - Pengujian dilakukan sebanyak 5 kali run pemetaan independen pada kecepatan jelajah seragam nominal $0.40\text{ m/s}$ ($v = 0.40\text{ m/s}$, kecepatan sudut $\le 0.30\text{ rad/s}$ saat berbelok), selaras dengan parameter jelajah operasional nominal di `waypoints.yaml` dan Web Dashboard.
    - Kriteria kelulusan: Rata-rata $\text{RMSE} \le 0.05\text{ m}$ ($5\text{ cm}$) dan Rata-rata Galat Skala $\le 2.0\%$.
 2. **Kebutuhan Transparansi Perhitungan Piksel**:
    - Pengguna meminta agar saat memilih dua titik acuan di peta, selain garis ukur euklidean, seluruh kotak-kotak piksel grid yang dilintasi garis ukur ikut disorot (*highlight*) secara visual.
