@@ -399,7 +399,7 @@ void loop() {
       perf_R.update(rpm_R, pwm_R, t);
     }
 
-    // Cetak Baris CSV ke Serial Monitor / Script Logger Jetson
+    // Cetak Baris CSV
     Serial.print(t, 3);          Serial.print(";");
     Serial.print(setpoint_L, 2); Serial.print(";");
     Serial.print(rpm_L, 2);      Serial.print(";");
