@@ -172,6 +172,9 @@ function drawMap(canvas, ctx, options = {}) {
         ctx.scale(viewport.zoom, viewport.zoom);
     }
 
+    const zoom = (viewport && viewport.zoom) ? viewport.zoom : 1.0;
+    const invZoom = 1.0 / zoom;
+
     // Draw SLAM occupancy grid image
     ctx.drawImage(MAP_STATE.image, 0, 0, MAP_STATE.canvasWidth, Math.round(MAP_STATE.imgHeight * MAP_STATE.scale));
 
@@ -182,14 +185,14 @@ function drawMap(canvas, ctx, options = {}) {
     // Draw Home / Docking Station marker
     if (showWaypoints && APP.homePosition) {
         const hPos = worldToPixel(APP.homePosition.x || 0, APP.homePosition.y || 0);
-        drawHomeMarker(ctx, hPos.px, hPos.py);
+        drawHomeMarker(ctx, hPos.px, hPos.py, zoom);
     }
 
     // Draw predefined waypoints
     if (showWaypoints && APP.savedPoints) {
         APP.savedPoints.forEach(p => {
             const { px, py } = worldToPixel(p.x, p.y);
-            drawWaypointMarker(ctx, px, py, p.type, p.name);
+            drawWaypointMarker(ctx, px, py, p.type, p.name, zoom);
         });
     }
 
@@ -201,16 +204,16 @@ function drawMap(canvas, ctx, options = {}) {
 
             // Vector route line between pickup and delivery
             ctx.beginPath();
-            ctx.setLineDash([5, 4]);
+            ctx.setLineDash([5 * invZoom, 4 * invZoom]);
             ctx.strokeStyle = 'rgba(59, 130, 246, 0.65)';
-            ctx.lineWidth = 1.5;
+            ctx.lineWidth = Math.max(1.0, 1.5 * invZoom);
             ctx.moveTo(pickup.px, pickup.py);
             ctx.lineTo(delivery.px, delivery.py);
             ctx.stroke();
             ctx.setLineDash([]);
 
-            drawTaskMarker(ctx, pickup.px, pickup.py, 'pickup', i + 1);
-            drawTaskMarker(ctx, delivery.px, delivery.py, 'delivery', i + 1);
+            drawTaskMarker(ctx, pickup.px, pickup.py, 'pickup', i + 1, zoom);
+            drawTaskMarker(ctx, delivery.px, delivery.py, 'delivery', i + 1, zoom);
         });
     }
 
@@ -231,7 +234,7 @@ function drawMap(canvas, ctx, options = {}) {
                 prevPt = pt;
             });
             ctx.strokeStyle = 'rgba(16, 185, 129, 0.75)';
-            ctx.lineWidth = 2;
+            ctx.lineWidth = Math.max(1.0, 2.0 * invZoom);
             ctx.stroke();
             ctx.restore();
         }
@@ -247,8 +250,8 @@ function drawMap(canvas, ctx, options = {}) {
             else ctx.lineTo(px, py);
         });
         ctx.strokeStyle = '#06b6d4'; // Cyan neon navigation path
-        ctx.lineWidth = 2.5;
-        ctx.setLineDash([5, 3]);
+        ctx.lineWidth = Math.max(1.2, 2.2 * invZoom);
+        ctx.setLineDash([5 * invZoom, 3 * invZoom]);
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.restore();
@@ -257,70 +260,111 @@ function drawMap(canvas, ctx, options = {}) {
     // Draw robot position & orientation
     if (showRobot) {
         const { px, py } = worldToPixel(APP.pose.x, APP.pose.y);
-        drawRobot(ctx, px, py, APP.pose.yaw);
+        drawRobot(ctx, px, py, APP.pose.yaw, zoom);
     }
 
     ctx.restore();
 }
 
-function drawHomeMarker(ctx, x, y) {
-    const r = 6;
+function drawHomeMarker(ctx, x, y, zoom = 1.0) {
+    const s = 1.0 / (zoom || 1.0);
+    const r = 5.5 * s;
+
+    // Outer subtle halo
     ctx.beginPath();
-    ctx.arc(x, y, r + 3, 0, Math.PI * 2);
+    ctx.arc(x, y, r + 3 * s, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(168, 85, 247, 0.22)';
     ctx.fill();
 
+    // Core circle
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fillStyle = '#a855f7';
     ctx.fill();
     ctx.strokeStyle = '#09090b';
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = Math.max(0.8, 1.2 * s);
     ctx.stroke();
 
-    ctx.font = '700 8px "JetBrains Mono", monospace';
+    // Micro reticle ticks at center
+    const ch = 2.2 * s;
+    ctx.beginPath();
+    ctx.moveTo(x - ch, y);
+    ctx.lineTo(x + ch, y);
+    ctx.moveTo(x, y - ch);
+    ctx.lineTo(x, y + ch);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
+    ctx.lineWidth = Math.max(0.6, 0.8 * s);
+    ctx.stroke();
+
+    // Center pinpoint dot
+    ctx.beginPath();
+    ctx.arc(x, y, 1.2 * s, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+
+    // Monospace 'H' icon badge
+    ctx.font = `700 ${8 * s}px "JetBrains Mono", monospace`;
     ctx.fillStyle = '#fff';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('H', x, y);
+    ctx.fillText('H', x, y - 0.5 * s);
     ctx.textBaseline = 'alphabetic';
 }
 
-function drawWaypointMarker(ctx, x, y, type, label) {
+function drawWaypointMarker(ctx, x, y, type, label, zoom = 1.0) {
+    const s = 1.0 / (zoom || 1.0);
     const color = type === 'pickup' ? '#3b82f6' : '#10b981';
-    const radius = 5;
+    const radius = 5 * s;
 
-    // Outer technical halo
+    // Outer subtle technical halo
     ctx.beginPath();
-    ctx.arc(x, y, radius + 4, 0, Math.PI * 2);
+    ctx.arc(x, y, radius + 3 * s, 0, Math.PI * 2);
     ctx.fillStyle = type === 'pickup'
-        ? 'rgba(59, 130, 246, 0.2)'
-        : 'rgba(16, 185, 129, 0.2)';
+        ? 'rgba(59, 130, 246, 0.22)'
+        : 'rgba(16, 185, 129, 0.22)';
     ctx.fill();
 
-    // Crisp center dot
+    // Crisp marker base circle
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
     ctx.fillStyle = color;
     ctx.fill();
     ctx.strokeStyle = '#09090b';
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = Math.max(0.8, 1.2 * s);
     ctx.stroke();
 
-    // Monospace pill label
-    if (label) {
-        ctx.font = '600 9px "JetBrains Mono", monospace';
-        const textWidth = ctx.measureText(label).width;
-        const padX = 4;
-        const boxW = textWidth + padX * 2;
-        const boxH = 13;
-        const boxX = x - boxW / 2;
-        const boxY = y - radius - boxH - 4;
+    // Precision micro crosshairs (pinpoint titik pasti koordinat)
+    const ch = 2.5 * s;
+    ctx.beginPath();
+    ctx.moveTo(x - ch, y);
+    ctx.lineTo(x + ch, y);
+    ctx.moveTo(x, y - ch);
+    ctx.lineTo(x, y + ch);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.lineWidth = Math.max(0.6, 0.8 * s);
+    ctx.stroke();
 
-        ctx.fillStyle = 'rgba(9, 9, 11, 0.85)';
+    // Exact center pinpoint dot
+    ctx.beginPath();
+    ctx.arc(x, y, 1.3 * s, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+
+    // Monospace pill label (tetap proporsional dan rapi di layar saat zoom)
+    if (label) {
+        const fontSize = 9 * s;
+        ctx.font = `600 ${fontSize}px "JetBrains Mono", monospace`;
+        const textWidth = ctx.measureText(label).width;
+        const padX = 4 * s;
+        const boxW = textWidth + padX * 2;
+        const boxH = 13 * s;
+        const boxX = x - boxW / 2;
+        const boxY = y - radius - boxH - 3 * s;
+
+        ctx.fillStyle = 'rgba(9, 9, 11, 0.88)';
         ctx.fillRect(boxX, boxY, boxW, boxH);
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+        ctx.lineWidth = Math.max(0.6, 0.8 * s);
         ctx.strokeRect(boxX, boxY, boxW, boxH);
 
         ctx.fillStyle = '#f4f4f5';
@@ -331,63 +375,126 @@ function drawWaypointMarker(ctx, x, y, type, label) {
     }
 }
 
-function drawTaskMarker(ctx, x, y, type, number) {
+function drawTaskMarker(ctx, x, y, type, number, zoom = 1.0) {
+    const s = 1.0 / (zoom || 1.0);
     const color = type === 'pickup' ? '#3b82f6' : '#10b981';
-    const radius = 9;
+    const radius = 7.5 * s;
 
+    // Outer halo
+    ctx.beginPath();
+    ctx.arc(x, y, radius + 2.5 * s, 0, Math.PI * 2);
+    ctx.fillStyle = type === 'pickup'
+        ? 'rgba(59, 130, 246, 0.22)'
+        : 'rgba(16, 185, 129, 0.22)';
+    ctx.fill();
+
+    // Core circle
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
     ctx.fillStyle = color;
     ctx.fill();
     ctx.strokeStyle = '#09090b';
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = Math.max(0.8, 1.2 * s);
     ctx.stroke();
 
-    ctx.font = '700 9px "JetBrains Mono", monospace';
+    // Precision center dot
+    ctx.beginPath();
+    ctx.arc(x, y, 1.2 * s, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+
+    // Number text
+    ctx.font = `700 ${8 * s}px "JetBrains Mono", monospace`;
     ctx.fillStyle = '#fff';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(number, x, y);
 
-    ctx.font = '700 7px "JetBrains Mono", monospace';
+    // Subtitle label PKP / DLV
+    ctx.font = `700 ${6.5 * s}px "JetBrains Mono", monospace`;
     ctx.fillStyle = color;
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText(type === 'pickup' ? 'PKP' : 'DLV', x, y + radius + 9);
+    ctx.fillText(type === 'pickup' ? 'PKP' : 'DLV', x, y + radius + 7 * s);
 }
 
-function drawRobot(ctx, x, y, yaw) {
-    const size = 8;
+function drawRobot(ctx, x, y, yaw, zoom = 1.0, customScale = null, overrideRadius = null) {
+    const s = 1.0 / (zoom || 1.0);
+
+    // Hitung radius fisik sasis robot (0.29m radius = 0.58m diameter fisik nyata)
+    let physicalRadius;
+    if (overrideRadius !== null) {
+        physicalRadius = overrideRadius;
+    } else {
+        const res = (MAP_STATE.metadata && MAP_STATE.metadata.resolution) ? MAP_STATE.metadata.resolution : 0.05;
+        const scale = (customScale !== null) ? customScale : (MAP_STATE.scale || 1.0);
+        physicalRadius = (0.29 / res) * scale;
+    }
+
+    // Radius lingkaran sasis robot: proporsional dengan skala peta fisik (0.29m)
+    // Diberi batas bawah 3.5 * s agar tetap tampak jika di-zoom out sangat jauh
+    const r = Math.max(3.5 * s, physicalRadius);
 
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(-yaw);
 
-    // Heading ray line
+    // 1. Lingkaran Fisik Sasis Robot (Ukuran Nyata 0.29m terhadap lingkungan peta)
     ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(size * 2.4, 0);
-    ctx.strokeStyle = 'rgba(245, 158, 11, 0.65)';
-    ctx.lineWidth = 1.5;
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(245, 158, 11, 0.18)';
+    ctx.fill();
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = Math.max(0.8, 1.4 * s);
     ctx.stroke();
 
-    // Outer radar ring
+    // 2. Precision Micro Crosshair & Center Dot di (0,0) — Titik Pasti Koordinat Nyata Robot
+    const crosshairLen = Math.min(r * 0.45, 4.0 * s);
     ctx.beginPath();
-    ctx.arc(0, 0, size + 5, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(245, 158, 11, 0.4)';
-    ctx.lineWidth = 1.5;
+    ctx.moveTo(-crosshairLen, 0);
+    ctx.lineTo(crosshairLen, 0);
+    ctx.moveTo(0, -crosshairLen);
+    ctx.lineTo(0, crosshairLen);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
+    ctx.lineWidth = Math.max(0.6, 0.8 * s);
     ctx.stroke();
 
-    // Robot directional chevron/triangle
+    // Center pinpoint dot (putih terang dengan kontras border gelap)
+    const dotR = Math.min(1.6 * s, r * 0.18);
     ctx.beginPath();
-    ctx.moveTo(size * 1.45, 0);
-    ctx.lineTo(-size * 0.9, -size * 0.85);
-    ctx.lineTo(-size * 0.5, 0);
-    ctx.lineTo(-size * 0.9, size * 0.85);
+    ctx.arc(0, 0, Math.max(1.0 * s, dotR), 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = '#09090b';
+    ctx.lineWidth = Math.max(0.6, 0.8 * s);
+    ctx.stroke();
+
+    // 3. Panah Arah Hadap Kompak (Sleek Directional Arrowhead di Depan Titik Pusat)
+    // Berada di tengah-ke-depan lingkaran, TIDAK menutupi titik pusat (0,0), dan TIDAK membesar memenuhi lingkaran saat di-zoom
+    const arrowStart = Math.max(2.2 * s, r * 0.22);
+    const arrowLen = Math.min(r * 0.55, 7.5 * s);
+    const arrowTip = arrowStart + arrowLen;
+    const arrowHalfW = Math.min(r * 0.28, 3.5 * s);
+
+    ctx.beginPath();
+    ctx.moveTo(arrowTip, 0);
+    ctx.lineTo(arrowStart, -arrowHalfW);
+    ctx.lineTo(arrowStart + arrowLen * 0.28, 0); // Lekukan aerodinamis belakang
+    ctx.lineTo(arrowStart, arrowHalfW);
     ctx.closePath();
     ctx.fillStyle = '#f59e0b';
     ctx.fill();
     ctx.strokeStyle = '#09090b';
-    ctx.lineWidth = 1.2;
+    ctx.lineWidth = Math.max(0.6, 0.8 * s);
+    ctx.stroke();
+
+    // 4. Hairline Heading Ray ke depan batas sasis
+    const rayStart = r;
+    const rayEnd = r + Math.min(r * 0.35, 6.0 * s);
+    ctx.beginPath();
+    ctx.moveTo(rayStart, 0);
+    ctx.lineTo(rayEnd, 0);
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.85)';
+    ctx.lineWidth = Math.max(0.8, 1.2 * s);
     ctx.stroke();
 
     ctx.restore();
@@ -962,7 +1069,7 @@ function drawLiveSlamMap(canvas, ctx) {
 
         // Draw Live Robot Pose & Heading
         const robotPt = toSlamPixel(APP.pose.x || 0, APP.pose.y || 0);
-        drawRobot(ctx, robotPt.px, robotPt.py, APP.pose.yaw || 0);
+        drawRobot(ctx, robotPt.px, robotPt.py, APP.pose.yaw || 0, 1.0, fitScale);
         return;
     }
 
@@ -1024,7 +1131,7 @@ function drawLiveSlamMap(canvas, ctx) {
 
     // Draw Robot on Standby Grid
     const rPt = toStandbyPixel(APP.pose.x || 0, APP.pose.y || 0);
-    drawRobot(ctx, rPt.px, rPt.py, APP.pose.yaw || 0);
+    drawRobot(ctx, rPt.px, rPt.py, APP.pose.yaw || 0, 1.0, null, 0.29 * ppm);
 
     // Info banner at top of canvas
     ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';

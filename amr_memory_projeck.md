@@ -1335,3 +1335,39 @@ Memvalidasi keandalan integrasi subsistem navigasi otonom Nav2 saat menghadapi r
    - **Hapus `Oscillation` dari daftar `critics`**: Menghilangkan *false positive* pembatalan rotasi di tempat.
    - **`max_vel_theta: 0.80`** (Sebelumnya: `0.60`) & **`min_speed_theta: 0.28`** (Sebelumnya: `0.20`): Memberikan torsi putar awal yang tegas untuk memecahkan gesekan ban di lantai.
    - **`acc_lim_theta: 2.5`** & **`decel_lim_theta: -2.0`**: Manuver putar lebih responsif dan gesit.
+
+---
+
+## 39. Refaktorisasi Visualisasi Peta 2D Canvas: Dynamic Zoom Scaling, Physical Robot Footprint & Precision Center Reticle (08 November 2026)
+
+### A. Masalah & Kebutuhan Pengguna
+1. **Marker dan Label Menggelembung Saat Zoom-In**:
+   - Sebelumnya, saat operator melakukan zoom-in (misal 2.5x hingga 6.0x) pada peta pengiriman (`delivery-map-canvas`), fungsi `drawMap` menerapkan `ctx.scale(viewport.zoom, viewport.zoom)`.
+   - Akibatnya, seluruh elemen overlay vektor seperti pin waypoint (`drawWaypointMarker`), stasiun home (`drawHomeMarker`), antrean tugas (`drawTaskMarker`), serta label teks nama meja membesar berlipat ganda menutupi koridor, dinding, dan rintangan peta.
+   - Operator kesulitan melihat posisi presisi titik koordinat karena tertutup lingkaran dan boks label yang terlalu besar.
+2. **Representasi Visual Robot Tidak Sesuai Fisik & Menutupi Titik Pusat**:
+   - Gambar robot sebelumnya menggunakan segitiga/chevron statis (`size = 8`, jangkauan `1.45 * size = 11.6px`) yang membesar masif saat di-zoom.
+   - Chevron tersebut memotong dan menutupi tepat di titik tengah `(0, 0)`, sehingga operator tidak dapat mengetahui letak pasti titik koordinat $(X, Y)$ robot dan harus terus "menebak-nebak".
+   - Lingkaran robot tidak merefleksikan radius fisik sasis nyata robot (0.29 meter).
+
+### B. Solusi & Perubahan Kode di [`src/amr_dashboard/static/js/map.js`](file:///home/faid/Documents/amr_ws/src/amr_dashboard/static/js/map.js)
+1. **Skala Invers Zoom (`s = 1.0 / zoom`) untuk Marker & UI Overlays**:
+   - Seluruh dimensi pin, radius lingkaran, padding label, ketebalan border (`lineWidth`), dan ukuran font teks dikalikan dengan `s = 1.0 / zoom`.
+   - Hasilnya, saat operator melakukan zoom-in hingga 600%, ukuran visual marker dan label di layar monitor tetap konstan, tajam, kompak, dan proporsional (font tetap setara 9px, pin tetap ~10px diameter), tanpa pernah menutupi koridor peta.
+   - Ketebalan garis rute tugas (`taskQueue`), jejak robot (`robotTrail`), dan lintasan terencana Nav2 (`/plan`) diskalakan dengan `invZoom` agar tidak berubah menjadi balok tebal.
+2. **Titik Pusat Presisi (Precision Reticle & Pinpoint Dot)**:
+   - Menambahkan titik pinpoint putih berkontras gelap (`#ffffff` border `#09090b`) di koordinat exact `(x, y)` pada semua marker waypoint, stasiun Home, dan antrean tugas.
+   - Menambahkan micro-crosshairs (garis bidik 4 arah) di sekeliling titik tengah agar operator dapat memverifikasi sel grid map secara presisi hingga tingkat pixel/centimeter.
+3. **Lingkaran Sasis Robot Sesuai Ukuran Fisik Nyata (0.29 Meter)**:
+   - Dihitung langsung dari metadata resolusi peta SLAM: `physicalRadius = (0.29 / resolution) * scale`.
+   - Diberikan batas proteksi `Math.max(3.5 * s, physicalRadius)` agar tetap terlihat jelas saat zoom-out jauh.
+   - Lingkaran sasis diberi warna semi-transparan amber `rgba(245, 158, 11, 0.18)` dengan outline tegas `#f59e0b`, merepresentasikan ruang fisik yang ditempati robot di lorong gudang/restoran.
+4. **Panah Arah Hadap Kompak & Reticle Tengah Robot**:
+   - **Pusat Robot (0,0)**: Dilengkapi dengan micro-crosshair `(-crosshairLen, 0)` & `(0, -crosshairLen)` serta titik pinpoint putih di `(0,0)` (posisi `base_footprint`).
+   - **Panah Hadap**: Mengganti chevron raksasa dengan directional arrowhead ramping aerodinamis yang diposisikan di depan titik pusat (`arrowStart = Math.max(2.2 * s, r * 0.22)` ke `arrowTip = arrowStart + arrowLen`).
+   - Panah tidak menyentuh atau menutupi titik pusat `(0, 0)`, dan ukurannya dibatasi oleh faktor zoom sehingga tidak pernah membesar memenuhi lingkaran robot saat di-zoom.
+   - Ditambahkan hairline heading ray dari bibir depan sasis (`r` ke `r + 6*s`) sebagai panduan visual hadap robot yang jelas dari kejauhan.
+5. **Dukungan Penuh untuk SLAM View & Standby Grid**:
+   - `drawLiveSlamMap`: Mengirimkan `fitScale` ke `drawRobot` sehingga ukuran sasis robot proporsional dengan skala kanvas SLAM.
+   - Standby Radar Grid: Mengirimkan `overrideRadius = 0.29 * ppm` (di mana `ppm = 40px/m`) sehingga ukuran sasis di radar standby tepat 0.29m (11.6px radius).
+
