@@ -1480,4 +1480,39 @@ Sesuai tugas sejati AMR pengantar barang (*delivery robot*), evaluasi dialihkan 
 3. **Pembaruan Panduan SOP**:
    - Artifact [`panduan_skenario2_evaluasi_amcl.md`](file:///home/faid/.gemini/antigravity/brain/a3af2b69-fd73-41ee-8f16-8f2155ff7489/panduan_skenario2_evaluasi_amcl.md) diperbarui menyeluruh memuat SOP navigasi dinamis, panduan penandaan lakban lantai, template tabel Bab 4, dan strategi menjawab pertanyaan dosen penguji.
 
+---
 
+## 43. Penyempurnaan Skenario 1 Skripsi: Evaluasi Akurasi Geometris Pemetaan 2D SLAM Toolbox & Visualisasi Kotak Grid Bresenham 2D (08 November 2026)
+
+### A. Latar Belakang & Kebutuhan Akademis
+1. **Validasi Geometris Peta 2D SLAM vs Ground Truth Fisik (Bab 3.5.1 Proposal)**:
+   - Evaluasi akurasi geometris pemetaan `slam_toolbox` dilakukan dengan membandingkan 10 segmen landmark fisik nyata di lapangan (dinding lurus, lebar koridor, jarak antar-pilar, partisi boks) terhadap dimensi terukur pada peta okupansi grid 2D (.pgm / .yaml).
+   - Standar ground truth menggunakan meteran pita baja ($\pm 1\text{ mm}$).
+   - Pengujian dilakukan sebanyak 5 kali run pemetaan independen pada kecepatan jelajah seragam ($0.20\text{ m/s}$).
+   - Kriteria kelulusan: Rata-rata $\text{RMSE} \le 0.05\text{ m}$ ($5\text{ cm}$) dan Rata-rata Galat Skala $\le 2.0\%$.
+2. **Kebutuhan Transparansi Perhitungan Piksel**:
+   - Pengguna meminta agar saat memilih dua titik acuan di peta, selain garis ukur euklidean, seluruh kotak-kotak piksel grid yang dilintasi garis ukur ikut disorot (*highlight*) secara visual.
+   - Hal ini membuktikan secara transparan dan meyakinkan bahwa perhitungan jarak berasal murni dari perkalian jumlah piksel grid citra dengan resolusi grid $0.05\text{ m/pixel}$, bukan manipulasi angka koordinat.
+
+### B. Pembaruan Skrip Evaluasi Interaktif ([`ukur_peta_skripsi.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/ukur_peta_skripsi.py))
+1. **Algoritma Bresenham 2D Ray-Tracing & Highlight Kotak Piksel**:
+   - Mengimplementasikan fungsi `bresenham_cells(x0, y0, x1, y1)` yang identik dengan standar ray-tracing sel okupansi pada `nav2_costmap_2d`.
+   - Menyorot setiap sel piksel diskrit yang dilintasi garis ukur menggunakan `PatchCollection` dengan warna cyan transparan (`#00e5ff`, alpha 0.45) dan garis tepi presisi (`#0288d1`, linewidth 0.75).
+   - Kotak sel titik awal disorot warna oranye (`#ff9800`) dan titik akhir disorot hijau terang (`#76ff03`).
+   - Label grafis interaktif menampilkan: `#{idx} ({N} sel | {dist_m:.3f}m)`.
+2. **Scroll-to-Zoom Interaktif**:
+   - Mengimplementasikan `on_scroll` callback yang memusatkan perbesaran (zoom in/out) tepat pada posisi kursor mouse tanpa perlu mengubah mode toolbar Matplotlib.
+   - Tombol `R` untuk reset zoom ke ukuran penuh.
+3. **Preset Ground Truth Caching (Dukungan Multi-Run)**:
+   - Menyimpan nama landmark dan dimensi nyata meteran ke template cache (`ground_truth_landmarks_template.json`).
+   - Pada Run 2 sampai 5, pengguna cukup menekan `[ENTER]` untuk mengonfirmasi nama dan ukuran nyata yang sama, mempercepat proses evaluasi 5 run.
+4. **Modul Rekapitulasi Statistik Gabungan 5 Run**:
+   - Menambahkan menu dan flag CLI `--rekap` untuk memindai seluruh file CSV Run 1 s.d. 5, menghitung grand mean RMSE, grand mean galat skala, dan menghasilkan tabel komparasi gabungan siap pakai untuk Bab 4 Skripsi.
+
+### C. Artefak Panduan SOP Skenario 1
+Dibuat artefak lengkap [`panduan_skenario1_evaluasi_pemetaan.md`](file:///home/faid/.gemini/antigravity/brain/a3af2b69-fd73-41ee-8f16-8f2155ff7489/panduan_skenario1_evaluasi_pemetaan.md) yang memuat:
+1. Denah dan spesifikasi 10 segmen landmark acuan fisik di area uji.
+2. Formulasi metrik evaluasi (RMSE, Scale Error, Mean Absolute Error) dan kriteria kelulusan.
+3. Prosedur 5 run pemetaan dan panduan langkah operasional tool interaktif.
+4. Template Tabel Bab 4.1 (Evaluasi 10 Landmark) dan Tabel 4.2 (Ringkasan Kelulusan).
+5. Strategi akademis menjawab 3 pertanyaan kritis dosen penguji (Quantization Error, RMSE vs MAE, dan Transparansi Bresenham Grid).
