@@ -108,7 +108,7 @@ controller_server:
     general_goal_checker:
       stateful: False
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.05
+      xy_goal_tolerance: 0.10
       yaw_goal_tolerance: 0.20
     # DWB parameters
     FollowPath:
@@ -143,8 +143,8 @@ controller_server:
         ["RotateToGoal", "BaseObstacle", "PathAlign", "PathDist", "GoalDist"]
 
       BaseObstacle.scale: 0.05
-      PathAlign.scale: 4.0
-      PathAlign.forward_point_distance: 0.20
+      PathAlign.scale: 1.0
+      PathAlign.forward_point_distance: 0.10
       PathDist.scale: 24.0
       GoalDist.scale: 20.0
       RotateToGoal.scale: 32.0
