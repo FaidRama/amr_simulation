@@ -7,7 +7,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, Command
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from nav2_common.launch import RewrittenYaml
 
@@ -15,13 +15,11 @@ from nav2_common.launch import RewrittenYaml
 def generate_launch_description():
     # 1. Direktori paket
     pkg_amr_simulation = get_package_share_directory('amr_simulation')
-    pkg_description = get_package_share_directory('Delivery_AMR_description')
 
     # 2. File default
     default_map = os.path.join(pkg_amr_simulation, 'maps', 'peta_l1_dc.yaml')
     default_params = os.path.join(pkg_amr_simulation, 'config', 'astar_params.yaml')
     default_rviz = os.path.join(pkg_amr_simulation, 'rviz', 'astar_test.rviz')
-    xacro_path = os.path.join(pkg_description, 'urdf', 'Delivery_AMR.xacro')
 
     # 3. Deklarasi Argumen Launch
     map_arg = DeclareLaunchArgument(
@@ -123,28 +121,7 @@ def generate_launch_description():
         }]
     )
 
-    # 7. Model Robot (Robot State Publisher agar model 3D Delivery_AMR muncul di RViz2)
-    robot_desc = Command(['xacro ', xacro_path])
-    node_robot_state_publisher = Node(
-        package='robot_state_publisher',
-        executable='robot_state_publisher',
-        name='robot_state_publisher',
-        output='screen',
-        parameters=[{
-            'robot_description': robot_desc,
-            'use_sim_time': use_sim_time
-        }]
-    )
-
-    node_joint_state_publisher = Node(
-        package='joint_state_publisher',
-        executable='joint_state_publisher',
-        name='joint_state_publisher',
-        output='screen',
-        parameters=[{'use_sim_time': use_sim_time}]
-    )
-
-    # 8. Node 4: A* Benchmark & Tester Node (Penyadap goal, pemanggil action, & penghitung metrik)
+    # 7. Node 4: A* Benchmark & Tester Node (Penyadap goal, pemanggil action, & penghitung metrik)
     node_astar_benchmark = Node(
         package='amr_simulation',
         executable='astar_benchmark.py',
@@ -160,7 +137,7 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('interactive'))
     )
 
-    # 9. Visualisasi RViz2
+    # 8. Visualisasi RViz2 (Opsional, hanya jika rviz:=true)
     node_rviz = Node(
         package='rviz2',
         executable='rviz2',
@@ -189,8 +166,6 @@ def generate_launch_description():
         node_map_server,
         node_planner_server,
         node_lifecycle_manager,
-        node_robot_state_publisher,
-        node_joint_state_publisher,
         node_astar_benchmark,
         node_rviz
     ])
