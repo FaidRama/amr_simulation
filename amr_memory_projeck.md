@@ -1752,3 +1752,28 @@ Pada uji navigasi di area fisik:
      ```bash
      ros2 run amr_simulation uji_astar_dijkstra_skripsi.py --all --reps 5
      ```
+
+---
+
+### PART 50: ROOT CAUSE ANALYSIS & PERBAIKAN PERMANEN TF CONFLICT PADA EVALUASI GLOBAL PLANNER (SG-07)
+
+1. **Gejala & Fenomena di SG-07**:
+   - Pada pengujian `SG-07` ($(-34.0, 2.0) \to (-35.0, 7.0)$, jarak euklidean $5.10\text{ m}$):
+     - **A\***: Rep 1, 3, 5 `No Path Found` ($0.0\text{ m}$), sedangkan Rep 2 dan 4 `SUKSES` ($9.31\text{ m}$).
+     - **Dijkstra**: Rep 2 `SUKSES` ($9.20\text{ m}$), namun Rep 1, 3, 4, 5 `SUKSES` dengan panjang anomali **$43.35\text{ m}$**!
+2. **Akar Masalah (Root Cause)**:
+   - **Konflik TF Ganda (*Multiple TF Broadcaster Authority*)**:
+     - Launch file `test_astar.launch.py` menyalakan node `astar_benchmark.py` yang secara default mem-broadcast TF virtual `map -> odom -> base_footprint` pada posisi origin $(0.0, 0.0)$ secara terus-menerus pada frekuensi **30 Hz**.
+     - Di saat yang sama, skrip evaluasi otomatis `uji_astar_dijkstra_skripsi.py` hanya mem-broadcast koordinat start $(-34.0, 2.0)$ sebanyak **5 frame sesaat (burst)** lalu berhenti.
+     - Akibatnya, `planner_server` Nav2 mengalami lonjakan TF (*jitter*). Ketika transform dari `astar_benchmark.py` masuk, posisi robot terbaca di $(0.0, 0.0)$!
+     - Jarak rute koridor dari $(0.0, 0.0)$ ke $(-35.0, 7.0)$ adalah tepat **$43.35\text{ m}$** (sehingga Dijkstra merencanakan rute keliling gedung).
+     - Sedangkan algoritma A\* mengalami kegagalan kalkulasi (`No Path Found`) karena terjadi diskontinuitas TF / start pose yang melompat puluhan meter saat pencarian simpul berlangsung.
+     - Hanya pada Rep 2 dan 4 kebetulan TF sempat terbaca pada $(-34.0, 2.0)$ sehingga rute asli sepanjang $9.20 - 9.31\text{ m}$ berhasil terbentuk.
+3. **Solusi & Perbaikan Komprehensif**:
+   - **Eliminasi Node Konflik di Launch File** ([`src/amr_simulation/launch/test_astar.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/test_astar.launch.py)):
+     - Parameter `publish_tf` pada `astar_benchmark` diubah default-nya menjadi `false`.
+     - Ditambahkan kondisi `condition=IfCondition(LaunchConfiguration('interactive'))` (default: `false`), sehingga `astar_benchmark.py` **tidak dijalankan** saat peluncuran backend Nav2 standar, menghindari 100% interferensi TF.
+   - **Continuous 50 Hz TF Broadcaster** ([`src/amr_simulation/scripts/uji_astar_dijkstra_skripsi.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/uji_astar_dijkstra_skripsi.py)):
+     - Dibuat timer background 50 Hz (`create_timer(0.02, self.broadcast_virtual_tf)`) yang aktif memancarkan TF start pose robot secara berkesinambungan selama action request dan kalkulasi rute berlangsung.
+     - Orientasi yaw robot otomatis diselaraskan menghadap titik target (`math.atan2(gy - sy, gx - sx)`).
+

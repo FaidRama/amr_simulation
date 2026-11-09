@@ -51,8 +51,13 @@ def generate_launch_description():
     )
     publish_tf_arg = DeclareLaunchArgument(
         'publish_tf',
-        default_value='true',
-        description='Broadcast TF virtual map->base_footprint. Set false jika Gazebo/AMCL aktif.'
+        default_value='false',
+        description='Broadcast TF virtual map->base_footprint dari astar_benchmark. Set false agar tidak konflik dengan uji_astar_dijkstra_skripsi.'
+    )
+    interactive_arg = DeclareLaunchArgument(
+        'interactive',
+        default_value='false',
+        description='Jalankan node interaktif astar_benchmark.py untuk klik manual di RViz2'
     )
     start_x_arg = DeclareLaunchArgument('start_x', default_value='0.0', description='Titik X awal robot')
     start_y_arg = DeclareLaunchArgument('start_y', default_value='0.0', description='Titik Y awal robot')
@@ -151,7 +156,8 @@ def generate_launch_description():
             'default_start_x': start_x,
             'default_start_y': start_y,
             'default_start_yaw': start_yaw
-        }]
+        }],
+        condition=IfCondition(LaunchConfiguration('interactive'))
     )
 
     # 9. Visualisasi RViz2
@@ -175,6 +181,7 @@ def generate_launch_description():
         autostart_arg,
         rviz_arg,
         publish_tf_arg,
+        interactive_arg,
         start_x_arg,
         start_y_arg,
         start_yaw_arg,

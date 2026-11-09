@@ -160,7 +160,12 @@ class UjiAstarDijkstraNode(Node):
     def __init__(self):
         super().__init__('uji_astar_dijkstra_node')
 
+        # TF Broadcaster & Continuous Timer (50 Hz)
         self.tf_broadcaster = TransformBroadcaster(self)
+        self.current_start_x = 0.0
+        self.current_start_y = 0.0
+        self.current_start_yaw = 0.0
+        self.tf_timer = self.create_timer(0.02, self.broadcast_virtual_tf)
 
         # Action Client ComputePathToPose (Nav2 planner_server)
         self.action_client = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
@@ -233,8 +238,8 @@ class UjiAstarDijkstraNode(Node):
             return len(res.results) > 0 and res.results[0].successful
         return False
 
-    def broadcast_virtual_tf(self, x, y, yaw=0.0):
-        """Broadcast transform map -> odom -> base_footprint untuk titik start yang diuji."""
+    def broadcast_virtual_tf(self):
+        """Broadcast transform map -> odom -> base_footprint secara kontinu (50 Hz)."""
         now = self.get_clock().now().to_msg()
 
         t_map_odom = TransformStamped()
@@ -247,10 +252,10 @@ class UjiAstarDijkstraNode(Node):
         t_odom_base.header.stamp = now
         t_odom_base.header.frame_id = 'odom'
         t_odom_base.child_frame_id = 'base_footprint'
-        t_odom_base.transform.translation.x = float(x)
-        t_odom_base.transform.translation.y = float(y)
+        t_odom_base.transform.translation.x = float(self.current_start_x)
+        t_odom_base.transform.translation.y = float(self.current_start_y)
         t_odom_base.transform.translation.z = 0.0
-        t_odom_base.transform.rotation = quaternion_from_euler(0.0, 0.0, float(yaw))
+        t_odom_base.transform.rotation = quaternion_from_euler(0.0, 0.0, float(self.current_start_yaw))
 
         self.tf_broadcaster.sendTransform([t_map_odom, t_odom_base])
 
@@ -385,9 +390,15 @@ class UjiAstarDijkstraNode(Node):
         sx, sy = start_pt
         gx, gy = goal_pt
 
-        # Broadcast TF posisi start
+        # Hitung heading robot menghadap goal
+        yaw = math.atan2(gy - sy, gx - sx)
+        self.current_start_x = float(sx)
+        self.current_start_y = float(sy)
+        self.current_start_yaw = float(yaw)
+
+        # Broadcast langsung beberapa frame awal dan beri jeda stabilisasi TF di planner_server
         for _ in range(5):
-            self.broadcast_virtual_tf(sx, sy)
+            self.broadcast_virtual_tf()
             time.sleep(0.01)
 
         self.publish_visual_markers(sx, sy, gx, gy, pair_id, algo_name)
@@ -398,7 +409,7 @@ class UjiAstarDijkstraNode(Node):
         goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
         goal_msg.pose.pose.position.x = float(gx)
         goal_msg.pose.pose.position.y = float(gy)
-        goal_msg.pose.pose.orientation = quaternion_from_euler(0.0, 0.0, 0.0)
+        goal_msg.pose.pose.orientation = quaternion_from_euler(0.0, 0.0, float(yaw))
 
         # Tentukan planner_id (GridBased / Dijkstra)
         goal_msg.planner_id = planner_id
