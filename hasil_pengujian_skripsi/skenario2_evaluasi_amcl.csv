@@ -1,0 +1,2 @@
+No,Datum_ID,Nama_Datum,Mode_Uji,Run_Ke,GT_X_m,GT_Y_m,GT_Yaw_deg,AMCL_X_m,AMCL_Y_m,AMCL_Yaw_deg,Waktu_Konvergensi_s,Galat_Posisi_m,Galat_Posisi_cm,Galat_Orientasi_deg,Status_TConv,Status_EPos,Status_EYaw,Status_Keseluruhan,Waktu_Pengujian
+1,1,Datum 1 (Home/Origin),TRACKING,1,0.0000,0.0000,0.00,0.0271,-0.0993,129.62,7.467,0.1030,10.30,129.62,LULUS,GAGAL,GAGAL,TIDAK LULUS,2026-11-02 17:14:08
