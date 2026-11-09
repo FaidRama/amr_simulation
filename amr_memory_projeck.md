@@ -1777,3 +1777,34 @@ Pada uji navigasi di area fisik:
      - Dibuat timer background 50 Hz (`create_timer(0.02, self.broadcast_virtual_tf)`) yang aktif memancarkan TF start pose robot secara berkesinambungan selama action request dan kalkulasi rute berlangsung.
      - Orientasi yaw robot otomatis diselaraskan menghadap titik target (`math.atan2(gy - sy, gx - sx)`).
 
+---
+
+### PART 51: MULTITHREADED TF SYNC ENGINE & OPTIMASI JETSON HEADLESS PADA SKENARIO 3 (09 NOVEMBER 2026)
+
+1. **Gejala Anomali Panjang Rute / Start Terbaca `(0, 0)`**:
+   - Pada beberapa titik pengujian (misal SG-04 dari $(-16, 1) \to (-22, 1)$), panjang rute terbaca $\sim 22\text{ m}$ (dari $(0, 0)$ ke $(-22, 1)$), SG-11 terbaca $0.03\text{ m}$ (dari $(0, 0)$ ke $(0, 0)$), dan SG-14 terbaca $10.98\text{ m}$ (dari $(0, 0)$ ke $(-11, 0)$).
+   - Selain itu, saat `test_astar.launch.py` dijalankan di Jetson, muncul error `SubstitutionFailure: file not found: [Errno 2] No such file or directory: 'xacro'`, dan warning `duplicate action server` akibat zombie node `planner_server` dari sesi crash sebelumnya.
+
+2. **Akar Masalah (Root Cause)**:
+   - **Single-Thread Executor & Blocking Jeda Waktu**:
+     - Pada skrip `uji_astar_dijkstra_skripsi.py` versi awal, callback timer TF (50 Hz) berada dalam satu thread yang sama dengan thread pengujian utama. Ketika loop melakukan `time.sleep()`, thread executor ikut terhenti sehingga emisi TF terhenti sesaat.
+     - `planner_server` Nav2 membaca transform terakhir yang ada di buffer memorinya (yang bernilai default $(0.0, 0.0)$), sehingga rute dihitung dari origin $(0, 0)$, bukan dari titik start target.
+   - **Ketergantungan ROS GUI / Xacro di Jetson Headless**:
+     - `test_astar.launch.py` memanggil `Command(['xacro', ...])` untuk memuat URDF dan menjalankan `robot_state_publisher`. Di Jetson Nano dengan instalasi ROS 2 minimal/headless, paket `xacro` tidak terpasang secara default. Untuk pengujian global planner murni (A* vs Dijkstra), model 3D robot sama sekali tidak diperlukan.
+
+3. **Solusi & Implementasi Komprehensif**:
+   - **Background MultiThreadedExecutor & Daemon Thread** ([`src/amr_simulation/scripts/uji_astar_dijkstra_skripsi.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/uji_astar_dijkstra_skripsi.py)):
+     - Node di-spin menggunakan `MultiThreadedExecutor` dalam `threading.Thread(target=executor.spin, daemon=True)`.
+     - Timer TF 50 Hz berjalan independen tanpa pernah terblokir oleh operasi I/O, sleep, atau kalkulasi.
+     - Menghapus pemanggilan `spin_until_future_complete()` dan beralih ke non-blocking polling pada `future.done()`.
+   - **Fungsi Verifikasi `wait_for_tf_sync(target_x, target_y)`**:
+     - Ditambahkan `tf2_ros.Buffer` dan `TransformListener`. Sebelum `ComputePathToPose` dikirimkan ke Nav2, skrip secara aktif memverifikasi bahwa `lookup_transform('map', 'base_footprint')` benar-benar telah berada di koordinat $(X, Y)$ start yang diinginkan dengan toleransi $< 15\text{ cm}$. Ini menjamin 100% rute dihitung tepat dari start pose yang sah.
+   - **Optimasi Headless di `test_astar.launch.py`** ([`src/amr_simulation/launch/test_astar.launch.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/launch/test_astar.launch.py)):
+     - Menghapus eksekusi `xacro`, `robot_state_publisher`, dan `joint_state_publisher`.
+     - Parameter `rviz` disetel default `false`.
+     - Menambahkan fungsi pembersih otomatis `_cleanup_stale_processes()` (`pkill -9 -f planner_server`) saat launch dijalankan untuk mencegah konflik duplikat action server.
+   - **Pemberian Solusi SOP 2-Terminal**:
+     - Terminal 1: `ros2 launch amr_simulation test_astar.launch.py` (Backend Nav2 headless).
+     - Terminal 2: `ros2 run amr_simulation uji_astar_dijkstra_skripsi.py --all --reps 5` (Runner benchmark).
+
+

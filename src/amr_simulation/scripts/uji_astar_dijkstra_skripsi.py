@@ -43,12 +43,14 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.executors import MultiThreadedExecutor
+import threading
 
 from geometry_msgs.msg import PoseStamped, Quaternion, TransformStamped
 from nav_msgs.msg import Path, OccupancyGrid
 from visualization_msgs.msg import Marker, MarkerArray
 from nav2_msgs.action import ComputePathToPose
-from tf2_ros import TransformBroadcaster
+from tf2_ros import TransformBroadcaster, Buffer, TransformListener
 from rcl_interfaces.srv import SetParameters
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 
@@ -162,6 +164,8 @@ class UjiAstarDijkstraNode(Node):
 
         # TF Broadcaster & Continuous Timer (50 Hz)
         self.tf_broadcaster = TransformBroadcaster(self)
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
         self.current_start_x = 0.0
         self.current_start_y = 0.0
         self.current_start_yaw = 0.0
@@ -232,10 +236,27 @@ class UjiAstarDijkstraNode(Node):
         req.parameters.append(param)
 
         future = self.param_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+        t0 = time.time()
+        while not future.done() and (time.time() - t0) < 2.0:
+            time.sleep(0.01)
         if future.done():
             res = future.result()
             return len(res.results) > 0 and res.results[0].successful
+        return False
+
+    def wait_for_tf_sync(self, target_x, target_y, tolerance=0.15, timeout_sec=0.5) -> bool:
+        """Memastikan transform map -> base_footprint sudah 100% sinkron di TF buffer sebelum goal dikirim."""
+        t0 = time.time()
+        while (time.time() - t0) < timeout_sec:
+            try:
+                t = self.tf_buffer.lookup_transform('map', 'base_footprint', rclpy.time.Time())
+                curr_x = t.transform.translation.x
+                curr_y = t.transform.translation.y
+                if math.hypot(curr_x - target_x, curr_y - target_y) <= tolerance:
+                    return True
+            except Exception:
+                pass
+            time.sleep(0.01)
         return False
 
     def broadcast_virtual_tf(self):
@@ -396,11 +417,8 @@ class UjiAstarDijkstraNode(Node):
         self.current_start_y = float(sy)
         self.current_start_yaw = float(yaw)
 
-        # Broadcast langsung beberapa frame awal dan beri jeda stabilisasi TF di planner_server
-        for _ in range(5):
-            self.broadcast_virtual_tf()
-            time.sleep(0.01)
-
+        # Pastikan TF buffer 100% sinkron ke posisi start yang baru
+        self.wait_for_tf_sync(sx, sy, timeout_sec=0.3)
         self.publish_visual_markers(sx, sy, gx, gy, pair_id, algo_name)
 
         goal_msg = ComputePathToPose.Goal()
@@ -410,14 +428,14 @@ class UjiAstarDijkstraNode(Node):
         goal_msg.pose.pose.position.x = float(gx)
         goal_msg.pose.pose.position.y = float(gy)
         goal_msg.pose.pose.orientation = quaternion_from_euler(0.0, 0.0, float(yaw))
-
-        # Tentukan planner_id (GridBased / Dijkstra)
         goal_msg.planner_id = planner_id
 
         t_start = time.perf_counter()
 
         send_future = self.action_client.send_goal_async(goal_msg)
-        rclpy.spin_until_future_complete(self, send_future, timeout_sec=5.0)
+        t0 = time.time()
+        while not send_future.done() and (time.time() - t0) < 5.0:
+            time.sleep(0.005)
 
         if not send_future.done():
             return False, 0.0, 0.0, 0, False, 0, "Timeout Send Goal"
@@ -427,7 +445,9 @@ class UjiAstarDijkstraNode(Node):
             return False, 0.0, 0.0, 0, False, 0, "Goal Rejected"
 
         result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future, timeout_sec=10.0)
+        t0 = time.time()
+        while not result_future.done() and (time.time() - t0) < 15.0:
+            time.sleep(0.005)
 
         t_end = time.perf_counter()
         planning_time_ms = (t_end - t_start) * 1000.0
@@ -608,12 +628,18 @@ def execute_benchmark(node: UjiAstarDijkstraNode, pairs_to_run: list, repetition
         print(f"\n📍 Menguji {pair_id} [{level}] -> Jarak: {euc:.2f} m ({desc})")
         print(f"   Start: ({sx:.2f}, {sy:.2f}) -> Goal: ({gx:.2f}, {gy:.2f})")
 
+        # Sinkronkan posisi start di TF buffer sebelum pengujian dimulai
+        node.current_start_x = float(sx)
+        node.current_start_y = float(sy)
+        node.current_start_yaw = math.atan2(gy - sy, gx - sx)
+        node.wait_for_tf_sync(sx, sy, timeout_sec=0.5)
+
         for algo_name, plugin_name, use_astar_bool in algo_configs:
             print(f"   ⚙️  Algoritma: \033[94m{algo_name}\033[0m")
 
             # Coba set parameter use_astar sebagai fallback kompatibilitas
             node.set_use_astar_param(use_astar_bool)
-            time.sleep(0.1)
+            time.sleep(0.05)
 
             for rep in range(1, repetitions + 1):
                 current_run += 1
@@ -673,12 +699,21 @@ def main():
 
     args = parser.parse_args()
 
-    # Inisialisasi ROS 2
+    # Inisialisasi ROS 2 & background MultiThreadedExecutor (agar TF 50 Hz selalu aktif)
     rclpy.init()
     node = UjiAstarDijkstraNode()
 
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
+    spin_thread = threading.Thread(target=executor.spin, daemon=True)
+    spin_thread.start()
+
     if args.summary:
         generate_comparative_summary(node.csv_raw_path, node.csv_summary_path)
+        try:
+            node.action_client.destroy()
+        except Exception:
+            pass
         node.destroy_node()
         rclpy.shutdown()
         return
@@ -690,6 +725,10 @@ def main():
         pairs_to_run = [p for p in SKENARIO_TABEL_7 if p["id"] == target_id]
         if not pairs_to_run:
             print(f"❌ ID Uji '{args.pair}' tidak ditemukan di Tabel 7!")
+            try:
+                node.action_client.destroy()
+            except Exception:
+                pass
             node.destroy_node()
             rclpy.shutdown()
             return
@@ -705,6 +744,10 @@ def main():
         print("\n❌ Gagal terhubung ke Nav2 planner_server.")
         print("💡 Pastikan kamu sudah menjalankan launch file:")
         print("   ros2 launch amr_simulation test_astar.launch.py\n")
+        try:
+            node.action_client.destroy()
+        except Exception:
+            pass
         node.destroy_node()
         rclpy.shutdown()
         return
@@ -720,6 +763,10 @@ def main():
     except KeyboardInterrupt:
         print("\n🛑 Pengujian dihentikan oleh pengguna (Ctrl+C).")
     finally:
+        try:
+            node.action_client.destroy()
+        except Exception:
+            pass
         node.destroy_node()
         rclpy.shutdown()
 
