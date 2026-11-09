@@ -1,13 +1,13 @@
 /* =========================================================================
  * FIRMWARE AMR DIFFERENTIAL DRIVE - PENGUJIAN STEP RESPON 60 RPM (PI - PSO)
  * KHUSUS PENGUJIAN TUNGGAL: STEP 60 RPM (DURASI 6.5 DETIK)
- * METODE    : PARTICLE SWARM OPTIMIZATION (MODEL PLANT MURNI + CONDITIONAL INTEGRATION)
+ * METODE    : PARTICLE SWARM OPTIMIZATION (RUMUS PI MURNI STANDAR)
  * FILTER EMA: ALPHA = 0.25 (Peredaman lonjakan kuantisasi diskrit enkoder 7 PPR)
  * MODE      : STANDBY DIAM SAAT UPLOAD (MENUNGGU PERINTAH DARI SERIAL/PYTHON)
  * FITUR     : MENCETAK DATA CSV 50 HZ + MENGHITUNG OTOMATIS 5 PARAMETER PERFORMA
  *             (RMSE, Overshoot, Rise Time, Settling Time, Steady-State Error)
- * PARAMETER : Motor Kiri  (Kp = 2.5238 | Ki = 23.5015 | Kd = 0.0000)
- *             Motor Kanan (Kp = 2.3640 | Ki = 24.2184 | Kd = 0.0000)
+ * PARAMETER : Motor Kiri  (Kp = 3.9181 | Ki = 18.1072 | Kd = 0.0000)
+ *             Motor Kanan (Kp = 3.8949 | Ki = 18.4361 | Kd = 0.0000)
  * SKRIPSI   : DIVALA ZAHRA OKTAVIA (TEKNIK KOMPUTER UNNES 2026)
  * ========================================================================= */
 
@@ -41,14 +41,14 @@ const float WHEEL_DIAMETER = 0.127; // 5 inci (0.127 meter)
 const float CPR_WHEEL      = 350.7; // 7 PPR * 50.1 gearbox = 350.7 ticks/rev
 
 // =========================================================================
-// 4. PARAMETER KENDALI PI HASIL OPTIMASI PSO (MODEL MURNI)
+// 4. PARAMETER KENDALI PI HASIL OPTIMASI PSO TERBARU
 // =========================================================================
-const float KP_L = 2.5238;
-const float KI_L = 23.5015;
+const float KP_L = 3.9181;
+const float KI_L = 18.1072;
 const float KD_L = 0.0000;
 
-const float KP_R = 2.3640;
-const float KI_R = 24.2184;
+const float KP_R = 3.8949;
+const float KI_R = 18.4361;
 const float KD_R = 0.0000;
 
 const unsigned long SAMPLING_MS = 20;
@@ -273,9 +273,9 @@ void mulaiPengujian60RPM() {
   waktuMulaiTes = millis();
   waktuSebelumnya = millis();
 
-  Serial.println(F("# PENGUJIAN : STEP RESPON 60 RPM (PI-PSO MODEL MURNI - FILTER ALPHA 0.25);;;;;;;;"));
-  Serial.println(F("# MOTOR_LEFT : Kp=2.5238; Ki=23.5015; Kd=0.0000;;;;;;"));
-  Serial.println(F("# MOTOR_RIGHT: Kp=2.3640; Ki=24.2184; Kd=0.0000;;;;;;"));
+  Serial.println(F("# PENGUJIAN : STEP RESPON 60 RPM (PI-PSO MURNI - FILTER ALPHA 0.25);;;;;;;;"));
+  Serial.println(F("# MOTOR_LEFT : Kp=3.9181; Ki=18.1072; Kd=0.0000;;;;;;"));
+  Serial.println(F("# MOTOR_RIGHT: Kp=3.8949; Ki=18.4361; Kd=0.0000;;;;;;"));
   Serial.println(F("# TARGET_RPM : 60.0; DURASI: 6.5s;;;;;;;"));
   Serial.println(F("Time_s;Target_RPM_L;Actual_RPM_L;PWM_L;Error_L;Target_RPM_R;Actual_RPM_R;PWM_R;Error_R"));
 }
@@ -310,7 +310,7 @@ void setup() {
   driveMotors(0, 0);
   sedangUji = false;
   stepAktif = false;
-  Serial.println(F("# [STANDBY] Robot siap (Mode PI-PSO Murni). Ketik '1' untuk memulai pengujian 60 RPM."));
+  Serial.println(F("# [STANDBY] Robot siap (Mode PI-PSO Murni Standar). Ketik '1' untuk memulai pengujian 60 RPM."));
 }
 
 // ====================== 12. LOOP KENDALI 50 HZ ===========================
@@ -369,7 +369,7 @@ void loop() {
     rpm_R = rpm_ctrl_R;
 
     // =====================================================================
-    // KENDALI PI - PSO DENGAN CONDITIONAL INTEGRATION (ANTI-OVERSHOOT)
+    // KENDALI PI STANDAR MURNI (100% APPLE-TO-APPLE DG TRIAL & ERROR)
     // =====================================================================
     
     // Motor Kiri
@@ -378,11 +378,8 @@ void loop() {
       error_L = 0.0; integral_L = 0.0; prev_error_L = 0.0;
     } else {
       error_L = setpoint_L - rpm_ctrl_L;
-      
-      // Rem akumulasi integral saat transien awal (error > 15 RPM)
-      float faktor_i_L = (fabs(error_L) > 15.0) ? 0.45 : 1.0;
-      integral_L = constrain(integral_L + (KI_L * faktor_i_L * error_L * DT), -255.0, 255.0);
-      
+      // Rumus Standar Murni:
+      integral_L = constrain(integral_L + (KI_L * error_L * DT), -255.0, 255.0);
       pwm_L = constrain((KP_L * error_L) + integral_L, 0.0, 255.0);
       prev_error_L = error_L;
     }
@@ -393,11 +390,8 @@ void loop() {
       error_R = 0.0; integral_R = 0.0; prev_error_R = 0.0;
     } else {
       error_R = setpoint_R - rpm_ctrl_R;
-      
-      // Rem akumulasi integral saat transien awal (error > 15 RPM)
-      float faktor_i_R = (fabs(error_R) > 15.0) ? 0.45 : 1.0;
-      integral_R = constrain(integral_R + (KI_R * faktor_i_R * error_R * DT), -255.0, 255.0);
-      
+      // Rumus Standar Murni:
+      integral_R = constrain(integral_R + (KI_R * error_R * DT), -255.0, 255.0);
       pwm_R = constrain((KP_R * error_R) + integral_R, 0.0, 255.0);
       prev_error_R = error_R;
     }
