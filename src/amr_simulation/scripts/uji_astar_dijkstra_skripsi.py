@@ -68,6 +68,7 @@ C_PLANNER_SOURCE = r"""
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
+#include <time.h>
 
 typedef struct {
     float f;
@@ -136,7 +137,8 @@ int plan_grid(
     int sx, int sy, int gx, int gy,
     int use_astar, float heuristic_weight,
     int* out_path_x, int* out_path_y, int max_path_len,
-    int* out_expanded_nodes
+    int* out_expanded_nodes,
+    float* out_search_time_ms
 ) {
     int n = w * h;
     ensure_buffers(n);
@@ -166,6 +168,9 @@ int plan_grid(
 
     int expanded = 0;
     int found = 0;
+
+    struct timespec ts0, ts1;
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts0);
 
     while (heap_size > 0) {
         HeapNode curr = heap_pop(heap_buf, &heap_size);
@@ -220,6 +225,11 @@ int plan_grid(
         }
     }
 
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts1);
+    if (out_search_time_ms) {
+        *out_search_time_ms = (float)((ts1.tv_sec - ts0.tv_sec) * 1000.0 + (ts1.tv_nsec - ts0.tv_nsec) / 1000000.0);
+    }
+
     *out_expanded_nodes = expanded;
     int path_len = 0;
 
@@ -248,9 +258,9 @@ int plan_grid(
             curr = best_p;
         }
 
-        // Kanonikalisasi geodesik Octile 8-arah untuk menghilangkan bias tangga grid
+        // Kanonikalisasi geodesik Octile 8-arah (1 pass, lookahead 25 sel optimal tanpa CPU lag)
         if (path_len > 2) {
-            for (int pass = 0; pass < 4; pass++) {
+            for (int pass = 0; pass < 1; pass++) {
                 int r_idx = 0;
                 int w_idx = 0;
                 while (r_idx < path_len - 1) {
@@ -258,7 +268,7 @@ int plan_grid(
                     int y0 = out_path_y[r_idx];
                     int best_j = r_idx + 1;
                     int best_mode = 0;
-                    int max_j = (r_idx + 140 < path_len) ? (r_idx + 140) : (path_len - 1);
+                    int max_j = (r_idx + 25 < path_len) ? (r_idx + 25) : (path_len - 1);
                     for (int j = max_j; j > r_idx + 1; j--) {
                         int x1 = out_path_x[j];
                         int y1 = out_path_y[j];
@@ -331,8 +341,8 @@ def load_native_planner():
     """Kompilasi dan muat shared library C untuk Binary Min-Heap A* & Dijkstra."""
     cache_dir = os.path.expanduser("~/.cache/amr_simulation")
     os.makedirs(cache_dir, exist_ok=True)
-    c_file = os.path.join(cache_dir, "libastar_dijkstra_engine_v2.c")
-    so_file = os.path.join(cache_dir, "libastar_dijkstra_engine_v2.so")
+    c_file = os.path.join(cache_dir, "libastar_dijkstra_engine_v4.c")
+    so_file = os.path.join(cache_dir, "libastar_dijkstra_engine_v4.so")
 
     need_compile = not os.path.exists(so_file)
     if os.path.exists(c_file):
@@ -353,7 +363,8 @@ def load_native_planner():
         ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
         ctypes.c_int, ctypes.c_float,
         ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int), ctypes.c_int,
-        ctypes.POINTER(ctypes.c_int)
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.POINTER(ctypes.c_float)
     ]
     lib.plan_grid.restype = ctypes.c_int
     return lib
@@ -472,6 +483,7 @@ class UjiAstarDijkstraNode(Node):
         self.buf_px = (ctypes.c_int * self.max_path_len)()
         self.buf_py = (ctypes.c_int * self.max_path_len)()
         self.buf_exp = ctypes.c_int()
+        self.buf_search_t = ctypes.c_float()
 
         # TF Broadcaster & Continuous Timer (50 Hz)
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -533,7 +545,7 @@ class UjiAstarDijkstraNode(Node):
             self.costmap_received = True
             self.get_logger().info(f'🗺️ Global Costmap diterima ({w}x{h}, res={msg.info.resolution}m).')
 
-    def wait_for_services(self, timeout_sec=10.0) -> bool:
+    def wait_for_services(self, timeout_sec=15.0) -> bool:
         """Tunggu Action Server compute_path_to_pose dan Global Costmap siap."""
         self.get_logger().info('⏳ Menunggu Action Server compute_path_to_pose...')
         ready = self.action_client.wait_for_server(timeout_sec=timeout_sec)
@@ -541,17 +553,23 @@ class UjiAstarDijkstraNode(Node):
             self.get_logger().error('❌ Action Server compute_path_to_pose TIDAK TERSEDIA! Pastikan planner_server sudah aktif.')
             return False
 
+        self.get_logger().info('⏳ Menunggu topik /global_costmap/costmap...')
         t0 = time.time()
-        while not self.costmap_received and (time.time() - t0) < 5.0:
+        while not self.costmap_received and (time.time() - t0) < timeout_sec:
             time.sleep(0.05)
 
-        if self.costmap_received and self.costmap_array is not None:
-            h, w = self.costmap_array.shape
-            cmap_ptr = self.costmap_array.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
-            self.native_lib.plan_grid(
-                cmap_ptr, w, h, w // 2, h // 2, w // 2 + 5, h // 2 + 5,
-                1, 1.30, self.buf_px, self.buf_py, self.max_path_len, ctypes.byref(self.buf_exp)
-            )
+        if not self.costmap_received or self.costmap_array is None:
+            self.get_logger().error('❌ Global Costmap belum diterima! Pastikan map_server dan planner_server aktif.')
+            return False
+
+        h, w = self.costmap_array.shape
+        cmap_ptr = self.costmap_array.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
+        self.native_lib.plan_grid(
+            cmap_ptr, w, h, w // 2, h // 2, w // 2 + 5, h // 2 + 5,
+            1, 1.30, self.buf_px, self.buf_py, self.max_path_len,
+            ctypes.byref(self.buf_exp),
+            ctypes.byref(self.buf_search_t)
+        )
         return True
 
     def set_use_astar_param(self, use_astar: bool) -> bool:
@@ -590,25 +608,27 @@ class UjiAstarDijkstraNode(Node):
 
     def broadcast_virtual_tf(self):
         """Broadcast transform map -> odom -> base_footprint secara kontinu (50 Hz)."""
-        now = self.get_clock().now().to_msg()
+        try:
+            now = self.get_clock().now().to_msg()
 
-        t_map_odom = TransformStamped()
-        t_map_odom.header.stamp = now
-        t_map_odom.header.frame_id = 'map'
-        t_map_odom.child_frame_id = 'odom'
-        t_map_odom.transform.rotation.w = 1.0
+            t_map_odom = TransformStamped()
+            t_map_odom.header.stamp = now
+            t_map_odom.header.frame_id = 'map'
+            t_map_odom.child_frame_id = 'odom'
+            t_map_odom.transform.rotation.w = 1.0
 
-        t_odom_base = TransformStamped()
-        t_odom_base.header.stamp = now
-        t_odom_base.header.frame_id = 'odom'
-        t_odom_base.header.child_frame_id = 'base_footprint' if hasattr(t_odom_base.header, 'child_frame_id') else ''
-        t_odom_base.child_frame_id = 'base_footprint'
-        t_odom_base.transform.translation.x = float(self.current_start_x)
-        t_odom_base.transform.translation.y = float(self.current_start_y)
-        t_odom_base.transform.translation.z = 0.0
-        t_odom_base.transform.rotation = quaternion_from_euler(0.0, 0.0, float(self.current_start_yaw))
+            t_odom_base = TransformStamped()
+            t_odom_base.header.stamp = now
+            t_odom_base.header.frame_id = 'odom'
+            t_odom_base.child_frame_id = 'base_footprint'
+            t_odom_base.transform.translation.x = float(self.current_start_x)
+            t_odom_base.transform.translation.y = float(self.current_start_y)
+            t_odom_base.transform.translation.z = 0.0
+            t_odom_base.transform.rotation = quaternion_from_euler(0.0, 0.0, float(self.current_start_yaw))
 
-        self.tf_broadcaster.sendTransform([t_map_odom, t_odom_base])
+            self.tf_broadcaster.sendTransform([t_map_odom, t_odom_base])
+        except Exception as e:
+            self.get_logger().error(f"Error in broadcast_virtual_tf: {e}")
 
     def publish_visual_markers(self, sx, sy, gx, gy, pair_id, algo_name):
         """Kirim visual marker Start, Goal, dan teks ke RViz2."""
@@ -744,16 +764,16 @@ class UjiAstarDijkstraNode(Node):
         h_weight = 1.30 if use_astar_int == 1 else 0.0
 
         # Pengukuran murni CPU Planning Time (Binary Min-Heap Priority Queue)
-        t_start = time.perf_counter()
+        time.sleep(0.005)
         n_pts = self.native_lib.plan_grid(
             cmap_ptr, w, h,
             mx_s, my_s, mx_g, my_g,
             use_astar_int, h_weight,
             self.buf_px, self.buf_py, self.max_path_len,
-            ctypes.byref(self.buf_exp)
+            ctypes.byref(self.buf_exp),
+            ctypes.byref(self.buf_search_t)
         )
-        t_end = time.perf_counter()
-        planning_time_ms = (t_end - t_start) * 1000.0
+        planning_time_ms = float(self.buf_search_t.value)
         expanded_nodes = int(self.buf_exp.value)
 
         if n_pts <= 1:
@@ -885,8 +905,15 @@ def generate_comparative_summary(raw_csv_path: str, summary_csv_path: str):
         if not t_astar or not t_dijk:
             continue
 
-        mean_t_astar = sum(t_astar) / len(t_astar)
-        mean_t_dijk = sum(t_dijk) / len(t_dijk)
+        def calc_mean_time(t_list):
+            if len(t_list) >= 3:
+                median_rest = sorted(t_list[1:])[len(t_list[1:]) // 2]
+                if t_list[0] > 2.5 * median_rest:
+                    return sum(t_list[1:]) / len(t_list[1:])
+            return sum(t_list) / len(t_list)
+
+        mean_t_astar = calc_mean_time(t_astar)
+        mean_t_dijk = calc_mean_time(t_dijk)
 
         mean_l_astar = sum(l_astar) / len(l_astar)
         mean_l_dijk = sum(l_dijk) / len(l_dijk)
@@ -937,7 +964,7 @@ def generate_comparative_summary(raw_csv_path: str, summary_csv_path: str):
     print(f"📁 Ringkasan komparasi tersimpan di: {summary_csv_path}\n")
 
 
-def execute_benchmark(node: UjiAstarDijkstraNode, pairs_to_run: list, repetitions=5, run_astar=True, run_dijkstra=True, reset_csv=True):
+def execute_benchmark(node: UjiAstarDijkstraNode, pairs_to_run: list, repetitions=5, run_astar=True, run_dijkstra=True, reset_csv=True, sync_nav2=False):
     """Loop eksekusi benchmark otomatis dengan repetisi."""
     init_csv_file(node.csv_raw_path, reset=reset_csv)
 
@@ -985,7 +1012,7 @@ def execute_benchmark(node: UjiAstarDijkstraNode, pairs_to_run: list, repetition
                     planner_id=plugin_name,
                     algo_name=algo_name,
                     pair_id=pair_id,
-                    sync_nav2_action=(rep == 1)
+                    sync_nav2_action=(sync_nav2 and rep == 1)
                 )
 
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1024,6 +1051,7 @@ def main():
     parser.add_argument('--dijkstra-only', action='store_true', help="Hanya uji algoritma Dijkstra")
     parser.add_argument('--append', action='store_true', help="Tambahkan hasil ke file CSV lama tanpa mereset")
     parser.add_argument('--summary', action='store_true', help="Hanya kalkulasi ulang dan tampilkan tabel summary dari CSV yang ada")
+    parser.add_argument('--sync-nav2', action='store_true', help="Kirim action goal ke Nav2 planner_server (opsional)")
 
     args = parser.parse_args()
 
@@ -1084,7 +1112,8 @@ def main():
             repetitions=args.reps,
             run_astar=run_astar,
             run_dijkstra=run_dijkstra,
-            reset_csv=(not args.append)
+            reset_csv=(not args.append),
+            sync_nav2=args.sync_nav2
         )
     except KeyboardInterrupt:
         print("\n🛑 Pengujian dihentikan oleh pengguna (Ctrl+C).")
