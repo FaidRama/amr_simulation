@@ -166,14 +166,20 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('camera'))
     )
 
-    # 3. Filter Laser Sasis (Memotong pantulan 4 tiang aluminium sasis)
+    # 3. Filter Laser Sasis (Box Filter Persegi 40x40 cm)
     start_laser_filter = Node(
         package='amr_simulation',
         executable='laser_filter_node.py',
         name='laser_filter',
         output='screen',
         parameters=[{
-            'min_range': 0.34,
+            'filter_type': 'box',
+            'box_min_x': -0.22,
+            'box_max_x': 0.26,
+            'box_min_y': -0.26,
+            'box_max_y': 0.26,
+            'laser_yaw_offset': 3.14159,
+            'sensor_min_range': 0.05,
             'max_range': 12.0
         }]
     )

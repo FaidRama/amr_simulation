@@ -434,10 +434,10 @@ function drawRobot(ctx, x, y, yaw, zoom = 1.0, customScale = null, overrideRadiu
     const safetyRadius = 0.30 * ppm;
     const r = Math.max(3.5 * s, safetyRadius);
 
-    // 2. Dimensi Bodi Kotak Sasis Fisik (20 cm x 20 cm -> setengah lebar = 10 cm = 0.10m)
-    const boxHalf = 0.10 * ppm;
-    const bw = Math.max(2.2 * s, boxHalf);
-    const bh = Math.max(2.2 * s, boxHalf);
+    // 2. Dimensi Bodi Kotak Sasis Fisik (Ukuran Nyata 40 cm x 40 cm -> setengah lebar = 20 cm = 0.20m)
+    const boxHalf = 0.20 * ppm;
+    const bw = Math.max(3.0 * s, boxHalf);
+    const bh = Math.max(3.0 * s, boxHalf);
 
     ctx.save();
     ctx.translate(x, y);
@@ -454,42 +454,40 @@ function drawRobot(ctx, x, y, yaw, zoom = 1.0, customScale = null, overrideRadiu
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // ================= LAYER 2: Bodi Kotak Sasis Fisik Robot (20cm x 20cm) =================
-    const cornerR = Math.min(2.5 * s, bw * 0.25);
+    // ================= LAYER 2: Bodi Kotak Sasis Fisik Robot (40cm x 40cm) =================
+    const cornerR = Math.min(2.5 * s, bw * 0.15);
     ctx.beginPath();
     if (ctx.roundRect) {
         ctx.roundRect(-bw, -bh, bw * 2, bh * 2, cornerR);
     } else {
         ctx.rect(-bw, -bh, bw * 2, bh * 2);
     }
-    // Isi bodi gelap kontras dengan border amber tegas
-    ctx.fillStyle = 'rgba(24, 24, 27, 0.90)';
-    ctx.fill();
+    // Garis kotak tipis rapi, di dalam transparan (tanpa gradasi hitam agar titik pusat & peta terlihat jelas)
     ctx.strokeStyle = '#f59e0b';
-    ctx.lineWidth = Math.max(1.0, 1.5 * s);
+    ctx.lineWidth = Math.max(0.75, 1.0 * s);
     ctx.stroke();
 
-    // Aksen Bumper Depan (Arah Hadap Maju +X)
+    // Aksen Bumper Depan (Arah Hadap Maju +X) - tipis presisi
     ctx.beginPath();
     ctx.moveTo(bw, -bh * 0.7);
     ctx.lineTo(bw, bh * 0.7);
-    ctx.strokeStyle = '#38bdf8'; // Cyan neon indikator depan
-    ctx.lineWidth = Math.max(1.2, 2.0 * s);
+    ctx.strokeStyle = '#38bdf8'; // Cyan neon indikator haluan depan
+    ctx.lineWidth = Math.max(0.85, 1.3 * s);
     ctx.stroke();
 
     // ================= LAYER 3: Precision Reticle & Pinpoint Dot di (0,0) =================
-    const crosshairLen = Math.min(bw * 0.75, 3.5 * s);
+    const crosshairLen = Math.min(bw * 0.45, 3.5 * s);
     ctx.beginPath();
     ctx.moveTo(-crosshairLen, 0);
     ctx.lineTo(crosshairLen, 0);
     ctx.moveTo(0, -crosshairLen);
     ctx.lineTo(0, crosshairLen);
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
     ctx.lineWidth = Math.max(0.6, 0.8 * s);
     ctx.stroke();
 
-    // Center pinpoint dot (putih terang berkontras gelap tepat di titik koordinat nyata)
-    const dotR = Math.min(1.5 * s, bw * 0.25);
+    // Center pinpoint dot (putih terang berkontur gelap tepat di titik koordinat nyata)
+    const dotR = Math.min(1.5 * s, bw * 0.15);
     ctx.beginPath();
     ctx.arc(0, 0, Math.max(1.0 * s, dotR), 0, Math.PI * 2);
     ctx.fillStyle = '#ffffff';
@@ -499,15 +497,15 @@ function drawRobot(ctx, x, y, yaw, zoom = 1.0, customScale = null, overrideRadiu
     ctx.stroke();
 
     // ================= LAYER 4: Panah Arah Hadap Kompak di Depan Titik Pusat =================
-    const arrowStart = Math.max(1.8 * s, bw * 0.25);
-    const arrowTip = Math.min(r * 0.85, bw + 5.0 * s);
-    const arrowLen = arrowTip - arrowStart;
-    const arrowHalfW = Math.min(bh * 0.45, 3.2 * s);
+    const arrowStart = Math.max(2.0 * s, bw * 0.25);
+    const arrowTip = Math.min(r * 0.90, bw + 3.5 * s);
+    const arrowLen = Math.max(1.0, arrowTip - arrowStart);
+    const arrowHalfW = Math.min(bh * 0.25, 2.8 * s);
 
     ctx.beginPath();
     ctx.moveTo(arrowTip, 0);
     ctx.lineTo(arrowStart, -arrowHalfW);
-    ctx.lineTo(arrowStart + arrowLen * 0.28, 0); // Lekukan aerodinamis belakang
+    ctx.lineTo(arrowStart + arrowLen * 0.30, 0); // Lekukan aerodinamis belakang
     ctx.lineTo(arrowStart, arrowHalfW);
     ctx.closePath();
     ctx.fillStyle = '#f59e0b';
@@ -523,7 +521,7 @@ function drawRobot(ctx, x, y, yaw, zoom = 1.0, customScale = null, overrideRadiu
     ctx.moveTo(rayStart, 0);
     ctx.lineTo(rayEnd, 0);
     ctx.strokeStyle = 'rgba(245, 158, 11, 0.85)';
-    ctx.lineWidth = Math.max(0.8, 1.2 * s);
+    ctx.lineWidth = Math.max(0.75, 1.0 * s);
     ctx.stroke();
 
     ctx.restore();

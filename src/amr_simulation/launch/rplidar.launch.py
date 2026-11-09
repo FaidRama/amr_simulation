@@ -55,7 +55,13 @@ def generate_launch_description():
         name='laser_filter',
         output='screen',
         parameters=[{
-            'min_range': 0.32,
+            'filter_type': 'box',
+            'box_min_x': -0.22,
+            'box_max_x': 0.26,
+            'box_min_y': -0.26,
+            'box_max_y': 0.26,
+            'laser_yaw_offset': 3.14159,
+            'sensor_min_range': 0.05,
             'max_range': 12.0,
         }],
         condition=IfCondition(LaunchConfiguration('filter'))
