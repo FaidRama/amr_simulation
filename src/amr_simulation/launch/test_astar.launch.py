@@ -18,7 +18,7 @@ def generate_launch_description():
     pkg_description = get_package_share_directory('Delivery_AMR_description')
 
     # 2. File default
-    default_map = os.path.join(pkg_amr_simulation, 'maps', 'peta_dc.yaml')
+    default_map = os.path.join(pkg_amr_simulation, 'maps', 'peta_l1_dc.yaml')
     default_params = os.path.join(pkg_amr_simulation, 'config', 'astar_params.yaml')
     default_rviz = os.path.join(pkg_amr_simulation, 'rviz', 'astar_test.rviz')
     xacro_path = os.path.join(pkg_description, 'urdf', 'Delivery_AMR.xacro')
