@@ -170,7 +170,7 @@ int plan_grid(
     int found = 0;
 
     struct timespec ts0, ts1;
-    clock_gettime(CLOCK_MONOTONIC, &ts0);
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts0);
 
     while (heap_size > 0) {
         HeapNode curr = heap_pop(heap_buf, &heap_size);
@@ -225,7 +225,7 @@ int plan_grid(
         }
     }
 
-    clock_gettime(CLOCK_MONOTONIC, &ts1);
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts1);
     if (out_search_time_ms) {
         *out_search_time_ms = (float)((ts1.tv_sec - ts0.tv_sec) * 1000.0 + (ts1.tv_nsec - ts0.tv_nsec) / 1000000.0);
     }
@@ -341,8 +341,8 @@ def load_native_planner():
     """Kompilasi dan muat shared library C untuk Binary Min-Heap A* & Dijkstra."""
     cache_dir = os.path.expanduser("~/.cache/amr_simulation")
     os.makedirs(cache_dir, exist_ok=True)
-    c_file = os.path.join(cache_dir, "libastar_dijkstra_engine_v3.c")
-    so_file = os.path.join(cache_dir, "libastar_dijkstra_engine_v3.so")
+    c_file = os.path.join(cache_dir, "libastar_dijkstra_engine_v4.c")
+    so_file = os.path.join(cache_dir, "libastar_dijkstra_engine_v4.so")
 
     need_compile = not os.path.exists(so_file)
     if os.path.exists(c_file):
@@ -905,8 +905,15 @@ def generate_comparative_summary(raw_csv_path: str, summary_csv_path: str):
         if not t_astar or not t_dijk:
             continue
 
-        mean_t_astar = sum(t_astar) / len(t_astar)
-        mean_t_dijk = sum(t_dijk) / len(t_dijk)
+        def calc_mean_time(t_list):
+            if len(t_list) >= 3:
+                median_rest = sorted(t_list[1:])[len(t_list[1:]) // 2]
+                if t_list[0] > 2.5 * median_rest:
+                    return sum(t_list[1:]) / len(t_list[1:])
+            return sum(t_list) / len(t_list)
+
+        mean_t_astar = calc_mean_time(t_astar)
+        mean_t_dijk = calc_mean_time(t_dijk)
 
         mean_l_astar = sum(l_astar) / len(l_astar)
         mean_l_dijk = sum(l_dijk) / len(l_dijk)
@@ -957,7 +964,7 @@ def generate_comparative_summary(raw_csv_path: str, summary_csv_path: str):
     print(f"📁 Ringkasan komparasi tersimpan di: {summary_csv_path}\n")
 
 
-def execute_benchmark(node: UjiAstarDijkstraNode, pairs_to_run: list, repetitions=5, run_astar=True, run_dijkstra=True, reset_csv=True):
+def execute_benchmark(node: UjiAstarDijkstraNode, pairs_to_run: list, repetitions=5, run_astar=True, run_dijkstra=True, reset_csv=True, sync_nav2=False):
     """Loop eksekusi benchmark otomatis dengan repetisi."""
     init_csv_file(node.csv_raw_path, reset=reset_csv)
 
@@ -1005,7 +1012,7 @@ def execute_benchmark(node: UjiAstarDijkstraNode, pairs_to_run: list, repetition
                     planner_id=plugin_name,
                     algo_name=algo_name,
                     pair_id=pair_id,
-                    sync_nav2_action=(rep == 1)
+                    sync_nav2_action=(sync_nav2 and rep == 1)
                 )
 
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1044,6 +1051,7 @@ def main():
     parser.add_argument('--dijkstra-only', action='store_true', help="Hanya uji algoritma Dijkstra")
     parser.add_argument('--append', action='store_true', help="Tambahkan hasil ke file CSV lama tanpa mereset")
     parser.add_argument('--summary', action='store_true', help="Hanya kalkulasi ulang dan tampilkan tabel summary dari CSV yang ada")
+    parser.add_argument('--sync-nav2', action='store_true', help="Kirim action goal ke Nav2 planner_server (opsional)")
 
     args = parser.parse_args()
 
@@ -1104,7 +1112,8 @@ def main():
             repetitions=args.reps,
             run_astar=run_astar,
             run_dijkstra=run_dijkstra,
-            reset_csv=(not args.append)
+            reset_csv=(not args.append),
+            sync_nav2=args.sync_nav2
         )
     except KeyboardInterrupt:
         print("\n🛑 Pengujian dihentikan oleh pengguna (Ctrl+C).")
