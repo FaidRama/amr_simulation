@@ -103,13 +103,13 @@ controller_server:
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.05
-      movement_time_allowance: 4.0
+      movement_time_allowance: 15.0
     # Goal checker parameters
     general_goal_checker:
-      stateful: True
+      stateful: False
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.15
-      yaw_goal_tolerance: 0.60
+      xy_goal_tolerance: 0.08
+      yaw_goal_tolerance: 0.25
     # DWB parameters
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
@@ -121,7 +121,7 @@ controller_server:
       max_vel_theta: 0.80
       min_speed_xy: 0.0
       max_speed_xy: 0.45
-      min_speed_theta: 0.0
+      min_speed_theta: 0.18
       acc_lim_x: 0.8
       acc_lim_y: 0.0
       acc_lim_theta: 2.5
@@ -135,7 +135,7 @@ controller_server:
       linear_granularity: 0.05
       angular_granularity: 0.05
       transform_tolerance: 1.5
-      xy_goal_tolerance: 0.15
+      xy_goal_tolerance: 0.08
       trans_stopped_velocity: 0.10
       short_circuit_trajectory_evaluation: True
       stateful: True
@@ -143,12 +143,12 @@ controller_server:
         ["RotateToGoal", "BaseObstacle", "PathAlign", "PathDist", "GoalDist"]
 
       BaseObstacle.scale: 0.05
-      PathAlign.scale: 32.0
-      PathAlign.forward_point_distance: 0.35
+      PathAlign.scale: 4.0
+      PathAlign.forward_point_distance: 0.15
       PathDist.scale: 24.0
       GoalDist.scale: 20.0
       RotateToGoal.scale: 32.0
-      RotateToGoal.slowing_factor: 3.0
+      RotateToGoal.slowing_factor: 5.0
       RotateToGoal.lookahead_time: -1.0
 
 controller_server_rclcpp_node:
