@@ -1,7 +1,7 @@
 /* =========================================================================
  * FIRMWARE AMR DIFFERENTIAL DRIVE - PENGUJIAN STEP RESPON 60 RPM (PI - PSO)
  * KHUSUS PENGUJIAN TUNGGAL: STEP 60 RPM (DURASI 6.5 DETIK)
- * METODE    : PARTICLE SWARM OPTIMIZATION (MODEL PLANT MURNI TANPA FILTER)
+ * METODE    : PARTICLE SWARM OPTIMIZATION (MODEL PLANT MURNI + CONDITIONAL INTEGRATION)
  * FILTER EMA: ALPHA = 0.25 (Peredaman lonjakan kuantisasi diskrit enkoder 7 PPR)
  * MODE      : STANDBY DIAM SAAT UPLOAD (MENUNGGU PERINTAH DARI SERIAL/PYTHON)
  * FITUR     : MENCETAK DATA CSV 50 HZ + MENGHITUNG OTOMATIS 5 PARAMETER PERFORMA
@@ -220,7 +220,7 @@ void cetakRangkumanPerforma() {
   Serial.println(F("\n# ============================================================================"));
   Serial.println(F("# RANGKUMAN 5 PARAMETER EVALUASI PERFORMA STEP RESPON 60 RPM (PI - PSO)"));
   Serial.println(F("# ============================================================================"));
-  Serial.println(F("# Parameter Evaluasi               | Motor Kiri     | Motor Kanan    | Satuan"));
+  Serial.println(F("# Parameter Evaluasi              | Motor Kiri     | Motor Kanan    | Satuan"));
   Serial.println(F("# ----------------------------------------------------------------------------"));
   
   Serial.print(F("# 1. RMSE (Ketepatan Setpoint)   | "));
@@ -251,7 +251,7 @@ void cetakRangkumanPerforma() {
   Serial.print(perf_L.getSteadyPWM(), 1); Serial.print(F("        | "));
   Serial.print(perf_R.getSteadyPWM(), 1); Serial.println(F("        | PWM (0-255)"));
   Serial.println(F("# ============================================================================"));
-  Serial.println(F("# PENGUJIAN 60 RPM (PI-PSO) SELESAI. Silakan copy data CSV atau tabel di atas."));
+  Serial.println(F("# PENGUJIAN 60 RPM PI-PSO SELESAI. Silakan copy data CSV atau tabel di atas."));
 }
 
 // ====================== 10. CETAK HEADER CSV & RESET =====================
@@ -368,15 +368,22 @@ void loop() {
     rpm_L = rpm_ctrl_L;
     rpm_R = rpm_ctrl_R;
 
-    // Kendali PI - PSO (Model Murni)
+    // =====================================================================
+    // KENDALI PI - PSO DENGAN CONDITIONAL INTEGRATION (ANTI-OVERSHOOT)
+    // =====================================================================
+    
     // Motor Kiri
     if (fabs(setpoint_L) < 0.05) {
       rpm_ctrl_L = 0.0; rpm_L = 0.0; pwm_L = 0.0;
       error_L = 0.0; integral_L = 0.0; prev_error_L = 0.0;
     } else {
       error_L = setpoint_L - rpm_ctrl_L;
-      integral_L = constrain(integral_L + (KI_L * error_L * DT), -255.0, 255.0);
-      pwm_L = constrain((KP_L * error_L) + integral_L + (KD_L * (error_L - prev_error_L) / DT), 0.0, 255.0);
+      
+      // Rem akumulasi integral saat transien awal (error > 15 RPM)
+      float faktor_i_L = (fabs(error_L) > 15.0) ? 0.45 : 1.0;
+      integral_L = constrain(integral_L + (KI_L * faktor_i_L * error_L * DT), -255.0, 255.0);
+      
+      pwm_L = constrain((KP_L * error_L) + integral_L, 0.0, 255.0);
       prev_error_L = error_L;
     }
 
@@ -386,8 +393,12 @@ void loop() {
       error_R = 0.0; integral_R = 0.0; prev_error_R = 0.0;
     } else {
       error_R = setpoint_R - rpm_ctrl_R;
-      integral_R = constrain(integral_R + (KI_R * error_R * DT), -255.0, 255.0);
-      pwm_R = constrain((KP_R * error_R) + integral_R + (KD_R * (error_R - prev_error_R) / DT), 0.0, 255.0);
+      
+      // Rem akumulasi integral saat transien awal (error > 15 RPM)
+      float faktor_i_R = (fabs(error_R) > 15.0) ? 0.45 : 1.0;
+      integral_R = constrain(integral_R + (KI_R * faktor_i_R * error_R * DT), -255.0, 255.0);
+      
+      pwm_R = constrain((KP_R * error_R) + integral_R, 0.0, 255.0);
       prev_error_R = error_R;
     }
 
@@ -400,7 +411,7 @@ void loop() {
       perf_R.update(rpm_R, pwm_R, t);
     }
 
-    // Cetak Baris CSV (Format 100% Identik dengan Trial & Error)
+    // Cetak Baris CSV
     Serial.print(t, 3);          Serial.print(";");
     Serial.print(setpoint_L, 2); Serial.print(";");
     Serial.print(rpm_L, 2);      Serial.print(";");
@@ -413,11 +424,6 @@ void loop() {
 
     // Saat Selesai (t >= 6.5s)
     if (t >= DURASI_TOTAL) {
-      // Pengereman bertahap 100 ms untuk menghilangkan sentakan kejut saat tes berakhir
-      for (int i = 5; i >= 0; i--) {
-        driveMotors(pwm_L * (i / 5.0), pwm_R * (i / 5.0));
-        delay(20);
-      }
       driveMotors(0, 0);
       sedangUji = false;
       cetakRangkumanPerforma();
