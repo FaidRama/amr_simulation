@@ -359,7 +359,7 @@ void loop() {
     float rpm_raw_R = ((float)dC_R / CPR_WHEEL) * (60.0 / DT);
 
     // =====================================================================
-    // FILTER LOW-PASS EMA DENGAN ALPHA = 0.25 (Peredaman Lebih Kuat)
+    // FILTER LOW-PASS EMA DENGAN ALPHA = 0.25 (Peredaman Kuat & Mulus)
     // =====================================================================
     rpm_ctrl_L = (0.25 * rpm_raw_L) + (0.75 * rpm_ctrl_L);
     rpm_ctrl_R = (0.25 * rpm_raw_R) + (0.75 * rpm_ctrl_R);
