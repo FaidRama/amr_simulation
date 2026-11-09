@@ -46,8 +46,8 @@ def generate_launch_description():
     )
     rviz_arg = DeclareLaunchArgument(
         'rviz',
-        default_value='true',
-        description='Jalankan visualisasi RViz2 otomatis'
+        default_value='false',
+        description='Jalankan visualisasi RViz2 (set true jika di laptop dengan layar, false untuk headless Jetson)'
     )
     publish_tf_arg = DeclareLaunchArgument(
         'publish_tf',
