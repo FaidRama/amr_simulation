@@ -533,7 +533,7 @@ class UjiAstarDijkstraNode(Node):
             self.costmap_received = True
             self.get_logger().info(f'🗺️ Global Costmap diterima ({w}x{h}, res={msg.info.resolution}m).')
 
-    def wait_for_services(self, timeout_sec=10.0) -> bool:
+    def wait_for_services(self, timeout_sec=15.0) -> bool:
         """Tunggu Action Server compute_path_to_pose dan Global Costmap siap."""
         self.get_logger().info('⏳ Menunggu Action Server compute_path_to_pose...')
         ready = self.action_client.wait_for_server(timeout_sec=timeout_sec)
@@ -541,17 +541,21 @@ class UjiAstarDijkstraNode(Node):
             self.get_logger().error('❌ Action Server compute_path_to_pose TIDAK TERSEDIA! Pastikan planner_server sudah aktif.')
             return False
 
+        self.get_logger().info('⏳ Menunggu topik /global_costmap/costmap...')
         t0 = time.time()
-        while not self.costmap_received and (time.time() - t0) < 5.0:
+        while not self.costmap_received and (time.time() - t0) < timeout_sec:
             time.sleep(0.05)
 
-        if self.costmap_received and self.costmap_array is not None:
-            h, w = self.costmap_array.shape
-            cmap_ptr = self.costmap_array.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
-            self.native_lib.plan_grid(
-                cmap_ptr, w, h, w // 2, h // 2, w // 2 + 5, h // 2 + 5,
-                1, 1.30, self.buf_px, self.buf_py, self.max_path_len, ctypes.byref(self.buf_exp)
-            )
+        if not self.costmap_received or self.costmap_array is None:
+            self.get_logger().error('❌ Global Costmap belum diterima! Pastikan map_server dan planner_server aktif.')
+            return False
+
+        h, w = self.costmap_array.shape
+        cmap_ptr = self.costmap_array.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
+        self.native_lib.plan_grid(
+            cmap_ptr, w, h, w // 2, h // 2, w // 2 + 5, h // 2 + 5,
+            1, 1.30, self.buf_px, self.buf_py, self.max_path_len, ctypes.byref(self.buf_exp)
+        )
         return True
 
     def set_use_astar_param(self, use_astar: bool) -> bool:
@@ -590,25 +594,27 @@ class UjiAstarDijkstraNode(Node):
 
     def broadcast_virtual_tf(self):
         """Broadcast transform map -> odom -> base_footprint secara kontinu (50 Hz)."""
-        now = self.get_clock().now().to_msg()
+        try:
+            now = self.get_clock().now().to_msg()
 
-        t_map_odom = TransformStamped()
-        t_map_odom.header.stamp = now
-        t_map_odom.header.frame_id = 'map'
-        t_map_odom.child_frame_id = 'odom'
-        t_map_odom.transform.rotation.w = 1.0
+            t_map_odom = TransformStamped()
+            t_map_odom.header.stamp = now
+            t_map_odom.header.frame_id = 'map'
+            t_map_odom.child_frame_id = 'odom'
+            t_map_odom.transform.rotation.w = 1.0
 
-        t_odom_base = TransformStamped()
-        t_odom_base.header.stamp = now
-        t_odom_base.header.frame_id = 'odom'
-        t_odom_base.header.child_frame_id = 'base_footprint' if hasattr(t_odom_base.header, 'child_frame_id') else ''
-        t_odom_base.child_frame_id = 'base_footprint'
-        t_odom_base.transform.translation.x = float(self.current_start_x)
-        t_odom_base.transform.translation.y = float(self.current_start_y)
-        t_odom_base.transform.translation.z = 0.0
-        t_odom_base.transform.rotation = quaternion_from_euler(0.0, 0.0, float(self.current_start_yaw))
+            t_odom_base = TransformStamped()
+            t_odom_base.header.stamp = now
+            t_odom_base.header.frame_id = 'odom'
+            t_odom_base.child_frame_id = 'base_footprint'
+            t_odom_base.transform.translation.x = float(self.current_start_x)
+            t_odom_base.transform.translation.y = float(self.current_start_y)
+            t_odom_base.transform.translation.z = 0.0
+            t_odom_base.transform.rotation = quaternion_from_euler(0.0, 0.0, float(self.current_start_yaw))
 
-        self.tf_broadcaster.sendTransform([t_map_odom, t_odom_base])
+            self.tf_broadcaster.sendTransform([t_map_odom, t_odom_base])
+        except Exception as e:
+            self.get_logger().error(f"Error in broadcast_virtual_tf: {e}")
 
     def publish_visual_markers(self, sx, sy, gx, gy, pair_id, algo_name):
         """Kirim visual marker Start, Goal, dan teks ke RViz2."""

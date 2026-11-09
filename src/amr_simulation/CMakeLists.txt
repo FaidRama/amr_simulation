@@ -42,6 +42,7 @@ install(PROGRAMS
   scripts/rplidar_bridge.py
   scripts/laser_filter_node.py
   scripts/benchmark_skripsi.py
+  scripts/benchmark_skripsi_lengkap.py
   scripts/deadzone_monitor_node.py
   scripts/plot_deadzone.py
   scripts/step_response_monitor_node.py
@@ -49,9 +50,15 @@ install(PROGRAMS
   scripts/evaluasi_pid.py
   scripts/test_robot_voice.py
   scripts/uji_amcl_skripsi.py
+  scripts/uji_amcl_dinamis_skripsi.py
+  scripts/ukur_peta_skripsi.py
   scripts/uji_astar_dijkstra_skripsi.py
   scripts/uji_replanning_skripsi.py
   scripts/evaluasi_navigasi_skripsi.py
+  scripts/trial_error_step_test.py
+  scripts/pso_step_test.py
+  scripts/plot_step_response_trial_error.py
+  scripts/plot_step_response_pso.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
