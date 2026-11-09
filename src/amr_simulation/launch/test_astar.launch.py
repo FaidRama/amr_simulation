@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 
 import os
+import time
+import signal
+import subprocess
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
@@ -12,7 +15,55 @@ from launch_ros.actions import Node
 from nav2_common.launch import RewrittenYaml
 
 
+def _get_ancestor_pids():
+    ancestors = set()
+    pid = os.getpid()
+    while pid > 1:
+        ancestors.add(pid)
+        try:
+            with open(f'/proc/{pid}/stat', 'r') as f:
+                ppid = int(f.read().split()[3])
+            pid = ppid
+        except Exception:
+            break
+    return ancestors
+
+
+def _cleanup_stale_processes():
+    """Bersihkan proses orphan dari sesi sebelumnya agar tidak terjadi double action server."""
+    protected_pids = _get_ancestor_pids()
+    patterns = [
+        'planner_server',
+        'map_server',
+        'lifecycle_manager_astar',
+        'astar_benchmark.py',
+    ]
+    stale_pids = []
+    for pat in patterns:
+        try:
+            res = subprocess.run(['pgrep', '-f', pat], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            for line in res.stdout.splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    pid = int(line)
+                    if pid not in protected_pids and pid not in stale_pids:
+                        stale_pids.append(pid)
+        except Exception:
+            pass
+
+    if stale_pids:
+        for pid in stale_pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+        time.sleep(0.3)
+
+
 def generate_launch_description():
+    # 0. Bersihkan proses yatim dari sesi sebelumnya
+    _cleanup_stale_processes()
+
     # 1. Direktori paket
     pkg_amr_simulation = get_package_share_directory('amr_simulation')
 
