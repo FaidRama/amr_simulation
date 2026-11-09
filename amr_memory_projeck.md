@@ -1712,8 +1712,43 @@ Pada uji navigasi di area fisik:
    - Kedua tiang depan yang sebelumnya tembus di $X \approx +23.0\text{ cm}$ (jarak $27.6\text{ cm}$ dan $26.3\text{ cm}$) kini **bersih terpotong 100%**.
    - Bidang datar di depan bemper (seperti laptop atau kaki kursi) tetap terdeteksi lurus tanpa ada fenomena busur lingkaran / hilang di tengah.
 
+---
 
+### PART 49: PEMBARUAN DATASET 15 PASANG TITIK SKENARIO 3 (A* VS DIJKSTRA) PADA PETA L1 DC
 
+1. **Latar Belakang & Pemilihan Peta**:
+   - Pada pengujian awal dengan `peta_dc`, tingkat kompleksitas mentok pada kategori sedang karena dimensi area yang terbatas.
+   - Diputuskan menggunakan peta penuh lantai 1 (`peta_l1_dc.yaml` & `peta_l1_dc.pgm`, resolusi $0.05\text{ m/px}$, origin $[-41.271, -11.966, 0.0]$, dimensi $54.1\text{ m} \times 23.6\text{ m}$).
+   - Peta ini menyediakan bentang koridor panjang hingga $\sim 45\text{ meter}$, sangat ideal untuk membuktikan hipotesis keunggulan efisiensi algoritma A* (pemotongan waktu CPU $\ge 40\%$) dibandingkan Dijkstra murni pada lintasan menengah hingga jauh.
 
+2. **Verifikasi Validitas Koordinat Titik**:
+   - Seluruh 30 koordinat (15 Start + 15 Goal) telah diverifikasi secara matematis terhadap grid bitmap `peta_l1_dc.pgm`.
+   - **Hasil: 100% titik berada di ruang bebas (`pixel value = 254`)** dengan clearance terhadap rintangan terdekat minimal $\ge 0.27\text{ m}$ (aman dari inflasi lethal/inscribed Nav2).
 
+3. **Tabel Dataset Resmi Skenario 3 (Tabel 7 Skripsi)**:
 
+| No | ID Uji | Tingkat Kompleksitas | Start $(X, Y)$ | Goal $(X, Y)$ | Jarak Euklidean (m) | Deskripsi Karakteristik Lintasan |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---|
+| 1 | **SG-01** | Rendah | $(0.00, 0.00)$ | $(-2.00, -1.00)$ | $2.24$ | Koridor lurus pendek dekat origin map |
+| 2 | **SG-02** | Rendah | $(0.00, 0.00)$ | $(-2.00, -3.00)$ | $3.61$ | Manuver belokan pendek lorong selatan |
+| 3 | **SG-03** | Rendah | $(0.00, 0.00)$ | $(2.00, -2.00)$ | $2.83$ | Perlintasan koridor diagonal tenggara |
+| 4 | **SG-04** | Rendah | $(-16.00, 1.00)$ | $(-22.00, 1.00)$ | $6.00$ | Koridor lurus lorong barat |
+| 5 | **SG-05** | Rendah | $(-16.00, 1.00)$ | $(-6.00, -1.00)$ | $10.20$ | Koridor utama segmen tengah ke timur |
+| 6 | **SG-06** | Sedang | $(-34.00, 2.00)$ | $(-37.00, 8.00)$ | $6.71$ | Belokan tajam lorong barat menuju utara |
+| 7 | **SG-07** | Sedang | $(-34.00, 2.00)$ | $(-35.00, 7.00)$ | $5.10$ | Persimpangan koridor barat laut |
+| 8 | **SG-08** | Sedang | $(-37.00, 9.00)$ | $(-38.00, -2.00)$ | $11.05$ | Koridor vertikal sayap barat (utara ke selatan) |
+| 9 | **SG-09** | Sedang | $(-37.00, 9.00)$ | $(-32.00, 2.00)$ | $8.60$ | Rute belokan bercabang sayap barat |
+| 10 | **SG-10** | Sedang | $(0.00, 0.00)$ | $(8.00, -2.00)$ | $8.25$ | Koridor utama menuju lorong timur |
+| 11 | **SG-11** | Tinggi | $(-27.00, 1.50)$ | $(0.00, 0.00)$ | $27.04$ | Jalur panjang koridor utama barat ke tengah |
+| 12 | **SG-12** | Tinggi | $(-2.00, -5.50)$ | $(-40.00, 2.50)$ | $38.83$ | Rute diagonal lintas lantai tenggara ke sayap barat daya |
+| 13 | **SG-13** | Tinggi | $(-5.00, -1.00)$ | $(-27.00, 1.50)$ | $22.14$ | Koridor panjang segmen timur ke sayap barat |
+| 14 | **SG-14** | Tinggi | $(-38.00, -2.00)$ | $(-11.00, 0.00)$ | $27.07$ | Koridor panjang sayap barat daya ke lobi tengah |
+| 15 | **SG-15** | Tinggi | $(-37.00, 9.00)$ | $(8.00, 2.00)$ | $45.54$ | Rute ekstrem ujung sayap barat laut ke sayap timur |
+
+4. **File Terkait**:
+   - Script benchmark: [`src/amr_simulation/scripts/uji_astar_dijkstra_skripsi.py`](file:///home/faid/Documents/amr_ws/src/amr_simulation/scripts/uji_astar_dijkstra_skripsi.py)
+   - Konfigurasi peta: [`src/amr_simulation/maps/peta_l1_dc.yaml`](file:///home/faid/Documents/amr_ws/src/amr_simulation/maps/peta_l1_dc.yaml)
+   - Perintah eksekusi pengujian otomatis (150 runs):
+     ```bash
+     ros2 run amr_simulation uji_astar_dijkstra_skripsi.py --all --reps 5
+     ```

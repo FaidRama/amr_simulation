@@ -70,88 +70,88 @@ def quaternion_from_euler(roll, pitch, yaw):
 
 
 # =============================================================================
-# DATASET TABEL 7 SKRIPSI: 15 PASANG TITIK START-GOAL
+# DATASET TABEL 7 SKRIPSI: 15 PASANG TITIK START-GOAL (PETA L1 DC)
 # =============================================================================
 SKENARIO_TABEL_7 = [
-    # 1. Kompleksitas Rendah (5 pasang, jarak 1 - 3 meter)
+    # 1. Kompleksitas Rendah (5 pasang, koridor lurus pendek & belokan dekat)
     {
         "id": "SG-01", "level": "Rendah",
-        "start": (1.00, 1.00), "goal": (2.50, 1.00),
-        "euclidean": 1.50, "desc": "Koridor lurus tanpa belokan"
+        "start": (0.00, 0.00), "goal": (-2.00, -1.00),
+        "euclidean": 2.24, "desc": "Koridor lurus pendek dekat origin map"
     },
     {
         "id": "SG-02", "level": "Rendah",
-        "start": (1.00, 2.00), "goal": (3.00, 2.00),
-        "euclidean": 2.00, "desc": "Koridor lurus rak A"
+        "start": (0.00, 0.00), "goal": (-2.00, -3.00),
+        "euclidean": 3.61, "desc": "Manuver belokan pendek lorong selatan"
     },
     {
         "id": "SG-03", "level": "Rendah",
-        "start": (2.00, 3.50), "goal": (4.50, 3.50),
-        "euclidean": 2.50, "desc": "Koridor lurus rak B"
+        "start": (0.00, 0.00), "goal": (2.00, -2.00),
+        "euclidean": 2.83, "desc": "Perlintasan koridor diagonal tenggara"
     },
     {
         "id": "SG-04", "level": "Rendah",
-        "start": (0.50, 4.00), "goal": (3.30, 4.00),
-        "euclidean": 2.80, "desc": "Jalur bebas stasiun transit"
+        "start": (-16.00, 1.00), "goal": (-22.00, 1.00),
+        "euclidean": 6.00, "desc": "Koridor lurus lorong barat"
     },
     {
         "id": "SG-05", "level": "Rendah",
-        "start": (1.50, 5.00), "goal": (4.50, 5.00),
-        "euclidean": 3.00, "desc": "Koridor bongkar muat"
+        "start": (-16.00, 1.00), "goal": (-6.00, -1.00),
+        "euclidean": 10.20, "desc": "Koridor utama segmen tengah ke timur"
     },
 
-    # 2. Kompleksitas Sedang (5 pasang, jarak 3.1 - 7 meter)
+    # 2. Kompleksitas Sedang (5 pasang, belokan tajam & persimpangan multi-lorong)
     {
         "id": "SG-06", "level": "Sedang",
-        "start": (1.00, 1.00), "goal": (3.50, 3.50),
-        "euclidean": 3.53, "desc": "Belokan 90° ujung lorong"
+        "start": (-34.00, 2.00), "goal": (-37.00, 8.00),
+        "euclidean": 6.71, "desc": "Belokan tajam lorong barat menuju utara"
     },
     {
         "id": "SG-07", "level": "Sedang",
-        "start": (1.50, 2.00), "goal": (5.50, 3.00),
-        "euclidean": 4.12, "desc": "Memotong persimpangan T"
+        "start": (-34.00, 2.00), "goal": (-35.00, 7.00),
+        "euclidean": 5.10, "desc": "Persimpangan koridor barat laut"
     },
     {
         "id": "SG-08", "level": "Sedang",
-        "start": (0.50, 1.50), "goal": (4.50, 4.50),
-        "euclidean": 5.00, "desc": "Manuver dua sudut belokan"
+        "start": (-37.00, 9.00), "goal": (-38.00, -2.00),
+        "euclidean": 11.05, "desc": "Koridor vertikal sayap barat (utara ke selatan)"
     },
     {
         "id": "SG-09", "level": "Sedang",
-        "start": (2.00, 1.00), "goal": (6.00, 5.00),
-        "euclidean": 5.65, "desc": "Rute diagonal antar-lorong"
+        "start": (-37.00, 9.00), "goal": (-32.00, 2.00),
+        "euclidean": 8.60, "desc": "Rute belokan bercabang sayap barat"
     },
     {
         "id": "SG-10", "level": "Sedang",
-        "start": (1.00, 5.50), "goal": (6.50, 2.00),
-        "euclidean": 6.51, "desc": "Lintasan memutari rak tengah"
+        "start": (0.00, 0.00), "goal": (8.00, -2.00),
+        "euclidean": 8.25, "desc": "Koridor utama menuju lorong timur"
     },
 
-    # 3. Kompleksitas Tinggi (5 pasang, jarak > 7 meter)
+    # 3. Kompleksitas Tinggi (5 pasang, rute jauh lintas sayap gedung 22 - 45 meter)
     {
         "id": "SG-11", "level": "Tinggi",
-        "start": (0.50, 0.50), "goal": (7.50, 2.00),
-        "euclidean": 7.15, "desc": "Koridor sempit zig-zag"
+        "start": (-27.00, 1.50), "goal": (0.00, 0.00),
+        "euclidean": 27.04, "desc": "Jalur panjang koridor utama barat ke tengah"
     },
     {
         "id": "SG-12", "level": "Tinggi",
-        "start": (1.00, 1.00), "goal": (8.00, 4.00),
-        "euclidean": 7.61, "desc": "Melewati 3 partisi boks"
+        "start": (-2.00, -5.50), "goal": (-40.00, 2.50),
+        "euclidean": 38.83, "desc": "Rute diagonal lintas lantai tenggara ke sayap barat daya"
     },
     {
         "id": "SG-13", "level": "Tinggi",
-        "start": (1.00, 6.00), "goal": (8.50, 1.50),
-        "euclidean": 8.74, "desc": "Rute diagonal lintas gudang"
+        "start": (-5.00, -1.00), "goal": (-27.00, 1.50),
+        "euclidean": 22.14, "desc": "Koridor panjang segmen timur ke sayap barat"
     },
     {
         "id": "SG-14", "level": "Tinggi",
-        "start": (0.50, 1.00), "goal": (9.00, 4.50),
-        "euclidean": 9.19, "desc": "Koridor panjang dengan halangan"
+        "start": (-38.00, -2.00), "goal": (-11.00, 0.00),
+        "euclidean": 27.07, "desc": "Koridor panjang sayap barat daya ke lobi tengah"
     },
     {
         "id": "SG-15", "level": "Tinggi",
-        "start": (0.50, 0.50), "goal": (9.50, 5.50),
-        "euclidean": 10.29, "desc": "Ujung ke ujung area gudang"
+        "start": (-37.00, 9.00), "goal": (8.00, 2.00),
+        "euclidean": 45.54, "desc": "Rute ekstrem ujung sayap barat laut ke sayap timur"
     },
 ]
 
