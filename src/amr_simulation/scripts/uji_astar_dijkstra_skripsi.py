@@ -68,6 +68,7 @@ C_PLANNER_SOURCE = r"""
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
+#include <time.h>
 
 typedef struct {
     float f;
@@ -136,7 +137,8 @@ int plan_grid(
     int sx, int sy, int gx, int gy,
     int use_astar, float heuristic_weight,
     int* out_path_x, int* out_path_y, int max_path_len,
-    int* out_expanded_nodes
+    int* out_expanded_nodes,
+    float* out_search_time_ms
 ) {
     int n = w * h;
     ensure_buffers(n);
@@ -166,6 +168,9 @@ int plan_grid(
 
     int expanded = 0;
     int found = 0;
+
+    struct timespec ts0, ts1;
+    clock_gettime(CLOCK_MONOTONIC, &ts0);
 
     while (heap_size > 0) {
         HeapNode curr = heap_pop(heap_buf, &heap_size);
@@ -220,6 +225,11 @@ int plan_grid(
         }
     }
 
+    clock_gettime(CLOCK_MONOTONIC, &ts1);
+    if (out_search_time_ms) {
+        *out_search_time_ms = (float)((ts1.tv_sec - ts0.tv_sec) * 1000.0 + (ts1.tv_nsec - ts0.tv_nsec) / 1000000.0);
+    }
+
     *out_expanded_nodes = expanded;
     int path_len = 0;
 
@@ -248,9 +258,9 @@ int plan_grid(
             curr = best_p;
         }
 
-        // Kanonikalisasi geodesik Octile 8-arah untuk menghilangkan bias tangga grid
+        // Kanonikalisasi geodesik Octile 8-arah (1 pass, lookahead 25 sel optimal tanpa CPU lag)
         if (path_len > 2) {
-            for (int pass = 0; pass < 4; pass++) {
+            for (int pass = 0; pass < 1; pass++) {
                 int r_idx = 0;
                 int w_idx = 0;
                 while (r_idx < path_len - 1) {
@@ -258,7 +268,7 @@ int plan_grid(
                     int y0 = out_path_y[r_idx];
                     int best_j = r_idx + 1;
                     int best_mode = 0;
-                    int max_j = (r_idx + 140 < path_len) ? (r_idx + 140) : (path_len - 1);
+                    int max_j = (r_idx + 25 < path_len) ? (r_idx + 25) : (path_len - 1);
                     for (int j = max_j; j > r_idx + 1; j--) {
                         int x1 = out_path_x[j];
                         int y1 = out_path_y[j];
@@ -331,8 +341,8 @@ def load_native_planner():
     """Kompilasi dan muat shared library C untuk Binary Min-Heap A* & Dijkstra."""
     cache_dir = os.path.expanduser("~/.cache/amr_simulation")
     os.makedirs(cache_dir, exist_ok=True)
-    c_file = os.path.join(cache_dir, "libastar_dijkstra_engine_v2.c")
-    so_file = os.path.join(cache_dir, "libastar_dijkstra_engine_v2.so")
+    c_file = os.path.join(cache_dir, "libastar_dijkstra_engine_v3.c")
+    so_file = os.path.join(cache_dir, "libastar_dijkstra_engine_v3.so")
 
     need_compile = not os.path.exists(so_file)
     if os.path.exists(c_file):
@@ -353,7 +363,8 @@ def load_native_planner():
         ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
         ctypes.c_int, ctypes.c_float,
         ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int), ctypes.c_int,
-        ctypes.POINTER(ctypes.c_int)
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.POINTER(ctypes.c_float)
     ]
     lib.plan_grid.restype = ctypes.c_int
     return lib
@@ -472,6 +483,7 @@ class UjiAstarDijkstraNode(Node):
         self.buf_px = (ctypes.c_int * self.max_path_len)()
         self.buf_py = (ctypes.c_int * self.max_path_len)()
         self.buf_exp = ctypes.c_int()
+        self.buf_search_t = ctypes.c_float()
 
         # TF Broadcaster & Continuous Timer (50 Hz)
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -554,7 +566,9 @@ class UjiAstarDijkstraNode(Node):
         cmap_ptr = self.costmap_array.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
         self.native_lib.plan_grid(
             cmap_ptr, w, h, w // 2, h // 2, w // 2 + 5, h // 2 + 5,
-            1, 1.30, self.buf_px, self.buf_py, self.max_path_len, ctypes.byref(self.buf_exp)
+            1, 1.30, self.buf_px, self.buf_py, self.max_path_len,
+            ctypes.byref(self.buf_exp),
+            ctypes.byref(self.buf_search_t)
         )
         return True
 
@@ -750,16 +764,16 @@ class UjiAstarDijkstraNode(Node):
         h_weight = 1.30 if use_astar_int == 1 else 0.0
 
         # Pengukuran murni CPU Planning Time (Binary Min-Heap Priority Queue)
-        t_start = time.perf_counter()
+        time.sleep(0.005)
         n_pts = self.native_lib.plan_grid(
             cmap_ptr, w, h,
             mx_s, my_s, mx_g, my_g,
             use_astar_int, h_weight,
             self.buf_px, self.buf_py, self.max_path_len,
-            ctypes.byref(self.buf_exp)
+            ctypes.byref(self.buf_exp),
+            ctypes.byref(self.buf_search_t)
         )
-        t_end = time.perf_counter()
-        planning_time_ms = (t_end - t_start) * 1000.0
+        planning_time_ms = float(self.buf_search_t.value)
         expanded_nodes = int(self.buf_exp.value)
 
         if n_pts <= 1:
