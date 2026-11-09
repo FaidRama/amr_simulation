@@ -8,7 +8,7 @@ import subprocess
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable, LogInfo
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -201,8 +201,20 @@ def generate_launch_description():
 
     stdout_linebuf_envvar = SetEnvironmentVariable('RCUTILS_LOGGING_BUFFERED_STREAM', '1')
 
+    banner_info = LogInfo(
+        msg="\n"
+            "======================================================================\n"
+            "🚀 BACKEND NAV2 PLANNER AKTIF (STANDBY MENUNGGU TERMINAL 2)\n"
+            "ℹ️  Info 'Timed out waiting for transform' adalah NORMAL karena Nav2\n"
+            "    sedang menunggu koordinat awal yang dipancarkan oleh Terminal 2.\n"
+            "👉 Buka TERMINAL 2 sekarang dan jalankan skrip pengujian:\n"
+            "   ros2 run amr_simulation uji_astar_dijkstra_skripsi.py --all --reps 5\n"
+            "======================================================================\n"
+    )
+
     return LaunchDescription([
         stdout_linebuf_envvar,
+        banner_info,
         map_arg,
         params_arg,
         use_sim_time_arg,
