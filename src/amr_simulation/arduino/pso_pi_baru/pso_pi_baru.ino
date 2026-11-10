@@ -380,7 +380,7 @@ void loop() {
       error_L = setpoint_L - rpm_ctrl_L;
       
       // Rem akumulasi integral saat transien awal (error > 15 RPM)
-      integral_L = constrain(integral_L + (KI_L * faktor_i_L * error_L * DT), -255.0, 255.0);
+      integral_L = constrain(integral_L + (KI_L * error_L * DT), -255.0, 255.0);
       
       pwm_L = constrain((KP_L * error_L) + integral_L, 0.0, 255.0);
       prev_error_L = error_L;
