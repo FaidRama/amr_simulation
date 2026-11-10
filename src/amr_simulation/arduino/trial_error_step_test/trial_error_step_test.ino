@@ -217,7 +217,7 @@ void driveMotors(float pwmL, float pwmR) {
 // ====================== 9. CETAK REKAP HASIL 5 PARAMETER ==================
 void cetakRangkumanPerforma() {
   Serial.println(F("\n# ============================================================================"));
-  Serial.println(F("# RANGKUMAN 5 PARAMETER EVALUASI PERFORMA STEP RESPON 80 RPM (TRIAL & ERROR)"));
+  Serial.println(F("# RANGKUMAN 5 PARAMETER EVALUASI PERFORMA STEP RESPON 100 RPM (TRIAL & ERROR)"));
   Serial.println(F("# ============================================================================"));
   Serial.println(F("# Parameter Evaluasi              | Motor Kiri     | Motor Kanan    | Satuan"));
   Serial.println(F("# ----------------------------------------------------------------------------"));
@@ -250,7 +250,7 @@ void cetakRangkumanPerforma() {
   Serial.print(perf_L.getSteadyPWM(), 1); Serial.print(F("        | "));
   Serial.print(perf_R.getSteadyPWM(), 1); Serial.println(F("        | PWM (0-255)"));
   Serial.println(F("# ============================================================================"));
-  Serial.println(F("# PENGUJIAN 80 RPM SELESAI. Silakan copy data CSV atau tabel di atas."));
+  Serial.println(F("# PENGUJIAN 100 RPM SELESAI. Silakan copy data CSV atau tabel di atas."));
 }
 
 // ====================== 10. CETAK HEADER CSV & RESET =====================
@@ -309,7 +309,7 @@ void setup() {
   driveMotors(0, 0);
   sedangUji = false;
   stepAktif = false;
-  Serial.println(F("# [STANDBY] Robot siap. Menunggu perintah '1' untuk memulai pengujian 80 RPM."));
+  Serial.println(F("# [STANDBY] Robot siap. Menunggu perintah '1' untuk memulai pengujian 100 RPM."));
 }
 
 // ====================== 12. LOOP KENDALI 50 HZ ===========================
