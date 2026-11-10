@@ -46,7 +46,7 @@ profiles:
       x: 0.02
       y: 0.05
       yaw: -1.571
-    map_file: peta_l1_dc.yaml
+    map_file: peta_l1_e11_v1.yaml
     max_angular_speed: 0.6
     max_linear_speed: 0.35
     predefined_points:

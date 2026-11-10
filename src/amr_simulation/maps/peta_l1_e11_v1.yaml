@@ -1,0 +1,7 @@
+image: peta_l1_e11_v1.pgm
+mode: trinary
+resolution: 0.05
+origin: [-5.633, -7.922, 0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.25
