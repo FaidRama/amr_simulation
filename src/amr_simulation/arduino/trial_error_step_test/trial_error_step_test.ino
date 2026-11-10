@@ -54,7 +54,7 @@ const unsigned long SAMPLING_MS = 20;
 const float DT = SAMPLING_MS / 1000.0; // 0.02 s (50 Hz)
 
 // TARGET STEP RPM & DURASI KHUSUS 60 RPM
-const float TARGET_STEP_RPM = 60.0;
+const float TARGET_STEP_RPM = 80.0;
 const float T_STEP_MULAI    = 0.5;   // Detik ke-0.5 step diaktifkan
 const float DURASI_TOTAL    = 6.5;   // Total durasi pengujian (detik)
 
@@ -217,7 +217,7 @@ void driveMotors(float pwmL, float pwmR) {
 // ====================== 9. CETAK REKAP HASIL 5 PARAMETER ==================
 void cetakRangkumanPerforma() {
   Serial.println(F("\n# ============================================================================"));
-  Serial.println(F("# RANGKUMAN 5 PARAMETER EVALUASI PERFORMA STEP RESPON 60 RPM (TRIAL & ERROR)"));
+  Serial.println(F("# RANGKUMAN 5 PARAMETER EVALUASI PERFORMA STEP RESPON 80 RPM (TRIAL & ERROR)"));
   Serial.println(F("# ============================================================================"));
   Serial.println(F("# Parameter Evaluasi              | Motor Kiri     | Motor Kanan    | Satuan"));
   Serial.println(F("# ----------------------------------------------------------------------------"));
@@ -250,7 +250,7 @@ void cetakRangkumanPerforma() {
   Serial.print(perf_L.getSteadyPWM(), 1); Serial.print(F("        | "));
   Serial.print(perf_R.getSteadyPWM(), 1); Serial.println(F("        | PWM (0-255)"));
   Serial.println(F("# ============================================================================"));
-  Serial.println(F("# PENGUJIAN 60 RPM SELESAI. Silakan copy data CSV atau tabel di atas."));
+  Serial.println(F("# PENGUJIAN 80 RPM SELESAI. Silakan copy data CSV atau tabel di atas."));
 }
 
 // ====================== 10. CETAK HEADER CSV & RESET =====================
@@ -272,10 +272,10 @@ void mulaiPengujian60RPM() {
   waktuMulaiTes = millis();
   waktuSebelumnya = millis();
 
-  Serial.println(F("# PENGUJIAN : STEP RESPON 60 RPM (TRIAL & ERROR - FILTER ALPHA 0.25);;;;;;;;"));
+  Serial.println(F("# PENGUJIAN : STEP RESPON 80 RPM (TRIAL & ERROR - FILTER ALPHA 0.25);;;;;;;;"));
   Serial.println(F("# MOTOR_LEFT : Kp=2.5000; Ki=18.0000; Kd=0.0000;;;;;;"));
   Serial.println(F("# MOTOR_RIGHT: Kp=2.8000; Ki=18.0000; Kd=0.0000;;;;;;"));
-  Serial.println(F("# TARGET_RPM : 60.0; DURASI: 6.5s;;;;;;;"));
+  Serial.println(F("# TARGET_RPM : 80.0; DURASI: 6.5s;;;;;;;"));
   Serial.println(F("Time_s;Target_RPM_L;Actual_RPM_L;PWM_L;Error_L;Target_RPM_R;Actual_RPM_R;PWM_R;Error_R"));
 }
 
@@ -309,7 +309,7 @@ void setup() {
   driveMotors(0, 0);
   sedangUji = false;
   stepAktif = false;
-  Serial.println(F("# [STANDBY] Robot siap. Menunggu perintah '1' untuk memulai pengujian 60 RPM."));
+  Serial.println(F("# [STANDBY] Robot siap. Menunggu perintah '1' untuk memulai pengujian 80 RPM."));
 }
 
 // ====================== 12. LOOP KENDALI 50 HZ ===========================
