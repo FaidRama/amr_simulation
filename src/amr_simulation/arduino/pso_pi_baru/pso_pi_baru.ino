@@ -43,12 +43,12 @@ const float CPR_WHEEL      = 350.7; // 7 PPR * 50.1 gearbox = 350.7 ticks/rev
 // =========================================================================
 // 4. PARAMETER KENDALI PI HASIL OPTIMASI PSO (MODEL MURNI)
 // =========================================================================
-const float KP_L = 2.5238;
-const float KI_L = 23.5015;
+const float KP_L = 2.7247;
+const float KI_L = 23.5472;
 const float KD_L = 0.0000;
 
-const float KP_R = 2.3640;
-const float KI_R = 24.2184;
+const float KP_R = 2.5428;
+const float KI_R = 24.1789;
 const float KD_R = 0.0000;
 
 const unsigned long SAMPLING_MS = 20;
