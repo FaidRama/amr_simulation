@@ -45,8 +45,8 @@ const float WHEEL_BASE_B = 0.458;   // meter (45.8 cm)
 const float CPR_WHEEL = 350.7; // Ticks per revolusi PG36 (7 PPR * 50.1 gearbox)
 
 // ====================== 4. PARAMETER KENDALI PI TRIAL & ERROR ============
-const float KP_L = 2.5, KI_L = 18, KD_L = 0;
-const float KP_R = 2.8, KI_R = 18, KD_R = 0;
+const float KP_L =2.7247, KI_L = 23.5472, KD_L = 0;
+const float KP_R = 2.5428, KI_R = 24.1789, KD_R = 0;
 
 const unsigned long SAMPLING_MS = 20;
 const float DT = SAMPLING_MS / 1000.0; // 0.02 s (50 Hz)
