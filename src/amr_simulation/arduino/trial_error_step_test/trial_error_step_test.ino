@@ -54,7 +54,7 @@ const unsigned long SAMPLING_MS = 20;
 const float DT = SAMPLING_MS / 1000.0; // 0.02 s (50 Hz)
 
 // TARGET STEP RPM & DURASI KHUSUS 60 RPM
-const float TARGET_STEP_RPM = 80.0;
+const float TARGET_STEP_RPM = 100.0;
 const float T_STEP_MULAI    = 0.5;   // Detik ke-0.5 step diaktifkan
 const float DURASI_TOTAL    = 6.5;   // Total durasi pengujian (detik)
 
@@ -272,10 +272,10 @@ void mulaiPengujian60RPM() {
   waktuMulaiTes = millis();
   waktuSebelumnya = millis();
 
-  Serial.println(F("# PENGUJIAN : STEP RESPON 80 RPM (TRIAL & ERROR - FILTER ALPHA 0.25);;;;;;;;"));
+  Serial.println(F("# PENGUJIAN : STEP RESPON 100 RPM (TRIAL & ERROR - FILTER ALPHA 0.25);;;;;;;;"));
   Serial.println(F("# MOTOR_LEFT : Kp=2.5000; Ki=18.0000; Kd=0.0000;;;;;;"));
   Serial.println(F("# MOTOR_RIGHT: Kp=2.8000; Ki=18.0000; Kd=0.0000;;;;;;"));
-  Serial.println(F("# TARGET_RPM : 80.0; DURASI: 6.5s;;;;;;;"));
+  Serial.println(F("# TARGET_RPM : 100.0; DURASI: 6.5s;;;;;;;"));
   Serial.println(F("Time_s;Target_RPM_L;Actual_RPM_L;PWM_L;Error_L;Target_RPM_R;Actual_RPM_R;PWM_R;Error_R"));
 }
 
