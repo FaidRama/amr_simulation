@@ -9,5 +9,5 @@
   "obstacle_phrase": "Permisi, saya mau lewat. Mohon beri jalan.",
   "arrival_phrase": "Deliver tiba. Robot sudah sampai di titik tujuan, silakan ambil barang.",
   "pickup_phrase": "Pickup tiba. Robot sudah sampai di titik pickup, silakan muat barang.",
-  "home_phrase": "Misi selesai. Robot kembali ke stasiun pangkalan."
+  "home_phrase": "Misi selesai. Robot kembali ke titik awal."
 }
