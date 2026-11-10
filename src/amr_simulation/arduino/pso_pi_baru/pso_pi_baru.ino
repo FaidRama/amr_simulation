@@ -1,13 +1,13 @@
 /* =========================================================================
  * FIRMWARE AMR DIFFERENTIAL DRIVE - PENGUJIAN STEP RESPON 60 RPM (PI - PSO)
  * KHUSUS PENGUJIAN TUNGGAL: STEP 60 RPM (DURASI 6.5 DETIK)
- * METODE    : PARTICLE SWARM OPTIMIZATION (MODEL PLANT MURNI + CONDITIONAL INTEGRATION)
+ * METODE    : PARTICLE SWARM OPTIMIZATION (MODEL PLANT MURNI IDENTIK T&E)
  * FILTER EMA: ALPHA = 0.25 (Peredaman lonjakan kuantisasi diskrit enkoder 7 PPR)
  * MODE      : STANDBY DIAM SAAT UPLOAD (MENUNGGU PERINTAH DARI SERIAL/PYTHON)
  * FITUR     : MENCETAK DATA CSV 50 HZ + MENGHITUNG OTOMATIS 5 PARAMETER PERFORMA
  *             (RMSE, Overshoot, Rise Time, Settling Time, Steady-State Error)
- * PARAMETER : Motor Kiri  (Kp = 2.5238 | Ki = 23.5015 | Kd = 0.0000)
- *             Motor Kanan (Kp = 2.3640 | Ki = 24.2184 | Kd = 0.0000)
+ * PARAMETER : Motor Kiri  (Kp = 2.7247 | Ki = 23.5472 | Kd = 0.0000)
+ *             Motor Kanan (Kp = 2.5428 | Ki = 24.1789 | Kd = 0.0000)
  * SKRIPSI   : DIVALA ZAHRA OKTAVIA (TEKNIK KOMPUTER UNNES 2026)
  * ========================================================================= */
 
@@ -274,8 +274,8 @@ void mulaiPengujian60RPM() {
   waktuSebelumnya = millis();
 
   Serial.println(F("# PENGUJIAN : STEP RESPON 60 RPM (PI-PSO MODEL MURNI - FILTER ALPHA 0.25);;;;;;;;"));
-  Serial.println(F("# MOTOR_LEFT : Kp=2.5238; Ki=23.5015; Kd=0.0000;;;;;;"));
-  Serial.println(F("# MOTOR_RIGHT: Kp=2.3640; Ki=24.2184; Kd=0.0000;;;;;;"));
+  Serial.println(F("# MOTOR_LEFT : Kp=2.7247; Ki=23.5472; Kd=0.0000;;;;;;"));
+  Serial.println(F("# MOTOR_RIGHT: Kp=2.5428; Ki=24.1789; Kd=0.0000;;;;;;"));
   Serial.println(F("# TARGET_RPM : 60.0; DURASI: 6.5s;;;;;;;"));
   Serial.println(F("Time_s;Target_RPM_L;Actual_RPM_L;PWM_L;Error_L;Target_RPM_R;Actual_RPM_R;PWM_R;Error_R"));
 }
