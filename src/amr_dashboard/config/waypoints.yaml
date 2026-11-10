@@ -1,6 +1,6 @@
 home_position:
-  x: 0.02
-  y: 0.05
+  x: 0.12
+  y: 0.02
   yaw: -1.571
 operation_mode: real
 predefined_points:
@@ -43,10 +43,10 @@ predefined_points:
 profiles:
   real:
     home_position:
-      x: 0.02
-      y: 0.05
+      x: 0.12
+      y: 0.02
       yaw: -1.571
-    map_file: peta_l1_e11_v1.yaml
+    map_file: peta_e11_l1_v2.yaml
     max_angular_speed: 0.6
     max_linear_speed: 0.35
     predefined_points:
