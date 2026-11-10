@@ -1,13 +1,13 @@
 /* =========================================================================
  * FIRMWARE AMR DIFFERENTIAL DRIVE - PENGUJIAN STEP RESPON 60 RPM (PI - PSO)
  * KHUSUS PENGUJIAN TUNGGAL: STEP 60 RPM (DURASI 6.5 DETIK)
- * METODE    : PARTICLE SWARM OPTIMIZATION (MODEL PLANT MURNI IDENTIK T&E)
+ * METODE    : PARTICLE SWARM OPTIMIZATION (MODEL PLANT MURNI + CONDITIONAL INTEGRATION)
  * FILTER EMA: ALPHA = 0.25 (Peredaman lonjakan kuantisasi diskrit enkoder 7 PPR)
  * MODE      : STANDBY DIAM SAAT UPLOAD (MENUNGGU PERINTAH DARI SERIAL/PYTHON)
  * FITUR     : MENCETAK DATA CSV 50 HZ + MENGHITUNG OTOMATIS 5 PARAMETER PERFORMA
  *             (RMSE, Overshoot, Rise Time, Settling Time, Steady-State Error)
- * PARAMETER : Motor Kiri  (Kp = 2.7247 | Ki = 23.5472 | Kd = 0.0000)
- *             Motor Kanan (Kp = 2.5428 | Ki = 24.1789 | Kd = 0.0000)
+ * PARAMETER : Motor Kiri  (Kp = 2.5238 | Ki = 23.5015 | Kd = 0.0000)
+ *             Motor Kanan (Kp = 2.3640 | Ki = 24.2184 | Kd = 0.0000)
  * SKRIPSI   : DIVALA ZAHRA OKTAVIA (TEKNIK KOMPUTER UNNES 2026)
  * ========================================================================= */
 
