@@ -8,6 +8,8 @@ Menggabungkan Flask HTTP server dengan ROS2 node dalam satu proses.
 """
 import os
 import sys
+import pwd
+import shutil
 import json
 import time
 import math
@@ -3033,7 +3035,9 @@ def api_voice_command():
 
     # Rule-based offline fast path untuk matikan jetson / power off
     if any(k in text_lower for k in ['matikan robot', 'matikan jetson', 'power off', 'shutdown', 'shut down']):
-        execute_system_power('poweroff')
+        ok, msg = execute_system_power('poweroff')
+        if not ok:
+            return jsonify({'success': False, 'action': 'poweroff', 'error': msg, 'spoken_response': msg, 'text': text})
         return jsonify({
             'success': True,
             'action': 'poweroff',
@@ -3042,7 +3046,9 @@ def api_voice_command():
         })
 
     if any(k in text_lower for k in ['reboot robot', 'reboot jetson', 'restart robot', 'restart jetson', 'mulai ulang robot', 'mulai ulang jetson']):
-        execute_system_power('reboot')
+        ok, msg = execute_system_power('reboot')
+        if not ok:
+            return jsonify({'success': False, 'action': 'reboot', 'error': msg, 'spoken_response': msg, 'text': text})
         return jsonify({
             'success': True,
             'action': 'reboot',
@@ -3435,6 +3441,61 @@ def get_system_cpu_temp():
     return None
 
 
+def get_power_setup_command():
+    """Perintah sekali jalan di terminal Jetson untuk mengaktifkan sudo poweroff/reboot tanpa password."""
+    try:
+        user = pwd.getpwuid(os.getuid()).pw_name
+    except Exception:
+        user = os.environ.get('USER', 'jetson')
+    return (
+        f"echo '{user} ALL=(root) NOPASSWD: /sbin/poweroff, /sbin/reboot, /sbin/shutdown, "
+        f"/usr/sbin/poweroff, /usr/sbin/reboot, /usr/sbin/shutdown, /bin/systemctl, /usr/bin/systemctl' "
+        f"| sudo tee /etc/sudoers.d/amr-power && sudo chmod 0440 /etc/sudoers.d/amr-power"
+    )
+
+
+def check_system_power_permission(action='poweroff'):
+    """
+    Memeriksa apakah proses dashboard memiliki izin mematikan/reboot OS tanpa prompt password.
+    Mengembalikan (boleh: bool, metode: str).
+    """
+    if os.geteuid() == 0:
+        return True, 'root'
+
+    target_bins = (
+        ['/sbin/poweroff', '/usr/sbin/poweroff', '/sbin/shutdown', '/usr/sbin/shutdown', '/bin/systemctl', '/usr/bin/systemctl']
+        if action == 'poweroff'
+        else ['/sbin/reboot', '/usr/sbin/reboot', '/sbin/shutdown', '/usr/sbin/shutdown', '/bin/systemctl', '/usr/bin/systemctl']
+    )
+
+    sudo_bin = shutil.which('sudo')
+    if sudo_bin:
+        for b in target_bins:
+            if not os.path.exists(b):
+                continue
+            try:
+                res = subprocess.run([sudo_bin, '-n', '-l', b], capture_output=True, text=True, timeout=1.5)
+                if res.returncode == 0:
+                    return True, f'sudo:{b}'
+            except Exception:
+                pass
+
+    pkcheck_bin = shutil.which('pkcheck')
+    if pkcheck_bin:
+        polkit_action = 'org.freedesktop.login1.power-off' if action == 'poweroff' else 'org.freedesktop.login1.reboot'
+        try:
+            res = subprocess.run(
+                [pkcheck_bin, '--action-id', polkit_action, '--process', str(os.getpid())],
+                capture_output=True, text=True, timeout=1.5
+            )
+            if res.returncode == 0:
+                return True, 'polkit'
+        except Exception:
+            pass
+
+    return False, 'missing_permission'
+
+
 def execute_system_power(action='poweroff'):
     """
     Eksekusi shutdown atau reboot pada sistem Linux (Jetson Nano / Host PC).
@@ -3442,6 +3503,14 @@ def execute_system_power(action='poweroff'):
     """
     if action not in ('poweroff', 'reboot'):
         return False, f"Aksi '{action}' tidak valid. Harus 'poweroff' atau 'reboot'."
+
+    has_perm, method = check_system_power_permission(action)
+    if not has_perm:
+        return (
+            False,
+            f"Jetson menolak perintah {action} tanpa password (sudoers NOPASSWD / Polkit belum aktif). "
+            f"Jalankan perintah setup satu kali di terminal Jetson."
+        )
 
     global ros_node
     # 1. Safety stop robot: kirim kecepatan 0 beberapa kali
@@ -3468,28 +3537,50 @@ def execute_system_power(action='poweroff'):
     # agar HTTP response sempat kembali 200 OK ke antarmuka web browser
     def _power_worker():
         time.sleep(1.2)
-        print(f"[SYSTEM-POWER] Memulai proses {action} sistem...", flush=True)
+        print(f"[SYSTEM-POWER] Memulai proses {action} sistem (metode terdeteksi: {method})...", flush=True)
+
+        # Hentikan node ROS & hardware dengan rapi sebelum OS halt
+        for stop_fn in (stop_navigation_process, stop_slam_process, stop_arduino_process, stop_camera_process, stop_human_node_process):
+            try:
+                stop_fn()
+            except Exception:
+                pass
 
         if action == 'poweroff':
-            cmd_list = [
+            raw_cmds = [
+                ['sudo', '-n', '/sbin/poweroff'],
+                ['sudo', '-n', '/usr/sbin/poweroff'],
+                ['sudo', '-n', '/sbin/shutdown', '-h', 'now'],
+                ['sudo', '-n', '/usr/sbin/shutdown', '-h', 'now'],
+                ['sudo', '-n', '/bin/systemctl', 'poweroff', '-i'],
+                ['sudo', '-n', '/usr/bin/systemctl', 'poweroff', '-i'],
+                ['systemctl', 'poweroff'],
                 ['systemctl', 'poweroff', '-i'],
                 ['dbus-send', '--system', '--print-reply', '--dest=org.freedesktop.login1',
                  '/org/freedesktop/login1', 'org.freedesktop.login1.Manager.PowerOff', 'boolean:true'],
-                ['sudo', '-n', 'poweroff'],
-                ['sudo', '-n', 'shutdown', '-h', 'now'],
-                ['poweroff'],
+                ['/sbin/poweroff'],
             ]
         else:
-            cmd_list = [
+            raw_cmds = [
+                ['sudo', '-n', '/sbin/reboot'],
+                ['sudo', '-n', '/usr/sbin/reboot'],
+                ['sudo', '-n', '/sbin/shutdown', '-r', 'now'],
+                ['sudo', '-n', '/usr/sbin/shutdown', '-r', 'now'],
+                ['sudo', '-n', '/bin/systemctl', 'reboot', '-i'],
+                ['sudo', '-n', '/usr/bin/systemctl', 'reboot', '-i'],
+                ['systemctl', 'reboot'],
                 ['systemctl', 'reboot', '-i'],
                 ['dbus-send', '--system', '--print-reply', '--dest=org.freedesktop.login1',
                  '/org/freedesktop/login1', 'org.freedesktop.login1.Manager.Reboot', 'boolean:true'],
-                ['sudo', '-n', 'reboot'],
-                ['sudo', '-n', 'shutdown', '-r', 'now'],
-                ['reboot'],
+                ['/sbin/reboot'],
             ]
 
-        for cmd in cmd_list:
+        for cmd in raw_cmds:
+            exe = cmd[2] if cmd[0] == 'sudo' else cmd[0]
+            if exe.startswith('/') and not os.path.exists(exe):
+                continue
+            if not exe.startswith('/') and not shutil.which(exe):
+                continue
             try:
                 print(f"[SYSTEM-POWER] Menjalankan: {' '.join(cmd)}", flush=True)
                 res = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
@@ -3499,11 +3590,11 @@ def execute_system_power(action='poweroff'):
                 else:
                     print(f"[SYSTEM-POWER] Gagal ({res.returncode}): {res.stderr.strip()}", flush=True)
             except Exception as ex:
-                print(f"[SYSTEM-POWER] Exception saat menjalankan {cmd[0]}: {ex}", flush=True)
+                print(f"[SYSTEM-POWER] Exception saat menjalankan {' '.join(cmd)}: {ex}", flush=True)
 
     t = threading.Thread(target=_power_worker, daemon=True)
     t.start()
-    return True, f"Perintah {action} berhasil dijadwalkan."
+    return True, f"Perintah {action} berhasil dijadwalkan ({method})."
 
 
 @app.route('/api/system/status')
@@ -3513,12 +3604,15 @@ def api_system_status():
     hours = int(uptime_sec // 3600)
     minutes = int((uptime_sec % 3600) // 60)
     uptime_str = f"{hours}j {minutes}m" if hours > 0 else f"{minutes} menit"
+    can_poweroff, power_method = check_system_power_permission('poweroff')
 
     return jsonify({
         'uptime_seconds': uptime_sec,
         'uptime_text': uptime_str,
         'cpu_temp': get_system_cpu_temp(),
-        'can_poweroff': True,
+        'can_poweroff': can_poweroff,
+        'power_method': power_method,
+        'power_setup_cmd': None if can_poweroff else get_power_setup_command(),
         'timestamp': time.time()
     })
 
@@ -3531,7 +3625,12 @@ def api_system_power():
     ok, msg = execute_system_power(action)
     if ok:
         return jsonify({'success': True, 'action': action, 'message': msg})
-    return jsonify({'success': False, 'action': action, 'error': msg}), 400
+    return jsonify({
+        'success': False,
+        'action': action,
+        'error': msg,
+        'setup_cmd': get_power_setup_command()
+    }), 403
 
 
 @app.route('/api/system/poweroff', methods=['POST'])
@@ -3540,7 +3639,12 @@ def api_system_poweroff():
     ok, msg = execute_system_power('poweroff')
     if ok:
         return jsonify({'success': True, 'action': 'poweroff', 'message': msg})
-    return jsonify({'success': False, 'action': 'poweroff', 'error': msg}), 400
+    return jsonify({
+        'success': False,
+        'action': 'poweroff',
+        'error': msg,
+        'setup_cmd': get_power_setup_command()
+    }), 403
 
 
 @app.route('/api/system/reboot', methods=['POST'])
@@ -3549,7 +3653,12 @@ def api_system_reboot():
     ok, msg = execute_system_power('reboot')
     if ok:
         return jsonify({'success': True, 'action': 'reboot', 'message': msg})
-    return jsonify({'success': False, 'action': 'reboot', 'error': msg}), 400
+    return jsonify({
+        'success': False,
+        'action': 'reboot',
+        'error': msg,
+        'setup_cmd': get_power_setup_command()
+    }), 403
 
 
 # =====================================================================

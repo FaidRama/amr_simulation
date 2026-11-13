@@ -5212,14 +5212,25 @@ async function openSystemPowerModal() {
 
     if (titleTag) titleTag.textContent = 'JETSON NANO // POWER MGMT';
 
-    // Ambil status sistem (uptime, suhu CPU)
+    // Ambil status sistem (uptime, suhu CPU, izin poweroff)
     let uptimeText = 'Memuat...';
     let tempText = '';
+    let permBanner = '';
     const sysData = await apiGet('/api/system/status');
     if (sysData) {
         uptimeText = sysData.uptime_text || 'Aktif';
         if (sysData.cpu_temp !== null && sysData.cpu_temp !== undefined) {
             tempText = ` • Suhu SOC: <strong style="color:var(--text-bright);">${sysData.cpu_temp}°C</strong>`;
+        }
+        if (sysData.can_poweroff === false) {
+            const setupCmd = (sysData.power_setup_cmd || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            permBanner = `
+                <div style="padding:10px 12px; border-radius:8px; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.4); font-size:0.75rem; color:var(--text-primary); line-height:1.45;">
+                    <div style="font-weight:700; color:#f59e0b; margin-bottom:4px;">⚠️ Izin Shutdown Tanpa Password Belum Aktif di Jetson</div>
+                    <div style="color:var(--text-secondary); margin-bottom:6px;">Jalankan perintah ini <strong>satu kali saja</strong> di terminal Jetson agar tombol Power Off & Reboot berfungsi:</div>
+                    <pre style="margin:0; padding:8px; background:rgba(0,0,0,0.45); border-radius:6px; overflow-x:auto; font-size:0.71rem; user-select:all; color:#fde68a;">${setupCmd}</pre>
+                </div>
+            `;
         }
     }
 
@@ -5233,6 +5244,8 @@ async function openSystemPowerModal() {
                     ${getIcon('clock', 13)} Uptime: <strong style="color:var(--accent-bright);">${uptimeText}</strong>${tempText}
                 </div>
             </div>
+
+            ${permBanner}
 
             <div style="font-size:0.78rem; color:var(--text-secondary); line-height:1.4;">
                 Pilih tindakan manajemen daya sistem operasi Jetson Nano pada robot AMR:
@@ -5337,11 +5350,42 @@ async function executeSystemPower(action) {
     const isShutdown = action === 'poweroff';
     closePowerModal();
 
-    // Tampilkan screen status proses power-down
+    showToast(`Mengirim perintah ${isShutdown ? 'poweroff' : 'reboot'} ke Jetson...`, 'info');
+
+    // Kirim request ke backend terlebih dahulu sebelum memulai countdown
+    const res = await apiPost('/api/system/power', { action });
+
     const overlay = document.getElementById('power-modal-overlay');
     const body = document.getElementById('power-modal-body');
     const titleTag = document.getElementById('power-modal-status-text');
 
+    if (!res || !res.success) {
+        const errMsg = (res && res.error) ? res.error : 'Server menolak perintah power.';
+        const setupCmd = (res && res.setup_cmd) ? res.setup_cmd.replace(/</g, '&lt;').replace(/>/g, '&gt;') : '';
+        showToast(`Gagal: ${errMsg}`, 'error');
+        if (overlay && body) {
+            if (titleTag) titleTag.textContent = 'IZIN POWEROFF DIPERLUKAN';
+            body.innerHTML = `
+                <div style="padding:12px 4px; display:flex; flex-direction:column; gap:12px;">
+                    <div style="padding:12px; border-radius:8px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.4); color:var(--text-primary); font-size:0.82rem; line-height:1.45;">
+                        <strong style="color:#ef4444;">❌ Gagal Mematikan Jetson</strong><br>
+                        ${errMsg.replace(/</g, '&lt;').replace(/>/g, '&gt;')}
+                    </div>
+                    ${setupCmd ? `
+                    <div style="font-size:0.77rem; color:var(--text-secondary); line-height:1.4;">
+                        Jalankan perintah berikut <strong>satu kali</strong> di terminal Jetson untuk mengaktifkan shutdown/reboot tanpa password:
+                        <pre style="margin:8px 0 0; padding:10px; background:rgba(0,0,0,0.5); border:1px solid var(--border-subtle); border-radius:6px; overflow-x:auto; font-size:0.72rem; user-select:all; color:#fde68a;">${setupCmd}</pre>
+                    </div>` : ''}
+                </div>
+            `;
+            overlay.classList.remove('hidden');
+        }
+        return;
+    }
+
+    showToast(`Perintah ${action} berhasil diterima Jetson`, 'success');
+
+    // Tampilkan screen status proses power-down setelah backend mengonfirmasi izin & eksekusi
     if (overlay && body) {
         if (titleTag) {
             titleTag.textContent = isShutdown ? 'MEMATIKAN JETSON NANO...' : 'REBOOTING JETSON NANO...';
@@ -5403,17 +5447,6 @@ async function executeSystemPower(action) {
             }
         }, 1000);
     }
-
-    showToast(`Mengirim perintah ${isShutdown ? 'poweroff' : 'reboot'} ke Jetson...`, 'info');
-
-    // Kirim request ke backend
-    const res = await apiPost('/api/system/power', { action });
-    if (!res.success) {
-        showToast(`Gagal: ${res.error || 'Server menolak perintah power'}`, 'error');
-        return;
-    }
-
-    showToast(`Perintah ${action} berhasil diterima Jetson`, 'success');
 
     // Jika reboot: lakukan polling reconnect otomatis
     if (!isShutdown) {
