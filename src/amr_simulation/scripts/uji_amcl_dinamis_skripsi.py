@@ -53,6 +53,7 @@ from nav_msgs.msg import Path, Odometry
 from action_msgs.msg import GoalStatus, GoalStatusArray
 from nav2_msgs.action import NavigateToPose
 from std_msgs.msg import String
+from tf2_ros import Buffer, TransformListener
 
 
 def euler_from_quaternion(q):
@@ -167,6 +168,10 @@ class EvaluasiAMCLDinamisNode(Node):
         # Action Client Nav2
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
 
+        # TF2 Listener (sinkron dengan pose real-time map->base_footprint yang dievaluasi Nav2)
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
         # Subscriptions
         self.amcl_sub = self.create_subscription(
             PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, reliable_qos)
@@ -246,6 +251,24 @@ class EvaluasiAMCLDinamisNode(Node):
             {'name': 'Titik Awal (0,0)', 'x': 0.0, 'y': 0.0, 'yaw': 0.0},
             {'name': 'Uji 1', 'x': 8.4, 'y': -2.55, 'yaw': 0.0}
         ]
+
+    def get_live_pose(self) -> dict:
+        """Membaca pose real-time dari TF map->base_footprint agar 100% sinkron dengan Nav2.
+        Fallback ke /amcl_pose jika TF belum tersedia.
+        """
+        try:
+            t = self.tf_buffer.lookup_transform('map', 'base_footprint', rclpy.time.Time())
+            tr = t.transform.translation
+            rot = t.transform.rotation
+            return {
+                'x': float(tr.x),
+                'y': float(tr.y),
+                'yaw': euler_from_quaternion(rot),
+            }
+        except Exception:
+            if self.current_pose:
+                return dict(self.current_pose)
+            return {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
 
     def on_amcl_pose(self, msg: PoseWithCovarianceStamped):
         p = msg.pose.pose.position
@@ -422,7 +445,7 @@ class EvaluasiAMCLDinamisNode(Node):
                     self.is_navigating = True
                     self.start_time = time.time()
                     self.actual_travel_dist = 0.0
-                    self.start_pose = dict(self.current_pose) if self.current_pose else {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+                    self.start_pose = self.get_live_pose()
                     if not self.active_goal:
                         if self.active_path and len(self.active_path.poses) > 0:
                             lp = self.active_path.poses[-1].pose
@@ -461,7 +484,7 @@ class EvaluasiAMCLDinamisNode(Node):
                     self.last_goal_id = None
                     end_time = time.time()
                     travel_time = end_time - (self.start_time or end_time)
-                    final_amcl = dict(self.current_pose) if self.current_pose else {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+                    final_amcl = self.get_live_pose()
                     goal = dict(self.active_goal) if self.active_goal else {'name': 'Target', 'x': final_amcl['x'], 'y': final_amcl['y'], 'yaw': final_amcl['yaw']}
 
                     self.arrival_data = {
