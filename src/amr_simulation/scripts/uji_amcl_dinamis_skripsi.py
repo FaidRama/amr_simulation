@@ -163,6 +163,11 @@ class EvaluasiAMCLDinamisNode(Node):
 
         # QoS
         reliable_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        tl_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE
+        )
         sensor_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
 
         # Action Client Nav2
@@ -174,6 +179,8 @@ class EvaluasiAMCLDinamisNode(Node):
 
         # Subscriptions
         self.amcl_sub = self.create_subscription(
+            PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, tl_qos)
+        self.amcl_sub_vol = self.create_subscription(
             PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, reliable_qos)
         self.odom_sub = self.create_subscription(
             Odometry, '/odom', self.on_odom, reliable_qos)
@@ -888,8 +895,9 @@ def main(args=None):
                             if now - node.last_terminal_log_time >= 0.5:
                                 node.last_terminal_log_time = now
                                 el = now - (node.start_time or now)
-                                cur_x = node.current_pose['x'] if node.current_pose else 0.0
-                                cur_y = node.current_pose['y'] if node.current_pose else 0.0
+                                live = node.get_live_pose()
+                                cur_x = live['x']
+                                cur_y = live['y']
                                 sig_xy = max(node.sigma_x, node.sigma_y) * 100.0
                                 sys.stdout.write(
                                     f"\r  ⏱️ [{el:4.1f}s] Speed: {node.current_speed:4.2f}m/s | "
@@ -944,8 +952,9 @@ def main(args=None):
                                 if now - node.last_terminal_log_time >= 0.5:
                                     node.last_terminal_log_time = now
                                     el = now - (node.start_time or now)
-                                    cur_x = node.current_pose['x'] if node.current_pose else 0.0
-                                    cur_y = node.current_pose['y'] if node.current_pose else 0.0
+                                    live = node.get_live_pose()
+                                    cur_x = live['x']
+                                    cur_y = live['y']
                                     sig_xy = max(node.sigma_x, node.sigma_y) * 100.0
                                     sys.stdout.write(
                                         f"\r  ⏱️ [{el:4.1f}s] Speed: {node.current_speed:4.2f}m/s | "

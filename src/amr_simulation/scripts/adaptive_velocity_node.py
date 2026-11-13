@@ -199,33 +199,16 @@ class AdaptiveVelocityNode(Node):
         now_msg = now.to_msg()
         wall_now = time.time()
 
-        # Pantau transform map -> odom dari AMCL yang ada di TF buffer
-        try:
-            t = self.tf_buffer.lookup_transform('map', 'odom', rclpy.time.Time())
-            self.last_map_odom_x = t.transform.translation.x
-            self.last_map_odom_y = t.transform.translation.y
-            self.last_map_odom_qz = t.transform.rotation.z
-            self.last_map_odom_qw = t.transform.rotation.w
-
-            t_sec = t.header.stamp.sec + (t.header.stamp.nanosec / 1e9)
-            now_sec = now.nanoseconds / 1e9
-            if abs(now_sec - t_sec) < 0.4:
-                self.last_amcl_tf_wall = wall_now
-        except Exception:
-            pass
-
-        # 1. Bootstrap TF map -> odom & TF Continuity Keeper:
-        # Menjamin frame 'map' selalu terhubung ke 'odom' dan TIDAK PERNAH KEDALUWARSA di TF buffer!
-        # - Saat startup sebelum AMCL init: siarkan bootstrap TF (0,0)
-        # - Saat AMCL sedang hening > 0.4s (misal robot diam lama saat standby / menunggu dispatch baru):
-        #   siarkan ulang transform map->odom terakhir yang valid dengan stempel waktu sekarang (now + 0.1s).
+        # 1. Bootstrap TF map -> odom:
+        # Menjamin frame 'map' terhubung ke 'odom' saat startup sebelum AMCL aktif.
+        # Begitu AMCL sudah terinisialisasi (self.amcl_initialized == True), TF map -> odom
+        # diserahkan sepenuhnya ke AMCL (single broadcaster) agar tidak menimpa /initialpose.
         scan_active = (wall_now - self.last_scan_wall_time) < 2.0
         if not scan_active:
             self.first_scan_wall_time = 0.0
         enc_ok = self.encoder_ok(wall_now)
 
-        amcl_silent = (wall_now - self.last_amcl_tf_wall) > 0.4
-        if (not self.amcl_initialized) or amcl_silent:
+        if not self.amcl_initialized:
             future_stamp = (now + rclpy.duration.Duration(seconds=0.1)).to_msg()
             self.publish_bootstrap_tf(future_stamp)
 
