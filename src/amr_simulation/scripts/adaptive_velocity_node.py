@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from collections import deque
 import time
 import rclpy
 from rclpy.node import Node
@@ -7,6 +8,7 @@ from geometry_msgs.msg import Twist, TransformStamped, PoseWithCovarianceStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String, Bool
+from tf2_msgs.msg import TFMessage
 from tf2_ros import TransformBroadcaster, Buffer, TransformListener
 
 
@@ -38,11 +40,17 @@ class AdaptiveVelocityNode(Node):
 
         # --- NAV2 BOOTSTRAP TF & CONTINUITY KEEPER (map -> odom) ---
         # Menjamin frame 'map' selalu ada sejak detik ke-0 DAN tidak pernah kedaluwarsa
-        # di TF buffer saat robot diam lama / standby antar-pengantaran.
+        # di TF buffer saat robot diam lama / menunggu antar-pengantaran (ROS 2 Foxy AMCL).
         self.tf_broadcaster = TransformBroadcaster(self)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.last_amcl_tf_wall = 0.0
+        self.amcl_valid_until_sec = 0.0
+        self.own_tf_stamps = deque(maxlen=30)
+        self.initialpose_pause_until = 0.0
+        self.last_keepalive_pub_wall = 0.0
+        self.last_amcl_alive_check_wall = 0.0
+        self.amcl_crash_warned = False
         self.start_wall_time = time.time()
         self.amcl_initialized = False
         self.map_received = False
@@ -78,8 +86,11 @@ class AdaptiveVelocityNode(Node):
         self.create_subscription(LaserScan, '/scan_filtered', self.on_scan, 10)
         self.create_subscription(Bool, '/arduino/ready', self.on_arduino_ready, tl_qos)
         self.create_subscription(Odometry, '/odom', self.on_odom, 10)
+        self.create_subscription(TFMessage, '/tf', self.on_tf, 50)
         self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, 10)
         self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, tl_qos)
+        self.create_subscription(PoseWithCovarianceStamped, '/initialpose', self.on_initialpose, 10)
+        self.create_subscription(PoseWithCovarianceStamped, '/initialpose', self.on_initialpose, tl_qos)
         self.create_subscription(PolygonStamped, '/local_costmap/published_footprint', self.on_local_footprint, 5)
         self.create_subscription(PolygonStamped, '/global_costmap/published_footprint', self.on_global_footprint, 5)
         self.initialpose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', tl_qos)
@@ -118,11 +129,37 @@ class AdaptiveVelocityNode(Node):
             return True
         return self.arduino_ready and (wall_now - self.last_odom_wall_time) < 2.0
 
+    def on_tf(self, msg: TFMessage):
+        now_sec = self.get_clock().now().nanoseconds / 1e9
+        for t in msg.transforms:
+            if t.header.frame_id == 'map' and t.child_frame_id == 'odom':
+                stamp_ns = int(t.header.stamp.sec) * 1_000_000_000 + int(t.header.stamp.nanosec)
+                if stamp_ns in self.own_tf_stamps:
+                    continue
+                self.last_map_odom_x = t.transform.translation.x
+                self.last_map_odom_y = t.transform.translation.y
+                self.last_map_odom_qz = t.transform.rotation.z
+                self.last_map_odom_qw = t.transform.rotation.w
+                self.last_amcl_tf_wall = time.time()
+                # AMCL menstempel map->odom dengan now + transform_tolerance (1.5s)
+                self.amcl_valid_until_sec = max(stamp_ns / 1e9, now_sec + 1.0)
+                if not self.amcl_initialized:
+                    self.amcl_initialized = True
+                    self.get_logger().info("✅ AMCL telah aktif (TF map->odom diterima) -> AMCL + Continuity Keeper aktif.")
+
+    def on_initialpose(self, msg: PoseWithCovarianceStamped):
+        if self.amcl_initialized:
+            now_wall = time.time()
+            should_log = now_wall + 2.0 > self.initialpose_pause_until
+            self.initialpose_pause_until = now_wall + 2.5
+            if should_log:
+                self.get_logger().info("📍 /initialpose diterima -> menjeda TF keepalive 2.5s agar AMCL memperbarui map->odom.")
+
     def on_amcl_pose(self, msg: PoseWithCovarianceStamped):
         self.last_amcl_tf_wall = time.time()
         if not self.amcl_initialized:
             self.amcl_initialized = True
-            self.get_logger().info("✅ AMCL telah aktif (/amcl_pose diterima) -> TF map->odom dikelola penuh oleh AMCL.")
+            self.get_logger().info("✅ AMCL telah aktif (/amcl_pose diterima) -> AMCL + Continuity Keeper aktif.")
 
     def on_local_footprint(self, msg: PolygonStamped):
         self.local_costmap_active = True
@@ -131,6 +168,8 @@ class AdaptiveVelocityNode(Node):
         self.global_costmap_active = True
 
     def publish_bootstrap_tf(self, now_msg):
+        stamp_ns = int(now_msg.sec) * 1_000_000_000 + int(now_msg.nanosec)
+        self.own_tf_stamps.append(stamp_ns)
         t = TransformStamped()
         t.header.stamp = now_msg
         t.header.frame_id = 'map'
@@ -199,10 +238,11 @@ class AdaptiveVelocityNode(Node):
         now_msg = now.to_msg()
         wall_now = time.time()
 
-        # 1. Bootstrap TF map -> odom:
-        # Menjamin frame 'map' terhubung ke 'odom' saat startup sebelum AMCL aktif.
-        # Begitu AMCL sudah terinisialisasi (self.amcl_initialized == True), TF map -> odom
-        # diserahkan sepenuhnya ke AMCL (single broadcaster) agar tidak menimpa /initialpose.
+        # 1. Bootstrap TF map -> odom & Continuity Keeper (tanpa menimpa AMCL / initialpose):
+        # - Saat startup sebelum AMCL init: siarkan bootstrap TF (0,0) pada 20 Hz.
+        # - Setelah AMCL aktif: serahkan ke AMCL selama transform AMCL masih berlaku.
+        # - Saat robot diam/jeda dan transform AMCL hampir kedaluwarsa (sisa < 0.35s)
+        #   serta AMCL hening > 0.8s (perilaku Nav2 Foxy saat diam), siarkan ulang pada 5 Hz.
         scan_active = (wall_now - self.last_scan_wall_time) < 2.0
         if not scan_active:
             self.first_scan_wall_time = 0.0
@@ -211,6 +251,29 @@ class AdaptiveVelocityNode(Node):
         if not self.amcl_initialized:
             future_stamp = (now + rclpy.duration.Duration(seconds=0.1)).to_msg()
             self.publish_bootstrap_tf(future_stamp)
+        else:
+            now_sec = now.nanoseconds / 1e9
+            amcl_expiring = now_sec >= (self.amcl_valid_until_sec - 0.35)
+            amcl_silent = (wall_now - self.last_amcl_tf_wall) > 0.8
+            if (
+                wall_now >= self.initialpose_pause_until
+                and amcl_expiring
+                and amcl_silent
+                and (wall_now - self.last_keepalive_pub_wall) >= 0.2
+            ):
+                self.last_keepalive_pub_wall = wall_now
+                keep_stamp = (now + rclpy.duration.Duration(seconds=0.4)).to_msg()
+                self.publish_bootstrap_tf(keep_stamp)
+
+            # Deteksi dini jika node 'amcl' crash di tengah jalan
+            if not self.amcl_crash_warned and (wall_now - self.last_amcl_alive_check_wall) >= 5.0:
+                self.last_amcl_alive_check_wall = wall_now
+                if 'amcl' not in self.get_node_names():
+                    self.amcl_crash_warned = True
+                    self.get_logger().error("🔴 [AMCL CRASH] Node 'amcl' terdeteksi mati di tengah navigasi!")
+                    log_msg = String()
+                    log_msg.data = "🔴 [AMCL CRASH] Node 'amcl' mati di tengah jalan - harap STOP & START ulang Navigasi."
+                    self.delivery_log_pub.publish(log_msg)
 
         # Deteksi encoder hilang/kembali setelah sempat siap
         if self.encoder_was_ok and not enc_ok:
