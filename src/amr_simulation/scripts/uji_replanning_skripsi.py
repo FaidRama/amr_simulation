@@ -200,7 +200,7 @@ class EvaluasiReplanningNode(Node):
 
         # Action Clients
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
-        self.planner_client = ActionClient(self, ComputePathToPose, '/compute_path_to_pose')
+        self.planner_client = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
 
         # TF2 Listener (sinkron dengan pose real-time map->base_footprint dan map->laser)
         self.tf_buffer = Buffer()
@@ -652,12 +652,13 @@ class EvaluasiReplanningNode(Node):
         return max_d
 
     def _measure_astar_worker(self):
-        """Mengukur waktu komputasi murni A* via action /compute_path_to_pose tanpa memblokir spin thread."""
+        """Mengukur waktu komputasi A* via action compute_path_to_pose (kompatibel Foxy & Humble)."""
         try:
-            if not self.planner_client.wait_for_server(timeout_sec=1.5):
-                self.astar_query_done.set()
+            if not self.planner_client.wait_for_server(timeout_sec=2.0):
+                self.get_logger().warn("Action compute_path_to_pose tidak merespons (timeout 2.0s).")
                 return
 
+            now_msg = self.get_clock().now().to_msg()
             start_ps = self.detect_pose_stamped
             if start_ps is None:
                 live = self.get_live_pose()
@@ -666,24 +667,32 @@ class EvaluasiReplanningNode(Node):
                 start_ps.pose.position.x = live['x']
                 start_ps.pose.position.y = live['y']
                 start_ps.pose.orientation = euler_to_quaternion(math.degrees(live['yaw']))
+            start_ps.header.stamp = now_msg
 
             with self.lock:
                 g = dict(self.active_goal) if self.active_goal else None
             if not g:
-                self.astar_query_done.set()
                 return
 
             goal_ps = PoseStamped()
             goal_ps.header.frame_id = 'map'
+            goal_ps.header.stamp = now_msg
             goal_ps.pose.position.x = float(g['x'])
             goal_ps.pose.position.y = float(g['y'])
             goal_ps.pose.orientation = euler_to_quaternion(math.degrees(g['yaw']))
 
             req = ComputePathToPose.Goal()
-            req.start = start_ps
-            req.goal = goal_ps
-            req.planner_id = "GridBased"
-            req.use_start = True
+            # ROS 2 Foxy memakai field 'pose', sedangkan Humble/Iron memakai 'goal', 'start', 'use_start'
+            if hasattr(req, 'goal'):
+                req.goal = goal_ps
+                if hasattr(req, 'start'):
+                    req.start = start_ps
+                if hasattr(req, 'use_start'):
+                    req.use_start = True
+            elif hasattr(req, 'pose'):
+                req.pose = goal_ps
+            if hasattr(req, 'planner_id'):
+                req.planner_id = "GridBased"
 
             t0 = time.perf_counter()
             gh_event = threading.Event()
@@ -693,13 +702,16 @@ class EvaluasiReplanningNode(Node):
             def _on_gh(f):
                 try:
                     gh_holder['gh'] = f.result()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    gh_holder['err'] = exc
                 gh_event.set()
 
             send_fut.add_done_callback(_on_gh)
-            if not gh_event.wait(timeout=2.0) or not gh_holder.get('gh') or not gh_holder['gh'].accepted:
-                self.astar_query_done.set()
+            if not gh_event.wait(timeout=2.0):
+                self.get_logger().warn("Timeout menunggu respons goal compute_path_to_pose.")
+                return
+            if not gh_holder.get('gh') or not gh_holder['gh'].accepted:
+                self.get_logger().warn(f"Goal compute_path_to_pose ditolak planner_server: {gh_holder.get('err', '')}")
                 return
 
             res_event = threading.Event()
@@ -709,13 +721,13 @@ class EvaluasiReplanningNode(Node):
             def _on_res(f):
                 try:
                     res_holder['res'] = f.result().result
-                except Exception:
-                    pass
+                except Exception as exc:
+                    res_holder['err'] = exc
                 res_event.set()
 
             res_fut.add_done_callback(_on_res)
             if not res_event.wait(timeout=2.5) or 'res' not in res_holder:
-                self.astar_query_done.set()
+                self.get_logger().warn(f"Timeout / gagal hasil compute_path_to_pose: {res_holder.get('err', '')}")
                 return
 
             t1 = time.perf_counter()
@@ -724,8 +736,8 @@ class EvaluasiReplanningNode(Node):
                 self.astar_compute_ms = (res_msg.planning_time.sec * 1000.0) + (res_msg.planning_time.nanosec / 1e6)
             else:
                 self.astar_compute_ms = (t1 - t0) * 1000.0
-        except Exception:
-            pass
+        except Exception as e:
+            self.get_logger().warn(f"Gagal mengukur waktu A* via compute_path_to_pose: {e}")
         finally:
             self.astar_query_done.set()
 
@@ -832,7 +844,7 @@ class EvaluasiReplanningNode(Node):
 
         obs_txt = f"{obs_dist:.2f} m" if obs_dist is not None else "Tidak terdeteksi di depan jalur"
         astar_txt = f"{astar_ms:.2f} ms" if astar_ms is not None else "N/A"
-        lat_txt = f"{latency_ms:.1f} ms" if latency_ms is not None else "N/A"
+        lat_txt = f"{latency_ms:.1f} ms (termasuk tunggu jadwal BT RateController)" if latency_ms is not None else "N/A"
         rep_txt = f"{l_rep:.2f} m (Sisa awal: {l_rem:.2f} m, Delta: {delta_l:+.2f} m)" if delta_l is not None else "N/A"
 
         print("\n" + "=" * 75)
