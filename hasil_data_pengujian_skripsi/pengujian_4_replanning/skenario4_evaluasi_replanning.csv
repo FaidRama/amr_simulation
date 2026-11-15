@@ -1,0 +1,3 @@
+Percobaan,Timestamp,Nama_Target,Start_X,Start_Y,Goal_X,Goal_Y,Jarak_Obstacle_Deteksi_m,Astar_Compute_Time_ms,Replanning_Latency_ms,Panjang_Rute_Awal_m,Sisa_Rute_Sebelum_Replan_m,Panjang_Rute_Replan_m,Delta_Panjang_m,Deviasi_Lateral_Max_m,Event_Replan,Status_Navigasi,Keterangan_Kelayakan
+1,2026-11-15 20:57:33,[SEKALI ANTAR] datum 1,0.02,-0.17,-5.00,-1.00,2.47,-,1587.1,5.16,3.07,3.41,+0.34,0.72,TERDETEKSI,SUCCEEDED,TIDAK MEMENUHI
+2,2026-11-15 21:04:45,[SEKALI ANTAR] datum 1,0.07,-0.16,-5.00,-1.00,1.99,22.84,787.4,5.21,2.27,2.49,+0.21,0.44,TERDETEKSI,SUCCEEDED,MEMENUHI KELAYAKAN (LULUS)
