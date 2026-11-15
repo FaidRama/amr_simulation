@@ -68,6 +68,27 @@ def bresenham_cells(x0, y0, x1, y1):
     return cells
 
 
+def resolve_thesis_output_dir(subfolder: str) -> str:
+    """Simpan hasil ke <workspace_root>/hasil_data_pengujian_skripsi/<subfolder>."""
+    for base in (os.path.dirname(os.path.abspath(__file__)), os.getcwd()):
+        cur = os.path.abspath(base)
+        while True:
+            if os.path.isdir(os.path.join(cur, '.git')) or (
+                os.path.basename(cur) != 'src'
+                and os.path.isdir(os.path.join(cur, 'src', 'amr_simulation'))
+                and os.path.isdir(os.path.join(cur, 'src', 'amr_dashboard'))
+            ):
+                return os.path.join(cur, 'hasil_data_pengujian_skripsi', subfolder)
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+    for ws in (os.path.expanduser('~/deliver_amr'), os.path.expanduser('~/Documents/amr_ws')):
+        if os.path.isdir(ws):
+            return os.path.join(ws, 'hasil_data_pengujian_skripsi', subfolder)
+    return os.path.join(os.getcwd(), 'hasil_data_pengujian_skripsi', subfolder)
+
+
 class MapGeometricEvaluator:
     def __init__(self, yaml_path: str, run_number: int = 1):
         self.yaml_path = os.path.abspath(yaml_path)
@@ -82,7 +103,7 @@ class MapGeometricEvaluator:
         self.target_landmarks_count = 10
 
         # Direktori Output & Cache
-        self.output_dir = os.path.join(os.path.expanduser('~'), 'benchmark_skripsi_results', 'evaluasi_peta')
+        self.output_dir = resolve_thesis_output_dir('pengujian_1_pemetaan')
         os.makedirs(self.output_dir, exist_ok=True)
         self.cache_file = os.path.join(self.output_dir, 'ground_truth_landmarks_template.json')
         self.gt_template = self.load_ground_truth_template()
@@ -670,7 +691,7 @@ def main():
     parser.add_argument('--rekap', action='store_true', help='Tampilkan rekapitulasi 5 run pemetaan')
     args = parser.parse_args()
 
-    output_dir = os.path.join(os.path.expanduser('~'), 'benchmark_skripsi_results', 'evaluasi_peta')
+    output_dir = resolve_thesis_output_dir('pengujian_1_pemetaan')
 
     if args.rekap:
         generate_5_runs_recap(output_dir)

@@ -32,7 +32,7 @@ Fitur Skrip (Tanpa Default Titik di Luar Gedung):
       [5] Reset / Hapus Seluruh File CSV
   - Mendukung TF map->base_footprint & transformasi LiDAR ke frame map agar
     deteksi boks di jalur awal akurat di orientasi koridor mana saja.
-  - Ekspor otomatis ke: ~/hasil_pengujian_skripsi/skenario4_evaluasi_replanning.csv
+  - Ekspor otomatis ke: <workspace>/hasil_data_pengujian_skripsi/pengujian_4_replanning/skenario4_evaluasi_replanning.csv
 =============================================================================
 """
 
@@ -168,12 +168,33 @@ def timed_input(prompt: str, default_val: str = "", timeout_sec: float = 8.0, ca
     return default_val
 
 
+def resolve_thesis_output_dir(subfolder: str) -> str:
+    """Simpan hasil ke <workspace_root>/hasil_data_pengujian_skripsi/<subfolder>."""
+    for base in (os.path.dirname(os.path.abspath(__file__)), os.getcwd()):
+        cur = os.path.abspath(base)
+        while True:
+            if os.path.isdir(os.path.join(cur, '.git')) or (
+                os.path.basename(cur) != 'src'
+                and os.path.isdir(os.path.join(cur, 'src', 'amr_simulation'))
+                and os.path.isdir(os.path.join(cur, 'src', 'amr_dashboard'))
+            ):
+                return os.path.join(cur, 'hasil_data_pengujian_skripsi', subfolder)
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+    for ws in (os.path.expanduser('~/deliver_amr'), os.path.expanduser('~/Documents/amr_ws')):
+        if os.path.isdir(ws):
+            return os.path.join(ws, 'hasil_data_pengujian_skripsi', subfolder)
+    return os.path.join(os.getcwd(), 'hasil_data_pengujian_skripsi', subfolder)
+
+
 class EvaluasiReplanningNode(Node):
     def __init__(self, args):
         super().__init__('evaluasi_replanning_node')
         self.args = args
 
-        self.out_dir = os.path.expanduser(args.out_dir)
+        self.out_dir = os.path.expanduser(args.out_dir) if args.out_dir else resolve_thesis_output_dir('pengujian_4_replanning')
         os.makedirs(self.out_dir, exist_ok=True)
         self.csv_file = os.path.join(self.out_dir, 'skenario4_evaluasi_replanning.csv')
 
@@ -1137,8 +1158,8 @@ def main():
                         help="Geseran lateral minimum jalur /plan agar diakui sebagai event detour (meter, default: 0.25)")
     parser.add_argument('--pass-max-replan-time', type=float, default=200.0,
                         help="Ambang batas maksimum waktu replanning A* (ms, default: 200.0)")
-    parser.add_argument('--out-dir', type=str, default="~/hasil_pengujian_skripsi",
-                        help="Direktori penyimpanan CSV (default: ~/hasil_pengujian_skripsi)")
+    parser.add_argument('--out-dir', type=str, default=None,
+                        help="Direktori penyimpanan CSV (default otomatis: <workspace>/hasil_data_pengujian_skripsi/pengujian_4_replanning)")
 
     ros_args = None
     if '--ros-args' in sys.argv:

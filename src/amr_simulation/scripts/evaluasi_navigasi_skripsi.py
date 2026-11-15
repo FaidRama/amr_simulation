@@ -56,14 +56,35 @@ def normalize_angle(angle):
     return angle
 
 
+def resolve_thesis_output_dir(subfolder: str) -> str:
+    """Simpan hasil ke <workspace_root>/hasil_data_pengujian_skripsi/<subfolder>."""
+    for base in (os.path.dirname(os.path.abspath(__file__)), os.getcwd()):
+        cur = os.path.abspath(base)
+        while True:
+            if os.path.isdir(os.path.join(cur, '.git')) or (
+                os.path.basename(cur) != 'src'
+                and os.path.isdir(os.path.join(cur, 'src', 'amr_simulation'))
+                and os.path.isdir(os.path.join(cur, 'src', 'amr_dashboard'))
+            ):
+                return os.path.join(cur, 'hasil_data_pengujian_skripsi', subfolder)
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+    for ws in (os.path.expanduser('~/deliver_amr'), os.path.expanduser('~/Documents/amr_ws')):
+        if os.path.isdir(ws):
+            return os.path.join(ws, 'hasil_data_pengujian_skripsi', subfolder)
+    return os.path.join(os.getcwd(), 'hasil_data_pengujian_skripsi', subfolder)
+
+
 class EvaluasiNavigasiNode(Node):
-    def __init__(self, mode: str, skenario: str, label: str, out_dir: str):
+    def __init__(self, mode: str, skenario: str, label: str, out_dir: str = None):
         super().__init__('evaluasi_navigasi_skripsi_node')
 
         self.mode = mode.upper()            # BASELINE atau ADAPTIF
         self.skenario = skenario            # statis / dinamis / manusia
         self.label = label
-        self.out_dir = os.path.expanduser(out_dir)
+        self.out_dir = os.path.expanduser(out_dir) if out_dir else resolve_thesis_output_dir('pengujian_navigasi_fsm')
         os.makedirs(self.out_dir, exist_ok=True)
 
         self.robot_radius = 0.29            # Radius sasis robot (0.29 meter)
@@ -398,8 +419,8 @@ def main():
                         help="Nama skenario pengujian: statis / dinamis / manusia")
     parser.add_argument('--label', type=str, default='percobaan_1',
                         help="Label pengujian (contoh: uji_1, uji_2, dst)")
-    parser.add_argument('--outdir', type=str, default='~/hasil_pengujian_skripsi',
-                        help="Direktori penyimpanan file CSV dan gambar PNG")
+    parser.add_argument('--outdir', type=str, default=None,
+                        help="Direktori penyimpanan file CSV dan gambar PNG (default: <workspace>/hasil_data_pengujian_skripsi/pengujian_navigasi_fsm)")
 
     args = parser.parse_args()
 

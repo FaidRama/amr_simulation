@@ -27,7 +27,7 @@ Deskripsi:
      - Rata-rata e_pos <= 0.05 m (5 cm)
      - Rata-rata e_theta <= 3.0°
   5. Penyimpanan Hasil:
-     Tersimpan otomatis ke file CSV di ~/hasil_pengujian_skripsi/skenario2_evaluasi_amcl.csv
+     Tersimpan otomatis ke file CSV di <workspace>/hasil_data_pengujian_skripsi/pengujian_2_amcl/skenario2_evaluasi_amcl.csv
 =============================================================================
 """
 
@@ -134,7 +134,29 @@ class EvaluasiAMCLNode(Node):
         self.has_amcl_data = False
 
         # Direktori Output
-        self.output_dir = os.path.expanduser('~/hasil_pengujian_skripsi')
+        ws_root = None
+        for base in (os.path.dirname(os.path.abspath(__file__)), os.getcwd()):
+            cur = os.path.abspath(base)
+            while True:
+                if os.path.isdir(os.path.join(cur, '.git')) or (
+                    os.path.basename(cur) != 'src'
+                    and os.path.isdir(os.path.join(cur, 'src', 'amr_simulation'))
+                    and os.path.isdir(os.path.join(cur, 'src', 'amr_dashboard'))
+                ):
+                    ws_root = cur
+                    break
+                parent = os.path.dirname(cur)
+                if parent == cur:
+                    break
+                cur = parent
+            if ws_root:
+                break
+        if not ws_root:
+            for ws in (os.path.expanduser('~/deliver_amr'), os.path.expanduser('~/Documents/amr_ws')):
+                if os.path.isdir(ws):
+                    ws_root = ws
+                    break
+        self.output_dir = os.path.join(ws_root or os.getcwd(), 'hasil_data_pengujian_skripsi', 'pengujian_2_amcl')
         os.makedirs(self.output_dir, exist_ok=True)
         self.csv_path = os.path.join(self.output_dir, 'skenario2_evaluasi_amcl.csv')
         self.config_path = os.path.join(self.output_dir, 'datum_config.json')

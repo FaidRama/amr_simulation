@@ -28,7 +28,7 @@ Deskripsi:
      - Galat Orientasi Akhir (e_theta [deg] -> Toleransi kelulusan: <= 10.0° atau <= 3.0°)
      - Tingkat Keberhasilan Tiba di Titik Tujuan (Success Rate, SR [%])
   4. Penyimpanan Hasil:
-     - Tersimpan otomatis ke ~/hasil_pengujian_skripsi/skenario2_evaluasi_amcl_dinamis.csv
+     - Tersimpan otomatis ke <workspace>/hasil_data_pengujian_skripsi/pengujian_2_amcl/skenario2_evaluasi_amcl_dinamis.csv
 =============================================================================
 """
 
@@ -147,6 +147,27 @@ def timed_input(prompt: str, default_val: str = "", timeout_sec: float = 6.0, ca
     return default_val
 
 
+def resolve_thesis_output_dir(subfolder: str) -> str:
+    """Simpan hasil ke <workspace_root>/hasil_data_pengujian_skripsi/<subfolder>."""
+    for base in (os.path.dirname(os.path.abspath(__file__)), os.getcwd()):
+        cur = os.path.abspath(base)
+        while True:
+            if os.path.isdir(os.path.join(cur, '.git')) or (
+                os.path.basename(cur) != 'src'
+                and os.path.isdir(os.path.join(cur, 'src', 'amr_simulation'))
+                and os.path.isdir(os.path.join(cur, 'src', 'amr_dashboard'))
+            ):
+                return os.path.join(cur, 'hasil_data_pengujian_skripsi', subfolder)
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+    for ws in (os.path.expanduser('~/deliver_amr'), os.path.expanduser('~/Documents/amr_ws')):
+        if os.path.isdir(ws):
+            return os.path.join(ws, 'hasil_data_pengujian_skripsi', subfolder)
+    return os.path.join(os.getcwd(), 'hasil_data_pengujian_skripsi', subfolder)
+
+
 class EvaluasiAMCLDinamisNode(Node):
     def __init__(self):
         super().__init__('evaluasi_amcl_dinamis_node')
@@ -157,7 +178,7 @@ class EvaluasiAMCLDinamisNode(Node):
         self.pass_max_eyaw_deg = math.degrees(yaw_tol)
 
         # Direktori Output CSV
-        self.out_dir = os.path.expanduser('~/hasil_pengujian_skripsi')
+        self.out_dir = resolve_thesis_output_dir('pengujian_2_amcl')
         os.makedirs(self.out_dir, exist_ok=True)
         self.csv_path = os.path.join(self.out_dir, 'skenario2_evaluasi_amcl_dinamis.csv')
 
