@@ -1,7 +1,7 @@
 {
   "target_mac": "0E:21:D5:E9:AB:5F",
   "target_name": "Acome A1",
-  "auto_reconnect": true,
+  "auto_reconnect": false,
   "reconnect_interval_s": 5,
   "keepalive_interval_s": 25,
   "obstacle_voice_delay_s": 5,
