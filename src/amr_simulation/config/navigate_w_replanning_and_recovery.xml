@@ -20,12 +20,15 @@
       </PipelineSequence>
       <ReactiveFallback name="RecoveryFallback">
         <GoalUpdated/>
-        <SequenceStar name="RecoveryActions">
-          <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap" server_timeout="2000"/>
-          <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap" server_timeout="2000"/>
-          <Wait wait_duration="4" server_timeout="2000"/>
+        <RoundRobin name="RecoveryActions">
+          <SequenceStar name="ClearingActions">
+            <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap" server_timeout="2000"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap" server_timeout="2000"/>
+            <Wait wait_duration="2" server_timeout="2000"/>
+          </SequenceStar>
           <Spin spin_dist="1.57" server_timeout="2000"/>
-        </SequenceStar>
+          <Wait wait_duration="4" server_timeout="2000"/>
+        </RoundRobin>
       </ReactiveFallback>
     </RecoveryNode>
   </BehaviorTree>

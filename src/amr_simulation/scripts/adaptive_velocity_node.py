@@ -25,11 +25,20 @@ class AdaptiveVelocityNode(Node):
         self.declare_parameter('input_topic', '/cmd_vel')
         self.declare_parameter('output_topic', '/cmd_vel_safe')
         self.declare_parameter('safe_stop_wait_duration', 15.0)
+        self.declare_parameter('bypass_clear_duration', 8.0)
+        self.declare_parameter('human_state_timeout', 3.0)
 
         self.effective_state = "NORMAL"
         self.last_state_change_time = self.get_clock().now()
+        self.last_high_sev_time = self.get_clock().now()
+        self.last_human_msg_wall = 0.0
         self.safe_stop_enter_time = None
+        self.non_safe_stop_since = None
         self.safe_stop_avoid_logged = False
+        self.bypass_active = False
+        self.bypass_clear_since = None
+        self.last_human_nav_mode = None
+        self.last_human_nav_mode_pub_wall = 0.0
 
         self.in_v = 0.0
         self.in_w = 0.0
@@ -96,6 +105,7 @@ class AdaptiveVelocityNode(Node):
         self.initialpose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', tl_qos)
         self.initialpose_pub_vol = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
         self.delivery_log_pub = self.create_publisher(String, '/amr/delivery_log', 10)
+        self.human_nav_mode_pub = self.create_publisher(String, '/human_nav_mode', 10)
 
         self.create_subscription(String, '/human_state', self.state_callback, 10)
         self.create_subscription(
@@ -202,31 +212,116 @@ class AdaptiveVelocityNode(Node):
 
     def state_callback(self, msg: String):
         severity = {"NORMAL": 0, "REDUCED_SPEED": 1, "SAFE_STOP": 2}
-        new_state = msg.data
+        new_state = msg.data.strip().upper()
+        if new_state not in severity:
+            new_state = "NORMAL"
         now = self.get_clock().now()
-        new_sev = severity.get(new_state, 0)
+        self.last_human_msg_wall = time.time()
+        new_sev = severity[new_state]
         curr_sev = severity.get(self.effective_state, 0)
 
         if new_sev >= curr_sev:
+            # Catat timestamp frame high-severity terbaru agar dt_hold hanya mulai menghitung
+            # setelah state tinggi benar-benar hilang, bukan dari detik ke-0 saat masuk.
+            self.last_high_sev_time = now
             if self.effective_state != new_state:
                 self.get_logger().info(f"[ADAPTIF] {self.effective_state} -> {new_state}")
                 self.effective_state = new_state
                 self.last_state_change_time = now
-                if new_state == "SAFE_STOP":
+                if new_state == "SAFE_STOP" and (not self.bypass_active) and (self.safe_stop_enter_time is None):
                     self.safe_stop_enter_time = now
-                    self.safe_stop_avoid_logged = False
-                else:
-                    self.safe_stop_enter_time = None
+                    self.non_safe_stop_since = None
                     self.safe_stop_avoid_logged = False
         else:
-            dt_hold = (now - self.last_state_change_time).nanoseconds / 1e9
-            if dt_hold >= self.get_parameter('state_hold_time').value:
+            dt_hold = (now - self.last_high_sev_time).nanoseconds / 1e9
+            if dt_hold >= float(self.get_parameter('state_hold_time').value):
                 self.get_logger().info(f"[ADAPTIF] Relaksasi {self.effective_state} -> {new_state}")
                 self.effective_state = new_state
                 self.last_state_change_time = now
-                if new_state != "SAFE_STOP":
+                self.last_high_sev_time = now
+
+    def _update_human_safety_mode(self, now, wall_now):
+        """Kelola mode henti 15 detik (WAIT_HUMAN) -> bypass berkelanjutan (BYPASS_HUMAN) -> NORMAL."""
+        human_timeout = float(self.get_parameter('human_state_timeout').value)
+        if (
+            self.last_human_msg_wall > 0.0
+            and self.effective_state != "NORMAL"
+            and (wall_now - self.last_human_msg_wall) > human_timeout
+        ):
+            self.get_logger().warn(f"[ADAPTIF] /human_state timeout (>{human_timeout:.1f}s) -> relaksasi ke NORMAL.")
+            self.effective_state = "NORMAL"
+            self.last_state_change_time = now
+            self.last_high_sev_time = now
+
+        safe_stop_wait = float(self.get_parameter('safe_stop_wait_duration').value)
+        bypass_clear_sec = float(self.get_parameter('bypass_clear_duration').value)
+        reduced_v = float(self.get_parameter('reduced_max_linear').value)
+        normal_v = float(self.get_parameter('normal_max_linear').value)
+
+        if self.bypass_active:
+            if self.effective_state == "NORMAL":
+                if self.bypass_clear_since is None:
+                    self.bypass_clear_since = now
+                elif (now - self.bypass_clear_since).nanoseconds / 1e9 >= bypass_clear_sec:
+                    self.bypass_active = False
+                    self.bypass_clear_since = None
                     self.safe_stop_enter_time = None
+                    self.non_safe_stop_since = None
                     self.safe_stop_avoid_logged = False
+                    self.get_logger().info(
+                        f"✅ [ADAPTIF] Manusia sudah terlewati (NORMAL >= {bypass_clear_sec:.1f}s): Kembali ke mode NORMAL."
+                    )
+            else:
+                self.bypass_clear_since = None
+
+        is_safe_stop_active = False
+        if self.bypass_active:
+            ceiling = reduced_v
+            nav_mode = "BYPASS_HUMAN"
+        elif self.effective_state == "SAFE_STOP":
+            self.non_safe_stop_since = None
+            if self.safe_stop_enter_time is None:
+                self.safe_stop_enter_time = now
+            safe_stop_duration = (now - self.safe_stop_enter_time).nanoseconds / 1e9
+            if safe_stop_duration < safe_stop_wait:
+                ceiling = 0.0
+                is_safe_stop_active = True
+                nav_mode = "WAIT_HUMAN"
+            else:
+                self.bypass_active = True
+                self.bypass_clear_since = None
+                if not self.safe_stop_avoid_logged:
+                    self.get_logger().info(
+                        f"🚶 [ADAPTIF] Manusia tetap di jalur > {safe_stop_wait:.1f}s: Mengaktifkan mode BYPASS (kecepatan pelan & setir aktif via costmap)..."
+                    )
+                    self.safe_stop_avoid_logged = True
+                ceiling = reduced_v
+                nav_mode = "BYPASS_HUMAN"
+        elif self.effective_state == "REDUCED_SPEED":
+            if self.safe_stop_enter_time is not None:
+                if self.non_safe_stop_since is None:
+                    self.non_safe_stop_since = now
+                elif (now - self.non_safe_stop_since).nanoseconds / 1e9 >= 4.0:
+                    self.safe_stop_enter_time = None
+                    self.non_safe_stop_since = None
+                    self.safe_stop_avoid_logged = False
+            ceiling = reduced_v
+            nav_mode = "REDUCED_SPEED"
+        else:
+            self.safe_stop_enter_time = None
+            self.non_safe_stop_since = None
+            self.safe_stop_avoid_logged = False
+            ceiling = normal_v
+            nav_mode = "NORMAL"
+
+        if nav_mode != self.last_human_nav_mode or (wall_now - self.last_human_nav_mode_pub_wall) >= 0.5:
+            self.last_human_nav_mode = nav_mode
+            self.last_human_nav_mode_pub_wall = wall_now
+            mode_msg = String()
+            mode_msg.data = nav_mode
+            self.human_nav_mode_pub.publish(mode_msg)
+
+        return ceiling, is_safe_stop_active, nav_mode
 
     def cmd_callback(self, msg: Twist):
         self.in_v = msg.linear.x
@@ -354,28 +449,7 @@ class AdaptiveVelocityNode(Node):
         else:
             orig_v, orig_w = self.in_v, self.in_w
 
-        # Cek durasi jika sedang berada di status SAFE_STOP
-        safe_stop_duration = (now - self.safe_stop_enter_time).nanoseconds / 1e9 if (self.effective_state == "SAFE_STOP" and self.safe_stop_enter_time is not None) else 0.0
-        safe_stop_wait = float(self.get_parameter('safe_stop_wait_duration').value)
-
-        # Logika Jeda Tunggu & Menghindar:
-        # 1. Jika SAFE_STOP < safe_stop_wait (default 15.0s): robot berhenti penuh (beri waktu orang lewat / minggir setelah mendengar peringatan suara pada detik ke-5).
-        # 2. Jika SAFE_STOP >= safe_stop_wait tapi orang tidak pergi: buka kecepatan pelan (REDUCED)
-        #    dan aktifkan setir (angular) agar Nav2 DWB membelok menghindar via local costmap!
-        is_safe_stop_active = False
-        if self.effective_state == "SAFE_STOP":
-            if safe_stop_duration < safe_stop_wait:
-                ceiling = 0.0
-                is_safe_stop_active = True
-            else:
-                if not self.safe_stop_avoid_logged:
-                    self.get_logger().info(f"🚶 [ADAPTIF] Manusia tetap di jalur > {safe_stop_wait:.1f}s: Mengaktifkan manuver menghindar pelan via costmap...")
-                    self.safe_stop_avoid_logged = True
-                ceiling = self.get_parameter('reduced_max_linear').value
-        elif self.effective_state == "REDUCED_SPEED":
-            ceiling = self.get_parameter('reduced_max_linear').value
-        else:
-            ceiling = self.get_parameter('normal_max_linear').value
+        ceiling, is_safe_stop_active, _ = self._update_human_safety_mode(now, wall_now)
 
         target_v = max(-ceiling, min(ceiling, orig_v))
 

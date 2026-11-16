@@ -62,11 +62,24 @@ class WaypointManager(Node):
         # Menerima perintah kontrol (cancel, pause, resume)
         self.control_sub = self.create_subscription(
             String, '/amr/delivery_control', self.on_control_received, 10)
-        # Menerima status human awareness untuk pause/status khusus saat SAFE_STOP
+        # Menerima status human awareness untuk jeda tunggu (WAIT_HUMAN) vs bypass (BYPASS_HUMAN)
         self.human_state = 'NORMAL'
+        self.human_nav_mode = 'NORMAL'
+        self.last_human_nav_mode_wall = 0.0
+        self.human_wait_since_wall = None
+        self.human_non_stop_since_wall = None
+        self.human_bypass_fallback = False
+        self.human_bypass_clear_since_wall = None
+        self.suspended_for_human = False
+        self.safe_stop_wait_duration = 15.0
+        self.bypass_clear_duration = 8.0
+        self.human_goal_suspend_grace = 2.0
         self.saved_phase_before_human = None
+        self.human_lock = threading.Lock()
         self.human_sub = self.create_subscription(
             String, '/human_state', self.on_human_state_received, 10)
+        self.human_nav_mode_sub = self.create_subscription(
+            String, '/human_nav_mode', self.on_human_nav_mode_received, 10)
         
         # === CONFIGURATION (waypoints.yaml) ===
         self.home_position = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
@@ -284,28 +297,104 @@ class WaypointManager(Node):
             self.load_config()
 
     def on_human_state_received(self, msg):
-        """Menerima status human awareness dari human_awareness_node untuk mengelola fase tunggu manusia."""
-        new_state = msg.data.strip()
-        if new_state == self.human_state:
+        """Menerima status human awareness dari human_awareness_node."""
+        new_state = msg.data.strip().upper()
+        with self.human_lock:
+            if new_state == self.human_state:
+                return
+            self.human_state = new_state
+        self._sync_human_mission_phase()
+
+    def on_human_nav_mode_received(self, msg):
+        """Menerima mode otoritatif WAIT_HUMAN / BYPASS_HUMAN / REDUCED_SPEED / NORMAL dari adaptive_velocity_node."""
+        new_mode = msg.data.strip().upper()
+        with self.human_lock:
+            changed = (new_mode != self.human_nav_mode)
+            self.human_nav_mode = new_mode
+            self.last_human_nav_mode_wall = time.time()
+            # Sinkronkan timer fallback agar tidak pernah tertinggal jika adaptive node aktif
+            if new_mode == 'WAIT_HUMAN':
+                self.human_bypass_fallback = False
+                self.human_bypass_clear_since_wall = None
+                if self.human_wait_since_wall is None:
+                    self.human_wait_since_wall = time.time()
+            elif new_mode == 'BYPASS_HUMAN':
+                self.human_bypass_fallback = True
+                self.human_bypass_clear_since_wall = None
+            elif new_mode == 'NORMAL':
+                self.human_bypass_fallback = False
+                self.human_wait_since_wall = None
+                self.human_non_stop_since_wall = None
+                self.human_bypass_clear_since_wall = None
+        if changed:
+            self._sync_human_mission_phase()
+
+    def _effective_human_mode(self):
+        """Kembalikan mode navigasi manusia saat ini: WAIT_HUMAN, BYPASS_HUMAN, REDUCED_SPEED, atau NORMAL."""
+        now = time.time()
+        with self.human_lock:
+            if self.last_human_nav_mode_wall > 0.0 and (now - self.last_human_nav_mode_wall) < 2.5:
+                return self.human_nav_mode
+
+            state = self.human_state
+            if state == 'SAFE_STOP':
+                self.human_non_stop_since_wall = None
+                if self.human_bypass_fallback:
+                    self.human_bypass_clear_since_wall = None
+                    return 'BYPASS_HUMAN'
+                if self.human_wait_since_wall is None:
+                    self.human_wait_since_wall = now
+                if (now - self.human_wait_since_wall) >= self.safe_stop_wait_duration:
+                    self.human_bypass_fallback = True
+                    self.human_bypass_clear_since_wall = None
+                    return 'BYPASS_HUMAN'
+                return 'WAIT_HUMAN'
+
+            if state == 'REDUCED_SPEED':
+                if self.human_bypass_fallback:
+                    self.human_bypass_clear_since_wall = None
+                    return 'BYPASS_HUMAN'
+                if self.human_wait_since_wall is not None:
+                    if self.human_non_stop_since_wall is None:
+                        self.human_non_stop_since_wall = now
+                    elif (now - self.human_non_stop_since_wall) >= 4.0:
+                        self.human_wait_since_wall = None
+                        self.human_non_stop_since_wall = None
+                return 'REDUCED_SPEED'
+
+            self.human_wait_since_wall = None
+            self.human_non_stop_since_wall = None
+            if self.human_bypass_fallback:
+                if self.human_bypass_clear_since_wall is None:
+                    self.human_bypass_clear_since_wall = now
+                elif (now - self.human_bypass_clear_since_wall) >= self.bypass_clear_duration:
+                    self.human_bypass_fallback = False
+                    self.human_bypass_clear_since_wall = None
+                    return 'NORMAL'
+                return 'BYPASS_HUMAN'
+            return 'NORMAL'
+
+    def _sync_human_mission_phase(self):
+        """Sinkronkan fase misi dashboard dengan WAIT_HUMAN vs BYPASS_HUMAN/NORMAL."""
+        if not self.mission or self.mission['status'] != 'running':
             return
-        old_state = self.human_state
-        self.human_state = new_state
-        
-        # Jika robot sedang dalam fase navigasi aktif dan manusia memicu SAFE_STOP
-        if self.mission and self.mission['status'] == 'running':
-            active_phases = ('navigating_pickup', 'navigating_delivery', 'returning_home')
-            if new_state == 'SAFE_STOP':
-                if self.mission['current_phase'] in active_phases:
-                    self.saved_phase_before_human = self.mission['current_phase']
-                    self.mission['current_phase'] = 'waiting_human'
-                    self.get_logger().info('🚶 [HUMAN AWARE] Terdeteksi SAFE_STOP: AMR berhenti sejenak menunggu manusia lewat.')
-                    self.publish_status()
-            elif new_state in ('NORMAL', 'REDUCED_SPEED'):
-                if self.mission['current_phase'] == 'waiting_human':
-                    restored = self.saved_phase_before_human or 'navigating_pickup'
-                    self.mission['current_phase'] = restored
-                    self.get_logger().info(f'✅ [HUMAN AWARE] Jalur aman ({new_state}): AMR melanjutkan navigasi ({restored}).')
-                    self.publish_status()
+        mode = self._effective_human_mode()
+        active_phases = ('navigating_pickup', 'navigating_delivery', 'returning_home')
+        if mode == 'WAIT_HUMAN':
+            if self.mission['current_phase'] in active_phases:
+                self.saved_phase_before_human = self.mission['current_phase']
+                self.mission['current_phase'] = 'waiting_human'
+                self.get_logger().info('🚶 [HUMAN AWARE] Terdeteksi SAFE_STOP (WAIT_HUMAN): AMR berhenti menunggu manusia lewat.')
+                self.publish_status()
+        else:
+            if self.mission['current_phase'] == 'waiting_human':
+                restored = self.saved_phase_before_human or 'navigating_pickup'
+                self.mission['current_phase'] = restored
+                if mode == 'BYPASS_HUMAN':
+                    self.get_logger().info(f'🚶 [HUMAN AWARE] Manusia diam > 15s (BYPASS_HUMAN): AMR beralih melewati via costmap ({restored}).')
+                else:
+                    self.get_logger().info(f'✅ [HUMAN AWARE] Jalur aman ({mode}): AMR melanjutkan navigasi ({restored}).')
+                self.publish_status()
     
     def emergency_stop(self):
         """Kirim cmd_vel zero untuk stop AMR."""
@@ -512,19 +601,20 @@ class WaypointManager(Node):
         try:
             result = future.result()
             self.current_goal_handle = None
+            waiting_human_now = (self._effective_human_mode() == 'WAIT_HUMAN')
             
             if result and result.status == GoalStatus.STATUS_SUCCEEDED:
                 self.log('info', '✅ Navigasi BERHASIL mencapai target!')
                 self.nav_result_status = 'succeeded'
             elif result and result.status == GoalStatus.STATUS_CANCELED:
-                if self.human_state == 'SAFE_STOP' or self.is_paused:
+                if self.suspended_for_human or waiting_human_now or self.is_paused:
                     self.nav_result_status = 'paused_wait'
                 else:
                     self.log('warn', '🛑 Navigasi DIBATALKAN.')
                     self.nav_result_status = 'canceled'
             elif result and result.status == GoalStatus.STATUS_ABORTED:
-                if self.human_state == 'SAFE_STOP':
-                    self.log('info', '🚶 Nav2 dihentikan sementara karena menunggu manusia lewat (SAFE_STOP)...')
+                if self.suspended_for_human or waiting_human_now:
+                    self.log('info', '🚶 Nav2 dijeda sementara karena menunggu manusia lewat (WAIT_HUMAN)...')
                     self.nav_result_status = 'paused_wait'
                 else:
                     self.log('error', '⚠️ Navigasi Nav2 GAGAL/ABORTED! Jalur terhalang atau robot tidak dapat menemukan jalur yang valid.')
@@ -542,20 +632,33 @@ class WaypointManager(Node):
     def navigate_to_point(self, x, y, yaw=0.0):
         """
         Navigasi ke satu titik menggunakan Nav2 NavigateToPose action.
-        Mendukung tunggu tanpa batas waktu saat ada manusia (SAFE_STOP) atau Pause,
-        dan otomatis melanjutkan (re-send goal) begitu jalur kembali aman.
+        - Saat WAIT_HUMAN (0-15s): menjeda/cancel goal Nav2 setelah grace 2s agar
+          SimpleProgressChecker (movement_time_allowance) & Spin recovery tidak aktif.
+        - Saat jalur bebas ATAU manusia diam >= 15s (BYPASS_HUMAN): langsung mengirim
+          ulang goal Nav2 agar A* + DWB menghindar/melewati lewat costmap.
         """
         self.stop_navigation = False
+        self.suspended_for_human = False
+        bypass_abort_retries = 0
 
         while not self.stop_navigation and not self.is_cancelled:
-            # 1. Jika sedang SAFE_STOP (ada manusia di depan) atau PAUSE, tunggu sampai aman sebelum kirim goal
-            if self.human_state == 'SAFE_STOP' or self.is_paused:
-                self.log('info', '🚶 Menunggu jalur bebas dari manusia / status Pause selesai sebelum bergerak...')
-                while (self.human_state == 'SAFE_STOP' or self.is_paused) and not self.stop_navigation and not self.is_cancelled:
-                    time.sleep(0.3)
+            # 1. Jika sedang Pause atau WAIT_HUMAN (fase tunggu 0-15s), tahan pengiriman goal
+            mode_now = self._effective_human_mode()
+            if self.is_paused or mode_now == 'WAIT_HUMAN':
+                self._sync_human_mission_phase()
+                self.log('info', '🚶 Menunggu jalur bebas dari manusia (atau masuk mode bypass 15s) / status Pause selesai...')
+                while not self.stop_navigation and not self.is_cancelled:
+                    mode_now = self._effective_human_mode()
+                    if not self.is_paused and mode_now != 'WAIT_HUMAN':
+                        break
+                    time.sleep(0.2)
                 if self.stop_navigation or self.is_cancelled:
                     return False
-                self.log('info', '✅ Jalur kembali aman! Melanjutkan pengiriman goal ke Nav2...')
+                self._sync_human_mission_phase()
+                if mode_now == 'BYPASS_HUMAN':
+                    self.log('info', '🚶 [HUMAN AWARE] Manusia masih di jalur >= 15s (BYPASS_HUMAN): Mengirim ulang goal Nav2 untuk melewati lewat costmap...')
+                else:
+                    self.log('info', f'✅ Jalur kembali aman ({mode_now}): Melanjutkan pengiriman goal ke Nav2...')
 
             # 2. Tunggu action server tersedia
             server_ready = False
@@ -591,6 +694,7 @@ class WaypointManager(Node):
             self.goal_accepted_event.clear()
             self.goal_accepted = False
             self.nav_result_status = None
+            self.suspended_for_human = False
 
             # Kirim goal dengan callback
             send_goal_future = self.nav_client.send_goal_async(goal)
@@ -610,39 +714,68 @@ class WaypointManager(Node):
                 return False
 
             # 4. Pantau perjalanan menuju target.
-            # Jika SAFE_STOP bertahan > 10 detik terus-menerus, batalkan goal Nav2 sementara
-            # agar tidak kena timeout 60 detik SimpleProgressChecker / recovery spin di dekat manusia.
-            safe_stop_since = None
-            suspended_for_human = False
+            # Jika WAIT_HUMAN bertahan >= human_goal_suspend_grace (2.0s), batalkan goal Nav2 sementara
+            # agar robot tidak dihitung diam oleh SimpleProgressChecker / melakukan recovery Spin 90 derajat.
+            wait_human_since = None
 
             while not self.nav_event.is_set():
                 if self.stop_navigation or self.is_cancelled:
                     return False
 
                 if self.is_paused:
-                    suspended_for_human = True
+                    self.suspended_for_human = True
+                    if self.current_goal_handle:
+                        try:
+                            self.current_goal_handle.cancel_goal_async()
+                        except Exception:
+                            pass
+                    self.emergency_stop()
                     break
 
-                if self.human_state == 'SAFE_STOP':
-                    if safe_stop_since is None:
-                        safe_stop_since = time.time()
-                    elif (time.time() - safe_stop_since) >= 15.0 and safe_stop_since != 0:
-                        self.log('info', '🚶 [HUMAN AWARE] Manusia diam > 15 detik: AMR beralih menghindar via local costmap...')
-                        safe_stop_since = 0  # Tandai sudah log agar tidak berulang-ulang
+                mode_now = self._effective_human_mode()
+                if mode_now == 'WAIT_HUMAN':
+                    if wait_human_since is None:
+                        wait_human_since = time.time()
+                    elif (time.time() - wait_human_since) >= self.human_goal_suspend_grace:
+                        self.log(
+                            'info',
+                            '⏸️ [HUMAN AWARE] Manusia masih di jalur >= 2s: Menjeda goal Nav2 agar movement_time_allowance & Spin tidak aktif selama menunggu 15s...'
+                        )
+                        self.suspended_for_human = True
+                        if self.current_goal_handle:
+                            try:
+                                self.current_goal_handle.cancel_goal_async()
+                            except Exception:
+                                pass
+                        self.emergency_stop()
+                        self._sync_human_mission_phase()
+                        break
                 else:
-                    safe_stop_since = None
+                    wait_human_since = None
 
-                self.nav_event.wait(timeout=0.4)
+                self.nav_event.wait(timeout=0.25)
 
             if self.stop_navigation or self.is_cancelled:
                 return False
 
-            # Jika goal ditahan sementara karena manusia (SAFE_STOP) atau Pause, ulangi loop (tunggu aman lalu kirim goal lagi)
-            if self.nav_result_status != 'succeeded' and (suspended_for_human or self.nav_result_status == 'paused_wait' or self.is_paused or self.human_state == 'SAFE_STOP'):
+            if self.suspended_for_human:
                 self.nav_event.wait(timeout=1.5)
+                self.suspended_for_human = False
                 continue
 
-            return self.nav_result_status == 'succeeded'
+            if self.nav_result_status == 'succeeded':
+                return True
+
+            if self.nav_result_status == 'paused_wait' or self.is_paused or self._effective_human_mode() == 'WAIT_HUMAN':
+                continue
+
+            if self._effective_human_mode() == 'BYPASS_HUMAN' and bypass_abort_retries < 1:
+                bypass_abort_retries += 1
+                self.log('warn', '🔄 [HUMAN AWARE] Jalur bypass sedang disesuaikan costmap, mencoba replan sekali lagi...')
+                time.sleep(1.0)
+                continue
+
+            return False
 
         return False
     
