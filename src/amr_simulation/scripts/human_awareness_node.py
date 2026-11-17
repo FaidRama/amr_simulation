@@ -39,7 +39,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-DEFAULT_MODEL = str(SCRIPT_DIR / "yolo11n.pt") if (SCRIPT_DIR / "yolo11n.pt").exists() else "yolo11n.pt"
+DEFAULT_MODEL = str(SCRIPT_DIR / "yolo11n-pose.pt") if (SCRIPT_DIR / "yolo11n-pose.pt").exists() else "yolo11n-pose.pt"
 
 from fsm import HumanAwareFSM, ProximityClassifier, Zone, State
 
@@ -166,8 +166,9 @@ class DistanceEstimator:
 
 def extract_persons(result, frame_w, frame_h, edge_margin=6):
     persons = []
+    has_kpts = result.keypoints is not None and len(result.keypoints.data) > 0
 
-    for box in result.boxes:
+    for i, box in enumerate(result.boxes):
         x1, y1, x2, y2 = box.xyxy[0].tolist()
 
         width = max(1.0, x2 - x1)
@@ -183,6 +184,10 @@ def extract_persons(result, frame_w, frame_h, edge_margin=6):
             or y2 >= frame_h - edge_margin
         )
 
+        kpts = None
+        if has_kpts and i < len(result.keypoints.data):
+            kpts = result.keypoints.data[i].cpu().numpy()
+
         persons.append({
             "x1": x1,
             "y1": y1,
@@ -196,6 +201,7 @@ def extract_persons(result, frame_w, frame_h, edge_margin=6):
             "cut_w": cut_w,
             "cut_h": cut_h,
             "at_edge": cut_w or cut_h,
+            "keypoints": kpts,
         })
 
     return persons
