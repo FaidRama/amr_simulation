@@ -11,6 +11,7 @@ Finite State Machine untuk modul Human-Aware Behavior AMR.
 """
 
 from enum import Enum
+import math
 from typing import Optional
 
 
@@ -27,6 +28,20 @@ class State(Enum):
     SAFE_STOP = "SAFE_STOP"
 
 
+class Activity(Enum):
+    STANDING = "STANDING"
+    WALKING = "WALKING"
+    SITTING = "SITTING"
+    NONE = "NONE"
+
+
+class Direction(Enum):
+    SAME_DIRECTION = "SAME_DIRECTION"
+    OPPOSITE_DIRECTION = "OPPOSITE_DIRECTION"
+    STATIONARY = "STATIONARY"
+    UNKNOWN = "UNKNOWN"
+
+
 _SEVERITY = {
     State.NORMAL: 0,
     State.REDUCED_SPEED: 1,
@@ -35,8 +50,8 @@ _SEVERITY = {
 
 
 class ProximityClassifier:
-    def __init__(self, t_near_enter=0.95, t_near_exit=0.90,
-                 t_med_enter=0.85, t_med_exit=0.70,
+    def __init__(self, t_near_enter=0.85, t_near_exit=0.80,
+                 t_med_enter=0.60, t_med_exit=0.50,
                  miss_tolerance: int = 3):
         if not (t_near_enter > t_near_exit):
             raise ValueError("t_near_enter harus lebih besar dari t_near_exit")
@@ -95,6 +110,109 @@ class ProximityClassifier:
         return self.current_zone
 
 
+class HumanActivityClassifier:
+    """
+    Klasifikasi 3 Aktivitas Manusia (STANDING, WALKING, SITTING) dan Arah Gerak
+    menggunakan 17 Keypoints YOLO11n-Pose + pelacakan kecepatan temporal.
+    """
+    def __init__(self, history_size: int = 10, standing_speed_thresh: float = 0.22,
+                 sitting_knee_thresh: float = 135.0):
+        self.history_size = history_size
+        self.standing_speed_thresh = standing_speed_thresh
+        self.sitting_knee_thresh = sitting_knee_thresh
+        self.history = []
+
+    def reset(self):
+        self.history.clear()
+
+    @staticmethod
+    def calculate_angle(p1, p2, p3) -> float:
+        """Hitung sudut 2D (derajat) pada titik p2 antara p1->p2 dan p3->p2."""
+        v1 = (float(p1[0] - p2[0]), float(p1[1] - p2[1]))
+        v2 = (float(p3[0] - p2[0]), float(p3[1] - p2[1]))
+        n1 = math.hypot(v1[0], v1[1])
+        n2 = math.hypot(v2[0], v2[1])
+        if n1 < 1e-4 or n2 < 1e-4:
+            return 180.0
+        dot = (v1[0] * v2[0] + v1[1] * v2[1]) / (n1 * n2)
+        dot = max(-1.0, min(1.0, dot))
+        return math.degrees(math.acos(dot))
+
+    def detect_sitting(self, keypoints, bbox_w: float, bbox_h: float) -> bool:
+        """
+        Deteksi postur duduk dari sudut sendi lutut (hip-knee-ankle),
+        orientasi paha (hip_y vs knee_y), atau fallback rasio aspek H/W.
+        """
+        if keypoints is not None and len(keypoints) >= 17:
+            l_hip, l_knee, l_ankle = keypoints[11], keypoints[13], keypoints[15]
+            r_hip, r_knee, r_ankle = keypoints[12], keypoints[14], keypoints[16]
+
+            angles = []
+            if l_hip[2] >= 0.25 and l_knee[2] >= 0.25 and l_ankle[2] >= 0.25:
+                angles.append(self.calculate_angle(l_hip[:2], l_knee[:2], l_ankle[:2]))
+            if r_hip[2] >= 0.25 and r_knee[2] >= 0.25 and r_ankle[2] >= 0.25:
+                angles.append(self.calculate_angle(r_hip[:2], r_knee[:2], r_ankle[:2]))
+
+            if angles and min(angles) < self.sitting_knee_thresh:
+                return True
+
+            if (l_hip[2] >= 0.3 and l_knee[2] >= 0.3) or (r_hip[2] >= 0.3 and r_knee[2] >= 0.3):
+                dy = abs(l_hip[1] - l_knee[1]) if l_hip[2] >= 0.3 and l_knee[2] >= 0.3 else abs(r_hip[1] - r_knee[1])
+                dx = abs(l_hip[0] - l_knee[0]) if l_hip[2] >= 0.3 and l_knee[2] >= 0.3 else abs(r_hip[0] - r_knee[0])
+                if dx > 1.1 * dy:
+                    return True
+
+        aspect_ratio = bbox_h / max(bbox_w, 1.0)
+        return aspect_ratio < 1.40
+
+    def classify(
+        self,
+        keypoints,
+        bbox_w: float,
+        bbox_h: float,
+        center_x: float,
+        distance: Optional[float],
+        timestamp: float,
+        frame_w: float = 640.0
+    ):
+        """Mengembalikan (Activity, Direction, speed_m_s)."""
+        if distance is None:
+            self.reset()
+            return Activity.NONE, Direction.UNKNOWN, 0.0
+
+        self.history.append({'t': timestamp, 'dist': distance, 'cx': center_x})
+        if len(self.history) > self.history_size:
+            self.history.pop(0)
+
+        if self.detect_sitting(keypoints, bbox_w, bbox_h):
+            return Activity.SITTING, Direction.STATIONARY, 0.0
+
+        if len(self.history) < 3:
+            return Activity.STANDING, Direction.STATIONARY, 0.0
+
+        dt = self.history[-1]['t'] - self.history[0]['t']
+        if dt < 0.10:
+            return Activity.STANDING, Direction.STATIONARY, 0.0
+
+        dD = self.history[-1]['dist'] - self.history[0]['dist']
+        radial_speed = dD / dt
+        dcx_ratio = (self.history[-1]['cx'] - self.history[0]['cx']) / max(frame_w, 1.0)
+        lateral_speed = (dcx_ratio * distance) / dt
+        total_speed = math.hypot(radial_speed, lateral_speed)
+
+        if total_speed < self.standing_speed_thresh and abs(radial_speed) < 0.18:
+            return Activity.STANDING, Direction.STATIONARY, round(total_speed, 2)
+
+        if radial_speed <= -0.18:
+            direction = Direction.OPPOSITE_DIRECTION
+        elif radial_speed >= 0.15:
+            direction = Direction.SAME_DIRECTION
+        else:
+            direction = Direction.OPPOSITE_DIRECTION
+
+        return Activity.WALKING, direction, round(total_speed, 2)
+
+
 class HumanAwareFSM:
     def __init__(self, debounce_frames: int = 8):
         if debounce_frames < 1:
@@ -118,8 +236,64 @@ class HumanAwareFSM:
             return State.SAFE_STOP
         return State.NORMAL
 
-    def update(self, zone: Zone) -> State:
-        target = self._target_state(zone)
+    def evaluate_activity_state(
+        self,
+        activity: Activity,
+        in_corridor: bool,
+        distance: Optional[float] = None,
+        direction: Direction = Direction.STATIONARY,
+        force_near: bool = False
+    ) -> State:
+        """
+        Pemetaan 3 Aktivitas Manusia terhadap Output FSM:
+        1. STANDING: luar lintasan -> NORMAL; di lintasan (>1.3m) -> REDUCED_SPEED; dekat (<=1.3m) -> SAFE_STOP
+        2. WALKING: luar lintasan -> NORMAL; searah (>2.0m) -> NORMAL; searah (<=2.0m) -> REDUCED_SPEED;
+                    berlawanan arah (>1.5m) -> REDUCED_SPEED; berlawanan arah (<=1.5m) -> SAFE_STOP
+        3. SITTING: luar lintasan -> NORMAL; di lintasan (>1.2m) -> REDUCED_SPEED; dekat (<=1.2m) -> SAFE_STOP
+        """
+        if force_near or (distance is not None and distance <= 0.85):
+            return State.SAFE_STOP
+
+        if activity == Activity.NONE or distance is None:
+            return State.NORMAL
+
+        if activity == Activity.STANDING:
+            if not in_corridor:
+                return State.NORMAL
+            return State.REDUCED_SPEED if distance > 1.30 else State.SAFE_STOP
+
+        if activity == Activity.WALKING:
+            if not in_corridor:
+                return State.NORMAL
+            if direction == Direction.SAME_DIRECTION:
+                return State.NORMAL if distance > 2.00 else State.REDUCED_SPEED
+            return State.REDUCED_SPEED if distance > 1.50 else State.SAFE_STOP
+
+        if activity == Activity.SITTING:
+            if not in_corridor:
+                return State.NORMAL
+            return State.REDUCED_SPEED if distance > 1.20 else State.SAFE_STOP
+
+        return State.NORMAL
+
+    def update(
+        self,
+        zone: Zone,
+        activity: Optional[Activity] = None,
+        in_corridor: bool = True,
+        distance: Optional[float] = None,
+        direction: Direction = Direction.STATIONARY,
+    ) -> State:
+        if activity is not None:
+            target = self.evaluate_activity_state(
+                activity=activity,
+                in_corridor=in_corridor,
+                distance=distance,
+                direction=direction,
+                force_near=(zone == Zone.NEAR),
+            )
+        else:
+            target = self._target_state(zone)
 
         # State yang sama atau lebih ketat langsung diterapkan.
         if _SEVERITY[target] >= _SEVERITY[self.state]:

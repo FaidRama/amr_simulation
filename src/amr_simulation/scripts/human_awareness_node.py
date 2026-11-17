@@ -41,7 +41,15 @@ if str(SCRIPT_DIR) not in sys.path:
 
 DEFAULT_MODEL = str(SCRIPT_DIR / "yolo11n-pose.pt") if (SCRIPT_DIR / "yolo11n-pose.pt").exists() else "yolo11n-pose.pt"
 
-from fsm import HumanAwareFSM, ProximityClassifier, Zone, State
+from fsm import (
+    HumanAwareFSM,
+    HumanActivityClassifier,
+    ProximityClassifier,
+    Activity,
+    Direction,
+    Zone,
+    State,
+)
 
 
 # ============================================================
@@ -530,10 +538,10 @@ def main():
         default="height"
     )
 
-    parser.add_argument("--t-near-enter", type=float, default=0.95)
-    parser.add_argument("--t-near-exit", type=float, default=0.90)
-    parser.add_argument("--t-med-enter", type=float, default=0.85)
-    parser.add_argument("--t-med-exit", type=float, default=0.70)
+    parser.add_argument("--t-near-enter", type=float, default=0.85)
+    parser.add_argument("--t-near-exit", type=float, default=0.80)
+    parser.add_argument("--t-med-enter", type=float, default=0.60)
+    parser.add_argument("--t-med-exit", type=float, default=0.50)
     parser.add_argument("--debounce", type=int, default=8)
 
     parser.add_argument("--calib-h", default=DEFAULT_CALIB_H)
@@ -698,6 +706,7 @@ def main():
         fsm = HumanAwareFSM(
             debounce_frames=args.debounce
         )
+        activity_classifier = HumanActivityClassifier()
 
         model = YOLO(args.model)
 
@@ -730,8 +739,8 @@ def main():
             "frame", "timestamp", "n_persons", "human_detected",
             "bbox_w_px", "bbox_h_px", "ratio_w", "ratio_h",
             "active_feature", "distance_est_m", "at_edge",
-            "confidence", "zone", "state", "infer_ms", "fps",
-            "true_distance_m"
+            "confidence", "zone", "activity", "direction", "speed_m_s",
+            "state", "infer_ms", "fps", "true_distance_m"
         ])
 
     except Exception:
@@ -936,9 +945,9 @@ def main():
 
                 target["dist"] = dist_smooth
 
-            # 5. PROXIMITY CLASSIFICATION AND FSM
+            # 5. PROXIMITY CLASSIFICATION, ACTIVITY RECOGNITION & FSM
             # SAFE_STOP berlaku di mana pun: cek semua manusia untuk zona NEAR.
-            # REDUCED_SPEED hanya boleh dipicu target yang masuk koridor.
+            # REDUCED_SPEED / behavior evaluasi dipicu oleh target yang masuk koridor.
             near_person_outside_or_inside = any(
                 person["r"] >= args.t_near_enter
                 for person in persons
@@ -960,7 +969,58 @@ def main():
                     force_near=False
                 )
 
-            state = fsm.update(zone)
+            activity = Activity.NONE
+            direction = Direction.UNKNOWN
+            speed_m_s = 0.0
+
+            if target is not None:
+                person_cx = (target["x1"] + target["x2"]) / 2.0
+                activity, direction, speed_m_s = activity_classifier.classify(
+                    keypoints=target.get("keypoints"),
+                    bbox_w=target["w"],
+                    bbox_h=target["h"],
+                    center_x=person_cx,
+                    distance=dist_smooth,
+                    timestamp=time.time(),
+                    frame_w=float(width),
+                )
+                state = fsm.update(
+                    zone=zone,
+                    activity=activity,
+                    in_corridor=True,
+                    distance=dist_smooth,
+                    direction=direction,
+                )
+            elif persons:
+                # Ada orang di luar koridor: klasifikasikan postur orang terbesar untuk informasi,
+                # namun in_corridor=False sehingga FSM mempertahankan NORMAL (kecuali NEAR darurat).
+                outside_p = max(persons, key=lambda p: p["w"] * p["h"])
+                outside_cx = (outside_p["x1"] + outside_p["x2"]) / 2.0
+                activity, direction, speed_m_s = activity_classifier.classify(
+                    keypoints=outside_p.get("keypoints"),
+                    bbox_w=outside_p["w"],
+                    bbox_h=outside_p["h"],
+                    center_x=outside_cx,
+                    distance=outside_p["dist"],
+                    timestamp=time.time(),
+                    frame_w=float(width),
+                )
+                state = fsm.update(
+                    zone=zone,
+                    activity=activity,
+                    in_corridor=False,
+                    distance=outside_p["dist"],
+                    direction=direction,
+                )
+            else:
+                activity_classifier.reset()
+                state = fsm.update(
+                    zone=zone,
+                    activity=Activity.NONE,
+                    in_corridor=False,
+                    distance=None,
+                    direction=Direction.UNKNOWN,
+                )
 
             # 6. PUBLISH STATE ONCE PER FRAME
             state_msg = String()
@@ -1012,6 +1072,9 @@ def main():
                 "boxes": boxes_data,
                 "state": state.value,
                 "zone": zone.value,
+                "activity": activity.value,
+                "direction": direction.value,
+                "speed_m_s": speed_m_s,
                 "response": STATE_RESPONSE.get(state, ""),
                 "persons": len(persons),
                 "corridor_persons": len(corridor_persons),
@@ -1072,6 +1135,9 @@ def main():
                 bool(target and target["at_edge"]),
                 round(target["conf"], 3) if target else 0.0,
                 zone.value,
+                activity.value,
+                direction.value,
+                speed_m_s,
                 state.value,
                 round(infer_ms, 1),
                 round(fps_ema, 1),
@@ -1196,6 +1262,12 @@ def main():
                         ("Confidence", "-", GRAY),
                     ]
 
+                act_color = YELLOW if activity == Activity.WALKING else (GREEN if activity != Activity.NONE else GRAY)
+                rows.append((
+                    "Aktivitas / Arah",
+                    f"{activity.value} ({direction.value})" if activity != Activity.NONE else "-",
+                    act_color
+                ))
                 rows.append((
                     "FPS / Inferensi",
                     f"{fps_ema:.1f} / {infer_ms:.0f} ms",
