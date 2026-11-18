@@ -31,8 +31,9 @@ from datetime import datetime
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from nav2_msgs.action import NavigateToPose
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from std_msgs.msg import String
 from action_msgs.msg import GoalStatus
 
@@ -80,6 +81,33 @@ class WaypointManager(Node):
             String, '/human_state', self.on_human_state_received, 10)
         self.human_nav_mode_sub = self.create_subscription(
             String, '/human_nav_mode', self.on_human_nav_mode_received, 10)
+
+        # === GATE LOKALISASI AMCL (PRE-DRIVE AUTO-ALIGN) ===
+        self.amcl_align_phase = 'LOCKED'
+        self.amcl_align_localized = True
+        self.last_amcl_align_wall = 0.0
+        self.amcl_sigma_xy = 0.0
+        self.amcl_sigma_yaw = 0.0
+        self.last_amcl_pose_wall = 0.0
+        self.align_heading_lost_rad = 0.45  # ~25.8 deg: re-align jika arah masih menyebar
+        self.amcl_align_state_sub = self.create_subscription(
+            String, '/amr/amcl_alignment_state', self.on_amcl_align_state_received, 10)
+        self.request_align_pub = self.create_publisher(
+            String, '/amr/request_align', 10)
+        amcl_qos_transient = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+        self.amcl_pose_sub = self.create_subscription(
+            PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose_received, amcl_qos_transient)
+        amcl_qos_volatile = QoSProfile(
+            depth=5,
+            durability=DurabilityPolicy.VOLATILE,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+        self.amcl_pose_vol_sub = self.create_subscription(
+            PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose_received, amcl_qos_volatile)
         
         # === CONFIGURATION (waypoints.yaml) ===
         self.home_position = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
@@ -162,7 +190,11 @@ class WaypointManager(Node):
                         cfg = yaml.safe_load(f) or {}
                     mode = cfg.get('operation_mode', 'sim')
                     profile = cfg.get('profiles', {}).get(mode, {})
-                    if 'home_position' in profile:
+                    active_map = profile.get('map_file', '') if isinstance(profile, dict) else ''
+                    map_cfg = cfg.get('map_configs', {}).get(active_map, {}) if active_map else {}
+                    if isinstance(map_cfg, dict) and isinstance(map_cfg.get('home_position'), dict):
+                        self.home_position = map_cfg['home_position']
+                    elif isinstance(profile, dict) and 'home_position' in profile:
                         self.home_position = profile['home_position']
                     elif 'home_position' in cfg:
                         self.home_position = cfg['home_position']
@@ -328,6 +360,122 @@ class WaypointManager(Node):
                 self.human_bypass_clear_since_wall = None
         if changed:
             self._sync_human_mission_phase()
+
+    def on_amcl_align_state_received(self, msg):
+        """Menerima fase penguncian AMCL (/amr/amcl_alignment_state) dari adaptive_velocity_node."""
+        raw = (msg.data or '').strip()
+        if not raw:
+            return
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return
+        phase = str(payload.get('phase', '')).strip().upper()
+        if not phase:
+            return
+        now = time.time()
+        with self.human_lock:
+            self.amcl_align_phase = phase
+            self.amcl_align_localized = bool(payload.get('localized', phase == 'LOCKED'))
+            self.last_amcl_align_wall = now
+            if 'sigma_xy' in payload:
+                self.amcl_sigma_xy = float(payload['sigma_xy'])
+            if 'sigma_yaw_deg' in payload:
+                self.amcl_sigma_yaw = math.radians(float(payload['sigma_yaw_deg']))
+
+    def on_amcl_pose_received(self, msg):
+        """Pantau ketidakpastian posisi & orientasi (sigma) AMCL terbaru."""
+        cov = msg.pose.covariance
+        if len(cov) < 36:
+            return
+        sigma_x = math.sqrt(max(0.0, float(cov[0])))
+        sigma_y = math.sqrt(max(0.0, float(cov[7])))
+        sigma_yaw = math.sqrt(max(0.0, float(cov[35])))
+        with self.human_lock:
+            self.amcl_sigma_xy = max(sigma_x, sigma_y)
+            self.amcl_sigma_yaw = sigma_yaw
+            self.last_amcl_pose_wall = time.time()
+
+    def _wait_for_amcl_alignment(self):
+        """
+        Tunggu penguncian orientasi & posisi awal AMCL sebelum mengirim goal Nav2
+        agar robot tidak langsung melenceng karena hadap awal tidak sesuai peta.
+        Tidak memblokir koridor simetris pada sigma_xy ~0.19m jika yaw sudah terkunci.
+        """
+        align_requested_at = None
+        saw_align_active = False
+        last_log_wall = 0.0
+        waited = False
+        wait_start = time.time()
+
+        while not self.stop_navigation and not self.is_cancelled:
+            now = time.time()
+            with self.human_lock:
+                phase = self.amcl_align_phase
+                align_age = (now - self.last_amcl_align_wall) if self.last_amcl_align_wall > 0.0 else None
+                pose_age = (now - self.last_amcl_pose_wall) if self.last_amcl_pose_wall > 0.0 else None
+                sigma_xy = self.amcl_sigma_xy
+                sigma_yaw = self.amcl_sigma_yaw
+
+            align_active = (align_age is not None and align_age < 4.0 and phase != 'LOCKED')
+            if align_active:
+                saw_align_active = True
+
+            # Setelah satu siklus alignment selesai menuju LOCKED, langsung lanjut tanpa loop ulang
+            if not align_active and saw_align_active:
+                self.log(
+                    'info',
+                    f'✅ AMCL siap (sigma_xy={sigma_xy:.2f}m, sigma_yaw={math.degrees(sigma_yaw):.1f}°). Mengirim goal Nav2.'
+                )
+                return True
+
+            heading_lost = (
+                not align_active
+                and align_requested_at is None
+                and pose_age is not None
+                and pose_age < 10.0
+                and sigma_yaw > self.align_heading_lost_rad
+            )
+
+            if not align_active and not heading_lost:
+                if waited:
+                    self.log(
+                        'info',
+                        f'✅ AMCL siap (sigma_xy={sigma_xy:.2f}m, sigma_yaw={math.degrees(sigma_yaw):.1f}°). Mengirim goal Nav2.'
+                    )
+                return True
+
+            if heading_lost:
+                align_requested_at = now
+                align_msg = String()
+                align_msg.data = 'align'
+                self.request_align_pub.publish(align_msg)
+                self.log(
+                    'info',
+                    f'🧭 Sebaran arah AMCL terlalu lebar (sigma_yaw={math.degrees(sigma_yaw):.1f}°). Meminta penguncian orientasi sebelum jalan...'
+                )
+
+            if align_requested_at is not None and not align_active and (now - align_requested_at) > 1.5:
+                self.log('warn', '⚠️ adaptive_velocity_node tidak merespons permintaan auto-align; melanjutkan navigasi.')
+                return True
+
+            if (now - wait_start) > 25.0:
+                self.log(
+                    'warn',
+                    f'⚠️ Timeout menunggu kunci AMCL ({phase}, sigma_yaw={math.degrees(sigma_yaw):.1f}°); melanjutkan navigasi.'
+                )
+                return True
+
+            waited = True
+            if (now - last_log_wall) >= 4.0:
+                last_log_wall = now
+                self.log(
+                    'info',
+                    f'🧭 Menunggu AMCL mengunci posisi & orientasi (fase={phase}, sigma_yaw={math.degrees(sigma_yaw):.1f}°)...'
+                )
+            time.sleep(0.2)
+
+        return False
 
     def _effective_human_mode(self):
         """Kembalikan mode navigasi manusia saat ini: WAIT_HUMAN, BYPASS_HUMAN, REDUCED_SPEED, atau NORMAL."""
@@ -659,6 +807,13 @@ class WaypointManager(Node):
                     self.log('info', '🚶 [HUMAN AWARE] Manusia masih di jalur >= 15s (BYPASS_HUMAN): Mengirim ulang goal Nav2 untuk melewati lewat costmap...')
                 else:
                     self.log('info', f'✅ Jalur kembali aman ({mode_now}): Melanjutkan pengiriman goal ke Nav2...')
+
+            # 1b. Pastikan orientasi & posisi awal AMCL sudah terkunci sebelum kirim goal Nav2
+            if not self._wait_for_amcl_alignment():
+                return False
+            mode_now = self._effective_human_mode()
+            if self.is_paused or mode_now == 'WAIT_HUMAN':
+                continue
 
             # 2. Tunggu action server tersedia
             server_ready = False

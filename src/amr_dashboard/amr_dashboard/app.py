@@ -11,6 +11,7 @@ import sys
 import pwd
 import shutil
 import json
+import copy
 import time
 import math
 import sqlite3
@@ -180,8 +181,43 @@ def get_maps_directories():
     return dirs
 
 
+CONFIG_LOCK = threading.RLock()
+waypoints_config = {}
+
+
+def _normalize_map_key(map_name):
+    """Normalisasi nama file peta menjadi key konsisten (mis. 'peta_dc.yaml' atau 'live')."""
+    if not map_name:
+        return ''
+    raw = str(map_name).strip()
+    if not raw:
+        return ''
+    clean = raw.split(' ')[0].split('(')[0].strip()
+    if not clean:
+        return ''
+    if clean == 'live':
+        return 'live'
+    clean = os.path.basename(clean)
+    if not clean.endswith('.yaml'):
+        clean += '.yaml'
+    return clean
+
+
+def _disk_map_filenames():
+    """Kumpulkan seluruh nama file peta .yaml yang benar-benar ada di direktori maps/."""
+    names = set()
+    for d in get_maps_directories():
+        try:
+            for fname in os.listdir(d):
+                if fname.endswith('.yaml'):
+                    names.add(fname)
+        except Exception:
+            pass
+    return names
+
+
 def list_available_maps():
-    """Kembalikan daftar file peta (.yaml) yang tersedia + opsi live ROS2 /map."""
+    """Kembalikan daftar file peta (.yaml) yang tersedia + opsi live ROS2 /map beserta jumlah titik."""
     found = {}
     labels = {
         'peta_l1_ddc.yaml': 'peta_l1_ddc.yaml (Peta Lantai 1 DDC)',
@@ -190,23 +226,33 @@ def list_available_maps():
         'peta_rumah.yaml': 'peta_rumah.yaml (Peta Rumah)',
         'peta_dc.yaml': 'peta_dc.yaml (Simulasi Gazebo Gudang)',
     }
-    for d in get_maps_directories():
-        try:
-            for fname in sorted(os.listdir(d)):
-                if fname.endswith('.yaml') and fname not in found:
-                    found[fname] = {
-                        'id': fname,
-                        'name': labels.get(fname, fname),
-                        'type': 'sim' if fname == 'peta_dc.yaml' else 'real'
-                    }
-        except Exception:
-            pass
-    res = list(found.values())
-    res.append({
-        'id': 'live',
-        'name': 'Live ROS2 /map Topic (SLAM Real-Time / Map Server)',
-        'type': 'live'
-    })
+    with CONFIG_LOCK:
+        map_configs = waypoints_config.get('map_configs', {}) if isinstance(waypoints_config, dict) else {}
+        for d in get_maps_directories():
+            try:
+                for fname in sorted(os.listdir(d)):
+                    if fname.endswith('.yaml') and fname not in found:
+                        mc = map_configs.get(fname, {})
+                        pts = mc.get('predefined_points', []) if isinstance(mc, dict) else []
+                        found[fname] = {
+                            'id': fname,
+                            'name': labels.get(fname, fname),
+                            'type': 'sim' if fname == 'peta_dc.yaml' else 'real',
+                            'points_count': len(pts),
+                            'deletable': True,
+                        }
+            except Exception:
+                pass
+        res = list(found.values())
+        live_mc = map_configs.get('live', {})
+        live_pts = live_mc.get('predefined_points', []) if isinstance(live_mc, dict) else []
+        res.append({
+            'id': 'live',
+            'name': 'Live ROS2 /map Topic (SLAM Real-Time / Map Server)',
+            'type': 'live',
+            'points_count': len(live_pts),
+            'deletable': False,
+        })
     return res
 
 
@@ -215,14 +261,8 @@ def find_map_files(map_yaml_name=None):
     global MAP_PGM_PATH, MAP_YAML_PATH, MAP_METADATA, ACTIVE_MAP_FILE
 
     if map_yaml_name:
-        raw = str(map_yaml_name).strip()
-        # Bersihkan nama jika membawa label UI (misal 'peta_l1_ddc.yaml (Peta Lantai 1 DDC)')
-        clean = raw.split(' ')[0].split('(')[0].strip()
-        if clean == 'live':
-            ACTIVE_MAP_FILE = 'live'
-        else:
-            if not clean.endswith('.yaml'):
-                clean += '.yaml'
+        clean = _normalize_map_key(map_yaml_name)
+        if clean:
             ACTIVE_MAP_FILE = clean
 
     if ACTIVE_MAP_FILE == 'live':
@@ -243,21 +283,33 @@ def find_map_files(map_yaml_name=None):
     if not yaml_candidate:
         print(f'[WARN] File peta "{target_yaml}" tidak ditemukan, mencari fallback...')
         for d in get_maps_directories():
-            for fallback in ('peta_1b.yaml', 'peta_dc.yaml'):
+            for fallback in ('peta_1b.yaml', 'peta_l1_ddc.yaml', 'digital_center_l1.yaml', 'peta_dc.yaml'):
                 cand = os.path.join(d, fallback)
                 if os.path.exists(cand):
                     yaml_candidate = cand
                     break
             if yaml_candidate:
                 break
+        if not yaml_candidate:
+            for d in get_maps_directories():
+                try:
+                    for fname in sorted(os.listdir(d)):
+                        if fname.endswith('.yaml'):
+                            yaml_candidate = os.path.join(d, fname)
+                            break
+                except Exception:
+                    pass
+                if yaml_candidate:
+                    break
 
     if yaml_candidate and os.path.exists(yaml_candidate):
         MAP_YAML_PATH = yaml_candidate
-        ACTIVE_MAP_FILE = os.path.basename(yaml_candidate)
+        if ACTIVE_MAP_FILE != 'live':
+            ACTIVE_MAP_FILE = os.path.basename(yaml_candidate)
         with open(MAP_YAML_PATH, 'r') as f:
             MAP_METADATA = yaml.safe_load(f) or {}
 
-        img_field = MAP_METADATA.get('image', ACTIVE_MAP_FILE.replace('.yaml', '.pgm'))
+        img_field = MAP_METADATA.get('image', os.path.basename(yaml_candidate).replace('.yaml', '.pgm'))
         map_dir = os.path.dirname(MAP_YAML_PATH)
         cand_pgm = os.path.join(map_dir, img_field)
         if not os.path.exists(cand_pgm):
@@ -265,6 +317,12 @@ def find_map_files(map_yaml_name=None):
         MAP_PGM_PATH = cand_pgm
         print(f'[MAP] Loaded ({ACTIVE_MAP_FILE}): {MAP_PGM_PATH}')
         print(f'[MAP] Resolution: {MAP_METADATA.get("resolution", 0.05)} m/px | Origin: {MAP_METADATA.get("origin", [0, 0, 0])}')
+    else:
+        MAP_YAML_PATH = None
+        MAP_PGM_PATH = None
+        MAP_METADATA = {}
+        ACTIVE_MAP_FILE = 'live'
+        print('[WARN] Tidak ada file peta .yaml di direktori maps/; fallback ke LIVE /map.')
 
 
 # =====================================================================
@@ -363,6 +421,7 @@ class DashboardNode(Node):
         self.last_path_time = 0.0
         self.last_odom_pose = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
         self.odom_to_map_offset = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+        self.amcl_cov = {'sigma_xy': 99.0, 'sigma_yaw': math.pi, 'stamp': 0.0}
         
         # === TF2 LISTENER (Real-time map -> base_link seperti RViz) ===
         if HAS_TF2:
@@ -544,6 +603,14 @@ class DashboardNode(Node):
         siny = 2.0 * (q.w * q.z + q.x * q.y)
         cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         yaw = math.atan2(siny, cosy)
+        cov = msg.pose.covariance
+        sigma_xy = None
+        sigma_yaw = None
+        if len(cov) >= 36:
+            sigma_x = math.sqrt(max(0.0, float(cov[0])))
+            sigma_y = math.sqrt(max(0.0, float(cov[7])))
+            sigma_xy = max(sigma_x, sigma_y)
+            sigma_yaw = math.sqrt(max(0.0, float(cov[35])))
         
         with self.lock:
             self.last_amcl_time = time.time()
@@ -554,6 +621,12 @@ class DashboardNode(Node):
                 'y': round(p.position.y, 3),
                 'yaw': round(yaw, 3)
             }
+            if sigma_xy is not None and sigma_yaw is not None:
+                self.amcl_cov = {
+                    'sigma_xy': sigma_xy,
+                    'sigma_yaw': sigma_yaw,
+                    'stamp': self.last_amcl_time
+                }
             ox = self.last_odom_pose['x']
             oy = self.last_odom_pose['y']
             oyaw = self.last_odom_pose['yaw']
@@ -670,7 +743,11 @@ class DashboardNode(Node):
                             break
                     if matched_yaml and matched_yaml != ACTIVE_MAP_FILE:
                         self.get_logger().info(f'Auto-sync peta dashboard ke peta aktif Nav2: {matched_yaml}')
-                        find_map_files(matched_yaml)
+                        apply_mode_profile(
+                            waypoints_config.get('operation_mode', 'real'),
+                            custom_map_file=matched_yaml,
+                            save=True
+                        )
         except Exception as e:
             self.get_logger().warn(f'Gagal memproses /map OccupancyGrid: {e}')
     
@@ -845,7 +922,7 @@ class DashboardNode(Node):
         with self.lock:
             self.cmd_vel_current = {'linear': linear, 'angular': angular}
 
-    def send_initial_pose(self, x, y, yaw=0.0):
+    def send_initial_pose(self, x, y, yaw=0.0, cov_xy=0.25, cov_yaw=0.0685):
         """Publish 2D Pose Estimate ke /initialpose untuk lokalisasi AMCL."""
         msg = PoseWithCovarianceStamped()
         msg.header.frame_id = 'map'
@@ -857,9 +934,9 @@ class DashboardNode(Node):
         msg.pose.pose.orientation.w = math.cos(float(yaw) / 2.0)
         # Covariance standar AMCL (x, y, yaw)
         cov = [0.0] * 36
-        cov[0] = 0.25
-        cov[7] = 0.25
-        cov[35] = 0.0685
+        cov[0] = float(cov_xy)
+        cov[7] = float(cov_xy)
+        cov[35] = float(cov_yaw)
         msg.pose.covariance = cov
         self.initialpose_pub.publish(msg)
         if hasattr(self, 'initialpose_pub_vol'):
@@ -947,7 +1024,127 @@ def load_env_file():
                 print(f'[WARN] Gagal membaca {path}: {e}')
 
 
-waypoints_config = {}
+def _copy_home(hp):
+    if not isinstance(hp, dict):
+        return {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+    return {
+        'x': round(float(hp.get('x', 0.0)), 3),
+        'y': round(float(hp.get('y', 0.0)), 3),
+        'yaw': round(float(hp.get('yaw', 0.0)), 3),
+    }
+
+
+def _copy_points(pts):
+    if not isinstance(pts, list):
+        return []
+    return [copy.deepcopy(p) for p in pts if isinstance(p, dict)]
+
+
+def _get_active_map_key():
+    with CONFIG_LOCK:
+        key = _normalize_map_key(ACTIVE_MAP_FILE)
+        if key:
+            return key
+        mode = waypoints_config.get('operation_mode', 'real')
+        prof = waypoints_config.get('profiles', {}).get(mode, {})
+        return _normalize_map_key(prof.get('map_file')) or 'live'
+
+
+def _ensure_map_config(map_key, seed_home=None, seed_points=None):
+    key = _normalize_map_key(map_key) or 'live'
+    with CONFIG_LOCK:
+        if 'map_configs' not in waypoints_config or not isinstance(waypoints_config['map_configs'], dict):
+            waypoints_config['map_configs'] = {}
+        mc = waypoints_config['map_configs'].get(key)
+        if not isinstance(mc, dict):
+            mc = {
+                'home_position': _copy_home(seed_home),
+                'predefined_points': _copy_points(seed_points),
+            }
+            waypoints_config['map_configs'][key] = mc
+        else:
+            mc['home_position'] = _copy_home(mc.get('home_position'))
+            mc['predefined_points'] = _copy_points(mc.get('predefined_points'))
+        return mc
+
+
+def _sync_active_map_to_profile(mode=None):
+    """Sinkronkan titik & home dari peta aktif ke root & profiles[mode] untuk kompatibilitas node ROS2."""
+    with CONFIG_LOCK:
+        active_mode = 'sim' if str(mode or waypoints_config.get('operation_mode', 'real')).lower() == 'sim' else 'real'
+        waypoints_config['operation_mode'] = active_mode
+        if 'profiles' not in waypoints_config or not isinstance(waypoints_config['profiles'], dict):
+            waypoints_config['profiles'] = {}
+        if active_mode not in waypoints_config['profiles'] or not isinstance(waypoints_config['profiles'][active_mode], dict):
+            waypoints_config['profiles'][active_mode] = {
+                'map_file': 'peta_dc.yaml' if active_mode == 'sim' else 'peta_1b.yaml',
+                'home_position': {'x': 0.0, 'y': 0.0, 'yaw': 0.0},
+                'predefined_points': [],
+                'settings': {
+                    'max_linear_speed': 1.0 if active_mode == 'sim' else 0.35,
+                    'max_angular_speed': 1.2 if active_mode == 'sim' else 0.8,
+                    'waypoint_pause_duration': 3,
+                    'auto_return_home': True,
+                }
+            }
+        prof = waypoints_config['profiles'][active_mode]
+        map_key = _normalize_map_key(ACTIVE_MAP_FILE) or _normalize_map_key(prof.get('map_file')) or 'live'
+        mc = _ensure_map_config(map_key)
+        prof['map_file'] = map_key
+        prof['home_position'] = _copy_home(mc.get('home_position'))
+        prof['predefined_points'] = _copy_points(mc.get('predefined_points'))
+        waypoints_config['home_position'] = _copy_home(mc.get('home_position'))
+        waypoints_config['predefined_points'] = _copy_points(mc.get('predefined_points'))
+        waypoints_config['settings'] = copy.deepcopy(prof.get('settings', waypoints_config.get('settings', {})))
+        return mc
+
+
+def _pick_fallback_map_for_mode(mode, exclude_key=''):
+    disk_maps = sorted(_disk_map_filenames())
+    avail = [m for m in disk_maps if m != exclude_key]
+    if not avail:
+        return 'live'
+    if mode == 'sim':
+        if 'peta_dc.yaml' in avail:
+            return 'peta_dc.yaml'
+        return avail[0]
+    for pref in ('peta_1b.yaml', 'peta_l1_ddc.yaml', 'digital_center_l1.yaml'):
+        if pref in avail:
+            return pref
+    non_sim = [m for m in avail if m != 'peta_dc.yaml']
+    return non_sim[0] if non_sim else avail[0]
+
+
+def _prune_orphan_map_configs():
+    """Hapus otomatis konfigurasi titik untuk file peta .yaml yang sudah tidak ada di disk."""
+    dirs = get_maps_directories()
+    if not dirs:
+        return False
+    disk_maps = _disk_map_filenames()
+    changed = False
+    with CONFIG_LOCK:
+        map_configs = waypoints_config.get('map_configs', {})
+        if isinstance(map_configs, dict):
+            orphans = [k for k in list(map_configs.keys()) if k != 'live' and k not in disk_maps]
+            for k in orphans:
+                map_configs.pop(k, None)
+                changed = True
+                print(f'[CONFIG] Auto-hapus titik untuk peta yang hilang dari disk: {k}')
+        profiles = waypoints_config.get('profiles', {})
+        if isinstance(profiles, dict):
+            for m, prof in profiles.items():
+                if not isinstance(prof, dict):
+                    continue
+                mf = _normalize_map_key(prof.get('map_file'))
+                if mf and mf != 'live' and mf not in disk_maps:
+                    rep = _pick_fallback_map_for_mode(m, exclude_key=mf)
+                    prof['map_file'] = rep
+                    rep_mc = _ensure_map_config(rep)
+                    prof['predefined_points'] = _copy_points(rep_mc.get('predefined_points'))
+                    prof['home_position'] = _copy_home(rep_mc.get('home_position'))
+                    changed = True
+    return changed
+
 
 def save_waypoints_config():
     """Simpan waypoints_config ke install share dan src agar persisten."""
@@ -957,11 +1154,13 @@ def save_waypoints_config():
         if cand not in paths:
             paths.append(cand)
     saved_any = False
+    with CONFIG_LOCK:
+        snapshot = copy.deepcopy(waypoints_config)
     for cfg_path in paths:
         try:
             if os.path.exists(os.path.dirname(cfg_path)):
                 with open(cfg_path, 'w') as f:
-                    yaml.dump(waypoints_config, f, default_flow_style=False, allow_unicode=True)
+                    yaml.dump(snapshot, f, default_flow_style=False, allow_unicode=True)
                 saved_any = True
         except Exception as e:
             print(f'[WARN] Gagal menyimpan waypoints.yaml ke {cfg_path}: {e}')
@@ -969,48 +1168,154 @@ def save_waypoints_config():
 
 
 def apply_mode_profile(mode, custom_map_file=None, save=True):
-    """Aktifkan profil mode ('sim' atau 'real') dan muat peta yang sesuai."""
-    global waypoints_config
-    mode = 'sim' if str(mode).lower() == 'sim' else 'real'
-    waypoints_config['operation_mode'] = mode
+    """Aktifkan profil mode ('sim' atau 'real') dan muat peta beserta titik khusus peta tersebut."""
+    with CONFIG_LOCK:
+        mode = 'sim' if str(mode).lower() == 'sim' else 'real'
+        waypoints_config['operation_mode'] = mode
 
-    if 'profiles' not in waypoints_config or not isinstance(waypoints_config['profiles'], dict):
-        waypoints_config['profiles'] = {}
+        if 'profiles' not in waypoints_config or not isinstance(waypoints_config['profiles'], dict):
+            waypoints_config['profiles'] = {}
 
-    default_map = 'peta_dc.yaml' if mode == 'sim' else 'peta_1b.yaml'
-    if mode not in waypoints_config['profiles']:
-        waypoints_config['profiles'][mode] = {
-            'map_file': default_map,
-            'home_position': dict(waypoints_config.get('home_position', {'x': 0.0, 'y': 0.0, 'yaw': 0.0})),
-            'predefined_points': list(waypoints_config.get('predefined_points', [])),
-            'settings': dict(waypoints_config.get('settings', {
-                'max_linear_speed': 1.0 if mode == 'sim' else 0.35,
-                'max_angular_speed': 1.2 if mode == 'sim' else 0.8,
-                'waypoint_pause_duration': 3,
-                'auto_return_home': True
-            }))
-        }
+        default_map = 'peta_dc.yaml' if mode == 'sim' else 'peta_1b.yaml'
+        if mode not in waypoints_config['profiles']:
+            waypoints_config['profiles'][mode] = {
+                'map_file': default_map,
+                'home_position': _copy_home(waypoints_config.get('home_position')),
+                'predefined_points': _copy_points(waypoints_config.get('predefined_points')),
+                'settings': copy.deepcopy(waypoints_config.get('settings', {
+                    'max_linear_speed': 1.0 if mode == 'sim' else 0.35,
+                    'max_angular_speed': 1.2 if mode == 'sim' else 0.8,
+                    'waypoint_pause_duration': 3,
+                    'auto_return_home': True
+                }))
+            }
 
-    prof = waypoints_config['profiles'][mode]
-    if custom_map_file:
-        raw = str(custom_map_file).strip()
-        clean = raw.split(' ')[0].split('(')[0].strip()
-        if clean != 'live' and not clean.endswith('.yaml'):
-            clean += '.yaml'
-        prof['map_file'] = clean
+        prof = waypoints_config['profiles'][mode]
+        if custom_map_file:
+            clean = _normalize_map_key(custom_map_file)
+            if clean:
+                prof['map_file'] = clean
 
-    map_to_load = prof.get('map_file', default_map)
-    waypoints_config['predefined_points'] = list(prof.get('predefined_points', []))
-    waypoints_config['home_position'] = dict(prof.get('home_position', {'x': 0.0, 'y': 0.0, 'yaw': 0.0}))
-    waypoints_config['settings'] = dict(prof.get('settings', {}))
-
-    find_map_files(map_to_load)
-    prof['map_file'] = ACTIVE_MAP_FILE
-    if save:
-        save_waypoints_config()
+        map_to_load = _normalize_map_key(prof.get('map_file')) or default_map
+        find_map_files(map_to_load)
+        _ensure_map_config(ACTIVE_MAP_FILE)
+        _sync_active_map_to_profile(mode)
+        if save:
+            save_waypoints_config()
+        pts_len = len(waypoints_config.get('predefined_points', []))
     if ros_node is not None:
         ros_node.send_control('reload_config')
-    print(f'[MODE] Aktif: {mode.upper()} | Peta: {ACTIVE_MAP_FILE} | Titik: {len(waypoints_config["predefined_points"])}')
+    print(f'[MODE] Aktif: {mode.upper()} | Peta: {ACTIVE_MAP_FILE} | Titik: {pts_len}')
+
+
+def delete_map_by_name(map_name):
+    """Hapus file peta (.yaml + gambar .pgm) dari seluruh direktori maps dan hapus seluruh titik terkait."""
+    raw = str(map_name or '').strip()
+    if not raw or '/' in raw or '\\' in raw or '..' in raw:
+        return {'success': False, 'status': 400, 'error': 'Nama file peta tidak valid.'}
+
+    target_key = _normalize_map_key(raw)
+    if not target_key or target_key == 'live':
+        return {'success': False, 'status': 400, 'error': 'Topik Live ROS /map bukan file permanen dan tidak dapat dihapus.'}
+
+    active_before = _get_active_map_key()
+    if is_navigation_active() and active_before == target_key:
+        return {
+            'success': False,
+            'status': 409,
+            'error': 'Hentikan Navigasi terlebih dahulu sebelum menghapus peta yang sedang dijalankan Nav2.'
+        }
+
+    deleted_files = []
+    stem = os.path.splitext(target_key)[0]
+    for d in get_maps_directories():
+        if not os.path.isdir(d):
+            continue
+        dir_real = os.path.realpath(d)
+        yaml_path = os.path.join(d, target_key)
+        img_candidates = [os.path.join(d, f'{stem}.pgm')]
+
+        if os.path.isfile(yaml_path):
+            try:
+                with open(yaml_path, 'r') as yf:
+                    ym = yaml.safe_load(yf) or {}
+                img_field = str(ym.get('image', '')).strip()
+                if img_field:
+                    img_candidates.insert(0, os.path.join(d, img_field))
+                    img_candidates.append(os.path.join(d, os.path.basename(img_field)))
+            except Exception:
+                pass
+            try:
+                os.remove(yaml_path)
+                deleted_files.append(yaml_path)
+            except Exception as e:
+                print(f'[WARN] Gagal menghapus {yaml_path}: {e}')
+
+        seen_imgs = set()
+        for img_cand in img_candidates:
+            try:
+                cand_real = os.path.realpath(img_cand)
+            except Exception:
+                continue
+            if cand_real in seen_imgs:
+                continue
+            seen_imgs.add(cand_real)
+            if not (cand_real.startswith(dir_real + os.sep)):
+                continue
+            if os.path.isfile(cand_real):
+                try:
+                    os.remove(cand_real)
+                    deleted_files.append(cand_real)
+                except Exception as e:
+                    print(f'[WARN] Gagal menghapus {cand_real}: {e}')
+
+    with CONFIG_LOCK:
+        map_configs = waypoints_config.setdefault('map_configs', {})
+        removed_mc = map_configs.pop(target_key, None)
+        removed_points_count = len(removed_mc.get('predefined_points', [])) if isinstance(removed_mc, dict) else 0
+
+        if not deleted_files and removed_mc is None:
+            return {'success': False, 'status': 404, 'error': f'File peta "{target_key}" tidak ditemukan.'}
+
+        profiles = waypoints_config.get('profiles', {})
+        for m, prof in profiles.items():
+            if not isinstance(prof, dict):
+                continue
+            if _normalize_map_key(prof.get('map_file')) == target_key:
+                rep = _pick_fallback_map_for_mode(m, exclude_key=target_key)
+                prof['map_file'] = rep
+                rep_mc = _ensure_map_config(rep)
+                prof['predefined_points'] = _copy_points(rep_mc.get('predefined_points'))
+                prof['home_position'] = _copy_home(rep_mc.get('home_position'))
+
+        switched_active = (active_before == target_key)
+        active_mode = waypoints_config.get('operation_mode', 'real')
+        if switched_active:
+            rep = _pick_fallback_map_for_mode(active_mode, exclude_key=target_key)
+            apply_mode_profile(active_mode, custom_map_file=rep, save=True)
+        else:
+            _sync_active_map_to_profile(active_mode)
+            save_waypoints_config()
+
+        res_points = _copy_points(waypoints_config.get('predefined_points', []))
+        res_home = _copy_home(waypoints_config.get('home_position'))
+
+    return {
+        'success': True,
+        'status': 200,
+        'deleted_map': target_key,
+        'deleted_files': deleted_files,
+        'deleted_points_count': removed_points_count,
+        'switched_active_map': switched_active,
+        'map_file': ACTIVE_MAP_FILE,
+        'available_maps': list_available_maps(),
+        'points': res_points,
+        'home': res_home,
+        'message': (
+            f'Peta "{target_key}" dan {removed_points_count} titik terkait berhasil dihapus.'
+            + (f' Peta aktif dialihkan ke "{ACTIVE_MAP_FILE}".' if switched_active else '')
+        )
+    }
 
 
 def load_waypoints_config(override_mode=None):
@@ -1023,29 +1328,57 @@ def load_waypoints_config(override_mode=None):
         os.path.join(PKG_PATH, 'config', 'waypoints.yaml'),
         os.path.join(os.path.dirname(__file__), '..', 'config', 'waypoints.yaml'),
     ])
-    loaded = False
-    for path in config_paths:
-        if os.path.exists(path):
-            with open(path, 'r') as f:
-                waypoints_config = yaml.safe_load(f) or {}
-            print(f'[CONFIG] Loaded waypoints dari {path}')
-            loaded = True
-            break
-    if not loaded:
-        print('[WARN] waypoints.yaml tidak ditemukan, menggunakan default.')
-        waypoints_config = {
-            'operation_mode': 'real',
-            'predefined_points': [],
-            'home_position': {'x': 0.0, 'y': 0.0, 'yaw': 0.0},
-            'settings': {
-                'max_linear_speed': 0.35,
-                'max_angular_speed': 0.8,
-                'waypoint_pause_duration': 3,
-                'auto_return_home': True
+    with CONFIG_LOCK:
+        loaded = False
+        for path in config_paths:
+            if os.path.exists(path):
+                with open(path, 'r') as f:
+                    waypoints_config = yaml.safe_load(f) or {}
+                print(f'[CONFIG] Loaded waypoints dari {path}')
+                loaded = True
+                break
+        if not loaded:
+            print('[WARN] waypoints.yaml tidak ditemukan, menggunakan default.')
+            waypoints_config = {
+                'operation_mode': 'real',
+                'predefined_points': [],
+                'home_position': {'x': 0.0, 'y': 0.0, 'yaw': 0.0},
+                'settings': {
+                    'max_linear_speed': 0.35,
+                    'max_angular_speed': 0.8,
+                    'waypoint_pause_duration': 3,
+                    'auto_return_home': True
+                }
             }
-        }
-    active_mode = override_mode if override_mode in ('sim', 'real') else waypoints_config.get('operation_mode', 'real')
-    apply_mode_profile(active_mode, save=bool(override_mode))
+
+        # Migrasi satu kali dari format lama (titik per-mode) ke per-peta (map_configs)
+        migrated = False
+        if 'map_configs' not in waypoints_config or not isinstance(waypoints_config['map_configs'], dict):
+            waypoints_config['map_configs'] = {}
+            migrated = True
+            profiles = waypoints_config.get('profiles', {})
+            if isinstance(profiles, dict):
+                for m_name, prof in profiles.items():
+                    if not isinstance(prof, dict):
+                        continue
+                    pmap = _normalize_map_key(prof.get('map_file'))
+                    if pmap and pmap not in waypoints_config['map_configs']:
+                        waypoints_config['map_configs'][pmap] = {
+                            'home_position': _copy_home(prof.get('home_position', waypoints_config.get('home_position'))),
+                            'predefined_points': _copy_points(prof.get('predefined_points', waypoints_config.get('predefined_points'))),
+                        }
+            active_m = override_mode if override_mode in ('sim', 'real') else waypoints_config.get('operation_mode', 'real')
+            prof_active = profiles.get(active_m, {}) if isinstance(profiles, dict) else {}
+            fallback_map = _normalize_map_key(prof_active.get('map_file')) or ('peta_dc.yaml' if active_m == 'sim' else 'peta_1b.yaml')
+            if fallback_map not in waypoints_config['map_configs']:
+                waypoints_config['map_configs'][fallback_map] = {
+                    'home_position': _copy_home(waypoints_config.get('home_position')),
+                    'predefined_points': _copy_points(waypoints_config.get('predefined_points')),
+                }
+
+        pruned = _prune_orphan_map_configs()
+        active_mode = override_mode if override_mode in ('sim', 'real') else waypoints_config.get('operation_mode', 'real')
+        apply_mode_profile(active_mode, save=bool(override_mode) or migrated or pruned)
 
 
 # =====================================================================
@@ -1501,12 +1834,25 @@ def _run_relocalize_sequence(mode='local'):
                 ros_node.request_global_localization()
             time.sleep(1.2)
         else:
-            # Mode local: Pertahankan partikel di sekitar perkiraan posisi saat ini, langsung kalibrasi
+            # Mode local: Pertahankan posisi perkiraan AMCL dengan sebaran sudut 360° (pi^2)
+            # agar robot yang hadap awalnya meleset (hingga 180°) tetap bisa mengunci arah benar
             with RELOCALIZE_LOCK:
                 RELOCALIZE_STATE['phase'] = 'starting'
                 RELOCALIZE_STATE['progress'] = 15
-                RELOCALIZE_STATE['message'] = 'Menyelaraskan orientasi robot dengan dinding sekitar (tanpa sebar ulang global)...'
-            time.sleep(0.5)
+                RELOCALIZE_STATE['message'] = 'Menyebarkan sebaran sudut 360° di sekitar posisi AMCL...'
+            if ros_node is not None:
+                with ros_node.lock:
+                    cur_pose = dict(ros_node.robot_pose)
+                    has_amcl = (ros_node.last_amcl_time > 0.0)
+                if has_amcl:
+                    ros_node.send_initial_pose(
+                        cur_pose.get('x', 0.0),
+                        cur_pose.get('y', 0.0),
+                        cur_pose.get('yaw', 0.0),
+                        cov_xy=0.49,
+                        cov_yaw=math.pi ** 2
+                    )
+            time.sleep(0.8)
 
         with RELOCALIZE_LOCK:
             if RELOCALIZE_STATE['cancel_requested']:
@@ -1515,17 +1861,17 @@ def _run_relocalize_sequence(mode='local'):
             RELOCALIZE_STATE['progress'] = 20
             RELOCALIZE_STATE['message'] = 'Robot berputar 360° membaca dinding dengan LiDAR...'
 
-        # Phase 2: Putar robot ~360° perlahan
-        # Kecepatan sudut 0.35 rad/s. Putaran 360° (6.28 rad) butuh ~18 detik
+        # Phase 2: Putar robot ~360° perlahan, berhenti lebih cepat bila partikel AMCL sudah konvergen
         spin_speed = 0.35
-        spin_duration = 18.0  # detik
+        spin_duration = 18.0  # detik batas maksimal
         start_t = time.time()
+        converged_early = False
 
         while (time.time() - start_t) < spin_duration:
+            elapsed = time.time() - start_t
             with RELOCALIZE_LOCK:
                 if RELOCALIZE_STATE['cancel_requested']:
                     raise InterruptedError('Dibatalkan oleh pengguna')
-                elapsed = time.time() - start_t
                 pct = int(20 + (elapsed / spin_duration) * 65)  # 20% s.d. 85%
                 RELOCALIZE_STATE['progress'] = min(pct, 85)
                 deg_done = int((elapsed / spin_duration) * 360)
@@ -1533,6 +1879,16 @@ def _run_relocalize_sequence(mode='local'):
 
             if ros_node is not None:
                 ros_node.send_cmd_vel(0.0, spin_speed)
+                if elapsed >= 2.5:
+                    with ros_node.lock:
+                        cov_info = dict(ros_node.amcl_cov)
+                    if (
+                        cov_info.get('stamp', 0.0) > (start_t + 0.5)
+                        and cov_info.get('sigma_xy', 99.0) <= 0.18
+                        and cov_info.get('sigma_yaw', 99.0) <= 0.14
+                    ):
+                        converged_early = True
+                        break
             time.sleep(0.1)
 
         # Phase 3: Hentikan robot
@@ -1547,20 +1903,27 @@ def _run_relocalize_sequence(mode='local'):
             RELOCALIZE_STATE['progress'] = 90
             RELOCALIZE_STATE['message'] = 'Mengunci koordinat posisi akhir AMCL...'
 
-        time.sleep(2.0)
+        time.sleep(1.0 if converged_early else 2.0)
 
         # Selesai
         cur_pose = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+        sigma_yaw_deg = None
         if ros_node is not None:
             with ros_node.lock:
                 cur_pose = dict(ros_node.robot_pose)
+                if ros_node.amcl_cov.get('stamp', 0.0) > 0.0:
+                    sigma_yaw_deg = math.degrees(ros_node.amcl_cov.get('sigma_yaw', 0.0))
 
         yaw_deg = int(math.degrees(cur_pose.get('yaw', 0.0)))
+        cov_note = f' [konvergen awal, sigma={sigma_yaw_deg:.1f}°]' if (converged_early and sigma_yaw_deg is not None) else ''
         with RELOCALIZE_LOCK:
             RELOCALIZE_STATE['active'] = False
             RELOCALIZE_STATE['phase'] = 'completed'
             RELOCALIZE_STATE['progress'] = 100
-            RELOCALIZE_STATE['message'] = f'Relokalisasi AMCL berhasil! Robot terkunci di X: {cur_pose.get("x", 0.0):.2f}m, Y: {cur_pose.get("y", 0.0):.2f}m ({yaw_deg}°)'
+            RELOCALIZE_STATE['message'] = (
+                f'Relokalisasi AMCL berhasil{cov_note}! Robot terkunci di '
+                f'X: {cur_pose.get("x", 0.0):.2f}m, Y: {cur_pose.get("y", 0.0):.2f}m ({yaw_deg}°)'
+            )
 
     except InterruptedError:
         if ros_node is not None:
@@ -1922,12 +2285,19 @@ def api_mapping_save():
         yaml_filename = f"{clean_name}.yaml"
         _append_mapping_log(f'[SAVED] Peta berhasil disimpan: {yaml_filename} ({width}x{height} px)')
 
-        if set_active:
-            if 'profiles' in waypoints_config and 'real' in waypoints_config['profiles']:
-                waypoints_config['profiles']['real']['map_file'] = yaml_filename
-            save_waypoints_config()
-            if not is_slam_active():
-                find_map_files(yaml_filename)
+        with CONFIG_LOCK:
+            mc = _ensure_map_config(yaml_filename)
+            active_mode = waypoints_config.get('operation_mode', 'real')
+            if set_active:
+                if not is_slam_active():
+                    apply_mode_profile(active_mode, custom_map_file=yaml_filename, save=True)
+                else:
+                    if 'profiles' in waypoints_config and active_mode in waypoints_config['profiles']:
+                        waypoints_config['profiles'][active_mode]['map_file'] = yaml_filename
+                    _sync_active_map_to_profile(active_mode)
+                    save_waypoints_config()
+            else:
+                save_waypoints_config()
 
         return jsonify({
             'success': True,
@@ -1938,6 +2308,8 @@ def api_mapping_save():
             'origin': [origin_x, origin_y, 0.0],
             'saved_paths': saved_paths,
             'available_maps': list_available_maps(),
+            'points': _copy_points(mc.get('predefined_points', [])),
+            'home': _copy_home(mc.get('home_position')),
             'message': f'Peta "{yaml_filename}" ({width}×{height} px) berhasil disimpan!'
         })
     except Exception as e:
@@ -2089,39 +2461,53 @@ def api_map_metadata():
 def api_mode():
     """Get atau ganti mode operasi ('sim' vs 'real') dan file peta aktif."""
     if request.method == 'GET':
-        mode = waypoints_config.get('operation_mode', 'real')
-        has_live = False
-        if ros_node is not None:
-            with ros_node.lock:
-                has_live = ros_node.live_map_png is not None
-        return jsonify({
-            'mode': mode,
-            'map_file': ACTIVE_MAP_FILE,
-            'available_maps': list_available_maps(),
-            'has_live_map': has_live,
-            'home': waypoints_config.get('home_position', {'x': 0.0, 'y': 0.0, 'yaw': 0.0}),
-            'points': waypoints_config.get('predefined_points', []),
-            'settings': waypoints_config.get('settings', {})
-        })
+        with CONFIG_LOCK:
+            if _prune_orphan_map_configs():
+                apply_mode_profile(waypoints_config.get('operation_mode', 'real'), save=True)
+            mode = waypoints_config.get('operation_mode', 'real')
+            has_live = False
+            if ros_node is not None:
+                with ros_node.lock:
+                    has_live = ros_node.live_map_png is not None
+            return jsonify({
+                'mode': mode,
+                'map_file': ACTIVE_MAP_FILE,
+                'available_maps': list_available_maps(),
+                'has_live_map': has_live,
+                'home': _copy_home(waypoints_config.get('home_position')),
+                'points': _copy_points(waypoints_config.get('predefined_points', [])),
+                'settings': copy.deepcopy(waypoints_config.get('settings', {}))
+            })
 
     data = request.get_json() or {}
     new_mode = data.get('mode', waypoints_config.get('operation_mode', 'real'))
     new_map = data.get('map_file')
     apply_mode_profile(new_mode, custom_map_file=new_map, save=True)
-    return jsonify({
-        'success': True,
-        'mode': waypoints_config.get('operation_mode', 'real'),
-        'map_file': ACTIVE_MAP_FILE,
-        'home': waypoints_config.get('home_position', {'x': 0.0, 'y': 0.0, 'yaw': 0.0}),
-        'points': waypoints_config.get('predefined_points', []),
-        'settings': waypoints_config.get('settings', {}),
-        'message': f'Mode berhasil diubah ke {"SIMULASI (Gazebo)" if new_mode == "sim" else "REAL ROBOT"} ({ACTIVE_MAP_FILE})'
-    })
+    with CONFIG_LOCK:
+        return jsonify({
+            'success': True,
+            'mode': waypoints_config.get('operation_mode', 'real'),
+            'map_file': ACTIVE_MAP_FILE,
+            'available_maps': list_available_maps(),
+            'home': _copy_home(waypoints_config.get('home_position')),
+            'points': _copy_points(waypoints_config.get('predefined_points', [])),
+            'settings': copy.deepcopy(waypoints_config.get('settings', {})),
+            'message': f'Mode berhasil diubah ke {"SIMULASI (Gazebo)" if new_mode == "sim" else "REAL ROBOT"} ({ACTIVE_MAP_FILE})'
+        })
+
+
+@app.route('/api/maps/delete', methods=['POST'])
+def api_delete_map():
+    """Hapus file peta (.yaml & .pgm) beserta seluruh waypoint & home khusus peta tersebut."""
+    data = request.get_json() or {}
+    res = delete_map_by_name(data.get('map_file'))
+    status = int(res.pop('status', 200 if res.get('success') else 400))
+    return jsonify(res), status
 
 
 @app.route('/api/initialpose', methods=['POST'])
 def api_initialpose():
-    """Set posisi awal robot (/initialpose untuk AMCL) dan opsional simpan sebagai Home."""
+    """Set posisi awal robot (/initialpose untuk AMCL) dan opsional simpan sebagai Home peta aktif."""
     if ros_node is None:
         return jsonify({'error': 'ROS2 belum terhubung'}), 503
     data = request.get_json() or {}
@@ -2135,17 +2521,18 @@ def api_initialpose():
 
     if set_as_home:
         home_obj = {'x': round(x, 3), 'y': round(y, 3), 'yaw': round(yaw, 3)}
-        waypoints_config['home_position'] = home_obj
-        active_mode = waypoints_config.get('operation_mode', 'real')
-        if 'profiles' in waypoints_config and active_mode in waypoints_config['profiles']:
-            waypoints_config['profiles'][active_mode]['home_position'] = dict(home_obj)
-        save_waypoints_config()
+        with CONFIG_LOCK:
+            mc = _ensure_map_config(_get_active_map_key())
+            mc['home_position'] = dict(home_obj)
+            _sync_active_map_to_profile()
+            save_waypoints_config()
         ros_node.send_control('reload_config')
 
     return jsonify({
         'success': True,
         'pose': {'x': x, 'y': y, 'yaw': yaw},
         'set_as_home': set_as_home,
+        'map_file': ACTIVE_MAP_FILE,
         'message': f'Initial Pose ({x:.2f}, {y:.2f}) dikirim ke AMCL'
     })
 
@@ -2314,61 +2701,92 @@ def api_history_clear():
 
 @app.route('/api/saved_points')
 def api_saved_points():
-    """Daftar titik predefined + custom untuk mode aktif."""
-    points = waypoints_config.get('predefined_points', [])
-    home = waypoints_config.get('home_position', {'x': 0, 'y': 0, 'yaw': 0})
-    return jsonify({
-        'points': points,
-        'home': home,
-        'mode': waypoints_config.get('operation_mode', 'real'),
-        'map_file': ACTIVE_MAP_FILE
-    })
+    """Daftar titik predefined + custom untuk peta aktif (atau map_file tertentu)."""
+    with CONFIG_LOCK:
+        if _prune_orphan_map_configs():
+            apply_mode_profile(waypoints_config.get('operation_mode', 'real'), save=True)
+        req_map = _normalize_map_key(request.args.get('map_file'))
+        active_key = _get_active_map_key()
+        target_key = req_map or active_key
+        mc = waypoints_config.get('map_configs', {}).get(target_key)
+        if isinstance(mc, dict):
+            points = _copy_points(mc.get('predefined_points', []))
+            home = _copy_home(mc.get('home_position'))
+        elif target_key == active_key:
+            points = _copy_points(waypoints_config.get('predefined_points', []))
+            home = _copy_home(waypoints_config.get('home_position'))
+        else:
+            points = []
+            home = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+        return jsonify({
+            'points': points,
+            'home': home,
+            'mode': waypoints_config.get('operation_mode', 'real'),
+            'map_file': target_key,
+            'active_map_file': ACTIVE_MAP_FILE,
+        })
 
 
 @app.route('/api/saved_points', methods=['POST'])
 def api_save_point():
-    """Simpan titik baru ke config mode aktif."""
-    data = request.get_json()
+    """Simpan titik baru ke konfigurasi peta aktif (per-peta)."""
+    data = request.get_json() or {}
     point = {
-        'name': data.get('name', 'Unnamed'),
+        'name': str(data.get('name', 'Unnamed')).strip() or 'Unnamed',
         'x': round(float(data.get('x', 0)), 3),
         'y': round(float(data.get('y', 0)), 3),
         'type': data.get('type', 'pickup'),
         'description': data.get('description', '')
     }
-    
-    if 'predefined_points' not in waypoints_config:
-        waypoints_config['predefined_points'] = []
-    # Update jika nama sama sudah ada, atau tambahkan baru
-    existing_idx = next((i for i, p in enumerate(waypoints_config['predefined_points']) if p.get('name') == point['name']), None)
-    if existing_idx is not None:
-        waypoints_config['predefined_points'][existing_idx] = point
-    else:
-        waypoints_config['predefined_points'].append(point)
-    
-    active_mode = waypoints_config.get('operation_mode', 'real')
-    if 'profiles' in waypoints_config and active_mode in waypoints_config['profiles']:
-        waypoints_config['profiles'][active_mode]['predefined_points'] = list(waypoints_config['predefined_points'])
-    
-    save_waypoints_config()
-    return jsonify({'success': True, 'point': point})
+    if 'yaw' in data and data.get('yaw') is not None:
+        point['yaw'] = round(float(data.get('yaw', 0.0)), 3)
+
+    with CONFIG_LOCK:
+        active_key = _get_active_map_key()
+        target_key = _normalize_map_key(data.get('map_file')) or active_key
+        mc = _ensure_map_config(target_key)
+        pts = mc['predefined_points']
+        existing_idx = next((i for i, p in enumerate(pts) if p.get('name') == point['name']), None)
+        if existing_idx is not None:
+            pts[existing_idx] = point
+        else:
+            pts.append(point)
+        if target_key == active_key:
+            _sync_active_map_to_profile()
+        save_waypoints_config()
+        res_points = _copy_points(pts)
+
+    return jsonify({
+        'success': True,
+        'point': point,
+        'map_file': target_key,
+        'points': res_points,
+        'available_maps': list_available_maps(),
+    })
 
 
 @app.route('/api/saved_points/delete', methods=['POST'])
 def api_delete_point():
-    """Hapus titik dari config mode aktif."""
-    data = request.get_json()
+    """Hapus titik dari konfigurasi peta aktif (per-peta)."""
+    data = request.get_json() or {}
     name = data.get('name', '')
-    
-    points = waypoints_config.get('predefined_points', [])
-    waypoints_config['predefined_points'] = [p for p in points if p['name'] != name]
-    
-    active_mode = waypoints_config.get('operation_mode', 'real')
-    if 'profiles' in waypoints_config and active_mode in waypoints_config['profiles']:
-        waypoints_config['profiles'][active_mode]['predefined_points'] = list(waypoints_config['predefined_points'])
-    
-    save_waypoints_config()
-    return jsonify({'success': True})
+
+    with CONFIG_LOCK:
+        active_key = _get_active_map_key()
+        target_key = _normalize_map_key(data.get('map_file')) or active_key
+        mc = _ensure_map_config(target_key)
+        mc['predefined_points'] = [p for p in mc['predefined_points'] if p.get('name') != name]
+        if target_key == active_key:
+            _sync_active_map_to_profile()
+        save_waypoints_config()
+        res_points = _copy_points(mc['predefined_points'])
+
+    return jsonify({
+        'success': True,
+        'map_file': target_key,
+        'points': res_points,
+        'available_maps': list_available_maps(),
+    })
 
 
 @app.route('/api/settings')

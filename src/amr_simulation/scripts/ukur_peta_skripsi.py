@@ -68,8 +68,8 @@ def bresenham_cells(x0, y0, x1, y1):
     return cells
 
 
-def resolve_thesis_output_dir(subfolder: str) -> str:
-    """Simpan hasil ke <workspace_root>/hasil_data_pengujian_skripsi/<subfolder>."""
+def _resolve_workspace_root() -> str:
+    """Temukan root workspace ROS 2 secara dinamis (aman dijalankan dari direktori mana saja)."""
     for base in (os.path.dirname(os.path.abspath(__file__)), os.getcwd()):
         cur = os.path.abspath(base)
         while True:
@@ -78,15 +78,59 @@ def resolve_thesis_output_dir(subfolder: str) -> str:
                 and os.path.isdir(os.path.join(cur, 'src', 'amr_simulation'))
                 and os.path.isdir(os.path.join(cur, 'src', 'amr_dashboard'))
             ):
-                return os.path.join(cur, 'hasil_data_pengujian_skripsi', subfolder)
+                return cur
             parent = os.path.dirname(cur)
             if parent == cur:
                 break
             cur = parent
     for ws in (os.path.expanduser('~/deliver_amr'), os.path.expanduser('~/Documents/amr_ws')):
         if os.path.isdir(ws):
-            return os.path.join(ws, 'hasil_data_pengujian_skripsi', subfolder)
-    return os.path.join(os.getcwd(), 'hasil_data_pengujian_skripsi', subfolder)
+            return ws
+    return os.getcwd()
+
+
+def resolve_thesis_output_dir(subfolder: str) -> str:
+    """Simpan hasil ke <workspace_root>/hasil_data_pengujian_skripsi/<subfolder>."""
+    return os.path.join(_resolve_workspace_root(), 'hasil_data_pengujian_skripsi', subfolder)
+
+
+def discover_available_maps() -> list:
+    """Scan semua file peta .yaml valid di folder maps workspace, CWD, dan folder pengujian_1_pemetaan."""
+    ws_root = _resolve_workspace_root()
+    search_dirs = [
+        os.path.join(ws_root, 'src', 'amr_simulation', 'maps'),
+        os.path.join(os.getcwd(), 'src', 'amr_simulation', 'maps'),
+        os.path.join(ws_root, 'hasil_data_pengujian_skripsi', 'pengujian_1_pemetaan'),
+        os.getcwd(),
+    ]
+    seen_real = set()
+    found = []
+
+    for d in search_dirs:
+        if not os.path.isdir(d):
+            continue
+        for ypath in glob.glob(os.path.join(d, '*.yaml')):
+            rpath = os.path.realpath(ypath)
+            if rpath in seen_real:
+                continue
+            try:
+                with open(ypath, 'r', encoding='utf-8') as f:
+                    meta = yaml.safe_load(f) or {}
+                if not (isinstance(meta, dict) and 'image' in meta and 'resolution' in meta):
+                    continue
+                img_path = meta['image']
+                if not os.path.isabs(img_path):
+                    img_path = os.path.join(os.path.dirname(ypath), img_path)
+                if not os.path.exists(img_path):
+                    continue
+                seen_real.add(rpath)
+                found.append(ypath)
+            except Exception:
+                continue
+
+    # Urutkan dari yang paling baru dimodifikasi (peta terbaru di urutan atas)
+    found.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return found
 
 
 class MapGeometricEvaluator:
@@ -719,19 +763,13 @@ def main():
             print("[*] Selesai.")
             return
 
-        # Menu 1: Cari peta otomatis
-        default_candidates = [
-            os.path.join(os.getcwd(), 'src', 'amr_simulation', 'maps', 'peta_l1_dc.yaml'),
-            os.path.join(os.getcwd(), 'src', 'amr_simulation', 'maps', 'peta_l1_ddc.yaml'),
-            os.path.join(os.getcwd(), 'src', 'amr_simulation', 'maps', 'peta_1b.yaml'),
-            os.path.join(os.getcwd(), 'src', 'amr_simulation', 'maps', 'peta_dc.yaml'),
-            os.path.join(os.getcwd(), 'src', 'amr_simulation', 'maps', 'peta_kampus.yaml'),
-        ]
-        available_maps = [c for c in default_candidates if os.path.exists(c)]
+        # Menu 1: Scan otomatis semua peta .yaml valid di workspace
+        available_maps = discover_available_maps()
 
-        print("\nPilih File Peta yang akan Dievaluasi:")
+        print("\nPilih File Peta yang akan Dievaluasi (Diurutkan dari Terbaru):")
         for idx, m in enumerate(available_maps, 1):
-            print(f"  [{idx}] {os.path.basename(m)} ({m})")
+            mtime_str = datetime.fromtimestamp(os.path.getmtime(m)).strftime('%Y-%m-%d %H:%M')
+            print(f"  [{idx}] {os.path.basename(m):<24} ({mtime_str}) -> {m}")
         print(f"  [{len(available_maps)+1}] Masukkan Path File Lain Secara Manual")
 
         pilih_peta = input(f">> Pilih Peta [1-{len(available_maps)+1}] (Default: 1): ").strip()
@@ -740,7 +778,7 @@ def main():
             if 1 <= p_idx <= len(available_maps):
                 yaml_target = available_maps[p_idx - 1]
             else:
-                yaml_target = input(">> Masukkan path lengkap file peta .yaml: ").strip()
+                yaml_target = os.path.expanduser(input(">> Masukkan path lengkap file peta .yaml: ").strip())
         except ValueError:
             yaml_target = available_maps[0] if available_maps else ""
 
