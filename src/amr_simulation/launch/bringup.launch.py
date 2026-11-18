@@ -44,7 +44,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'image_topic': '/camera_sensor/image_raw',
-            'model_path': '/home/faid/Documents/amr_ws/yolov8n-pose.pt',
+            'model_path': '/home/faid/Documents/amr_ws/src/amr_simulation/scripts/yolo11n-pose.pt',
             'show_window': False,
             'conf': 0.4
         }],
