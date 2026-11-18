@@ -2436,7 +2436,7 @@ function renderMapping() {
                         </div>
 
                         <!-- Live Map Telemetry Readout -->
-                        <div class="monitor-grid" style="grid-template-columns: repeat(4, 1fr); margin-top:10px; gap:8px;">
+                        <div class="monitor-grid mapping-meta-grid" style="margin-top:10px; gap:8px;">
                             <div class="monitor-card" style="padding:8px 10px;">
                                 <div class="mon-label">Ukuran Peta</div>
                                 <div class="mon-value mono" style="font-size:0.84rem;" id="mapping-meta-size">Menunggu /map...</div>
@@ -3639,8 +3639,8 @@ function renderSettings() {
                                 <div class="setting-label">Kalimat Saat Terhalang Manusia</div>
                                 <div class="setting-desc">Pesan TTS yang diucapkan saat SAFE_STOP melampaui batas waktu</div>
                             </div>
-                            <input class="setting-input" id="set-obstacle-phrase" type="text"
-                                   value="Permisi, robot mau lewat. Mohon beri jalan." style="min-width:250px; flex:1;" onchange="saveVoiceConfigFromUI()">
+                            <input class="setting-input setting-input-wide" id="set-obstacle-phrase" type="text"
+                                   value="Permisi, robot mau lewat. Mohon beri jalan." onchange="saveVoiceConfigFromUI()">
                         </div>
 
                         <div class="setting-row">
@@ -3682,8 +3682,8 @@ function renderSettings() {
                                 <div class="setting-label">Mode Audio Tambahan di Browser Dashboard</div>
                                 <div class="setting-desc">Apakah speaker browser laptop juga ikut berbunyi saat robot tiba</div>
                             </div>
-                            <select class="input-field" id="set-sound-mode" onchange="setSoundMode(this.value)"
-                                     style="width: auto; min-width: 190px; cursor: pointer;">
+                            <select class="input-field setting-select-wide" id="set-sound-mode" onchange="setSoundMode(this.value)"
+                                     style="cursor: pointer;">
                                 <option value="human" ${currentSoundMode === 'human' ? 'selected' : ''}>Voice TTS Browser</option>
                                 <option value="chime" ${currentSoundMode === 'chime' ? 'selected' : ''}>Synth Chime Browser</option>
                                 <option value="both" ${currentSoundMode === 'both' ? 'selected' : ''}>Hybrid (Chime + Voice TTS)</option>
