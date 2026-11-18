@@ -1253,6 +1253,7 @@ function handleDeliveryStatusUpdate(d) {
             if (sec) {
                 sec.classList.add('hidden');
                 sec.innerHTML = '';
+                delete sec.dataset.renderKey;
             }
         }
     }
@@ -1295,8 +1296,10 @@ function showArrivalModal(d) {
     const cmd = isPickup ? 'confirm_pickup' : 'confirm_delivery';
     const btnLabel = isPickup ? 'Konfirmasi Barang Dimuat' : (isDirect ? 'Selesai / Konfirmasi Sampai' : 'Konfirmasi Barang Diambil');
     const btnClass = isPickup ? 'btn-confirm-pickup' : 'btn-confirm-delivery';
+    const modalActionKey = `${cmd}|${btnLabel}`;
 
-    if (actionsEl) {
+    if (actionsEl && (actionsEl.dataset.renderKey !== modalActionKey || !actionsEl.firstElementChild)) {
+        actionsEl.dataset.renderKey = modalActionKey;
         actionsEl.innerHTML = `
             <button class="btn btn-confirm ${btnClass}" onclick="confirmActionFromModal('${cmd}')">
                 ${getIcon('check', 18)} ${btnLabel}
@@ -1399,14 +1402,24 @@ function updateInPageConfirmCard(d) {
     const taskIdx = d.current_task_index || 0;
     const taskInfo = d.tasks && d.tasks[taskIdx] ? d.tasks[taskIdx] : null;
     const isDirect = taskInfo ? (!taskInfo.pickup || taskInfo.type === 'direct') : false;
+    const pointName = isPickup
+        ? (taskInfo && taskInfo.pickup ? taskInfo.pickup.name : 'Pickup')
+        : (taskInfo && taskInfo.delivery ? taskInfo.delivery.name : 'Tujuan');
+    const renderKey = `${d.current_phase}|${taskIdx}|${isDirect ? 1 : 0}|${pointName}`;
+
+    // Skip re-render if already showing this exact confirmation card so fade-in animation & clicks stay intact
+    if (confirmSection.dataset.renderKey === renderKey && !confirmSection.classList.contains('hidden') && confirmSection.firstElementChild) {
+        return;
+    }
+
+    confirmSection.dataset.renderKey = renderKey;
+    confirmSection.classList.remove('hidden');
 
     if (isPickup) {
-        const pickupName = taskInfo && taskInfo.pickup ? taskInfo.pickup.name : 'Pickup';
-        confirmSection.classList.remove('hidden');
         confirmSection.innerHTML = `
             <div class="confirm-card confirm-pickup">
                 <div class="confirm-icon">${getIcon('box', 32)}</div>
-                <div class="confirm-title">AMR-01 Tiba di ${pickupName}</div>
+                <div class="confirm-title">AMR-01 Tiba di ${pointName}</div>
                 <div class="confirm-desc">Silakan muat barang ke unit robot, kemudian tekan tombol konfirmasi di bawah untuk melanjutkan rute.</div>
                 <button class="btn btn-confirm btn-confirm-pickup" onclick="confirmAction('confirm_pickup')">
                     ${getIcon('check', 18)} Konfirmasi Barang Dimuat
@@ -1414,12 +1427,10 @@ function updateInPageConfirmCard(d) {
             </div>
         `;
     } else {
-        const deliveryName = taskInfo && taskInfo.delivery ? taskInfo.delivery.name : 'Tujuan';
-        confirmSection.classList.remove('hidden');
         confirmSection.innerHTML = `
             <div class="confirm-card confirm-delivery">
                 <div class="confirm-icon">${getIcon('checkCircle', 32)}</div>
-                <div class="confirm-title">AMR-01 Tiba di ${deliveryName}</div>
+                <div class="confirm-title">AMR-01 Tiba di ${pointName}</div>
                 <div class="confirm-desc">${isDirect ? 'Unit AMR-01 telah tiba di titik tujuan pengiriman. Tekan tombol konfirmasi di bawah untuk menyelesaikan misi.' : 'Silakan ambil barang dari unit robot, kemudian tekan tombol konfirmasi untuk menyelesaikan task.'}</div>
                 <button class="btn btn-confirm btn-confirm-delivery" onclick="confirmAction('confirm_delivery')">
                     ${getIcon('check', 18)} ${isDirect ? 'Selesai / Konfirmasi Sampai' : 'Konfirmasi Barang Diambil'}
@@ -1639,6 +1650,7 @@ async function confirmAction(command) {
         if (sec) {
             sec.classList.add('hidden');
             sec.innerHTML = '';
+            delete sec.dataset.renderKey;
         }
         const data = await apiGet('/api/status');
         if (data && data.delivery) {
