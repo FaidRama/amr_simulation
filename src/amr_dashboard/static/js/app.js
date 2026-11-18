@@ -3499,17 +3499,23 @@ function renderSettings() {
                     </div>
                 </div>
 
-                <div style="border-top:1px solid var(--border-subtle, rgba(255,255,255,0.08)); margin-top:12px; padding-top:12px;">
-                    <div class="flex-between" style="gap:8px; margin-bottom:8px; flex-wrap:wrap;">
-                        <div>
-                            <div class="setting-label">Manajemen File Peta Tersimpan (Re-mapping / Hapus Peta)</div>
-                            <div class="setting-desc">Menghapus file peta <code>.yaml</code>/<code>.pgm</code> otomatis menghapus seluruh titik pengantaran &amp; posisi Home yang tersimpan di peta tersebut.</div>
-                        </div>
-                        <button type="button" class="btn btn-outline btn-sm" onclick="refreshMapsConfigFromUI()">
-                            ${getIcon('refresh', 12)} Segarkan Daftar
+                <div class="setting-row" style="flex-wrap:wrap; gap:10px;">
+                    <div>
+                        <div class="setting-label">Manajemen &amp; Hapus File Peta (Re-mapping)</div>
+                        <div class="setting-desc">Pilih file peta <code>.yaml</code> untuk dihapus permanen beserta seluruh titik pengantaran &amp; Home di dalamnya.</div>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <select class="input-field" id="settings-manage-map-select" onchange="updateDeleteMapButtonState()" style="width:auto; min-width:220px;">
+                        </select>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="refreshMapsConfigFromUI()" title="Segarkan daftar file peta">
+                            ${getIcon('refresh', 13)} Segarkan
+                        </button>
+                        <button type="button" class="btn btn-outline btn-sm" id="btn-delete-selected-map"
+                                style="border-color:rgba(239,68,68,0.45); color:#ef4444;"
+                                onclick="deleteSelectedSavedMap()">
+                            ${getIcon('trash', 13)} Hapus Peta
                         </button>
                     </div>
-                    <div id="settings-saved-maps-list" style="display:flex; flex-direction:column; gap:6px;"></div>
                 </div>
             </div>
         </div>
@@ -3967,8 +3973,8 @@ function openInitialPoseModal(initX = null, initY = null, initYawDeg = null) {
         </div>
 
         <label style="display:flex; align-items:center; gap:8px; font-size:0.75rem; color:var(--text-primary); cursor:pointer; margin-top:4px;">
-            <input type="checkbox" id="initpose-set-home" checked>
-            Simpan juga titik ini sebagai posisi <strong>Home / Docking</strong> untuk mode ${APP.mode.toUpperCase()}
+            <input type="checkbox" id="initpose-set-home">
+            Simpan juga titik ini sebagai posisi <strong>Home / Docking</strong> pada peta <code>${escapeHtmlAttr(APP.mapFile || 'live')}</code>
         </label>
         <div style="margin-top:12px; padding:9px 12px; background:rgba(255,255,255,0.03); border:1px solid var(--border-subtle); border-radius:6px; font-size:0.72rem; color:var(--text-secondary); display:flex; justify-content:space-between; align-items:center; gap:8px;">
             <span>Mau kalibrasi otomatis dengan sensor LiDAR?</span>
@@ -3990,8 +3996,9 @@ function openInitialPoseModal(initX = null, initY = null, initYawDeg = null) {
     btnZero.className = 'btn btn-secondary';
     btnZero.textContent = 'Reset ke (0, 0)';
     btnZero.onclick = async () => {
+        const setHome = !!document.getElementById('initpose-set-home')?.checked;
         hideModal();
-        await sendInitialPoseToRobot(0.0, 0.0, 0.0, true);
+        await sendInitialPoseToRobot(0.0, 0.0, 0.0, setHome);
     };
 
     const btnSend = document.createElement('button');
@@ -4001,7 +4008,7 @@ function openInitialPoseModal(initX = null, initY = null, initYawDeg = null) {
         const x = parseFloat(document.getElementById('initpose-x').value) || 0.0;
         const y = parseFloat(document.getElementById('initpose-y').value) || 0.0;
         const yawDeg = parseFloat(document.getElementById('initpose-yaw-num')?.value || document.getElementById('initpose-yaw-slider')?.value) || 0.0;
-        const setHome = document.getElementById('initpose-set-home').checked;
+        const setHome = !!document.getElementById('initpose-set-home')?.checked;
         hideModal();
         await sendInitialPoseToRobot(x, y, (yawDeg * Math.PI) / 180.0, setHome);
     };
@@ -4033,16 +4040,48 @@ window.onInitPoseYawChange = function(val) {
 
 let _relocalizePollTimer = null;
 
+async function pauseMissionBeforeRelocalize() {
+    await controlMission('pause');
+    if (APP.delivery) APP.delivery.status = 'paused';
+    setTimeout(() => {
+        openAutoRelocalizeModal();
+    }, 350);
+}
+window.pauseMissionBeforeRelocalize = pauseMissionBeforeRelocalize;
+
 function openAutoRelocalizeModal() {
     const isNavOnline = !!APP.navActive;
     const isArdOnline = !!APP.arduinoActive;
-    const canStart = isNavOnline && isArdOnline;
+    const missionStatus = (APP.delivery && APP.delivery.status) ? APP.delivery.status : 'idle';
+    const isMissionRunning = (missionStatus === 'running');
+    const isMissionPaused = (missionStatus === 'paused');
+    const canStart = isNavOnline && isArdOnline && !isMissionRunning;
 
-    document.getElementById('modal-title').innerHTML = `${getIcon('rotateCcw', 16)} Relokalisasi Posisi Robot (AMCL 360°)`;
+    let missionBannerHtml = '';
+    if (isMissionRunning) {
+        missionBannerHtml = `
+            <div style="padding:10px 12px; background:rgba(245, 158, 11, 0.12); border:1px solid rgba(245, 158, 11, 0.4); border-radius:8px; font-size:0.74rem; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+                <span><strong>⏸️ Misi sedang berjalan:</strong> Jeda (Pause) misi dulu sebelum relokalisasi.</span>
+                <button type="button" class="btn btn-warning btn-sm" style="padding:4px 10px; font-size:0.72rem;" onclick="pauseMissionBeforeRelocalize()">
+                    ${getIcon('pause', 13)} Pause Misi Sekarang
+                </button>
+            </div>
+        `;
+    } else if (isMissionPaused) {
+        missionBannerHtml = `
+            <div style="padding:9px 12px; background:rgba(16, 185, 129, 0.10); border:1px solid rgba(16, 185, 129, 0.35); border-radius:8px; font-size:0.74rem; color:var(--success); margin-bottom:12px; line-height:1.45;">
+                <strong>⏸️ Misi sedang dijeda (PAUSED):</strong> Relokalisasi aman dijalankan. Setelah AMCL terkunci, klik <strong>Resume</strong> untuk melanjutkan tujuan pengantaran.
+            </div>
+        `;
+    }
+
+    document.getElementById('modal-title').innerHTML = `${getIcon('rotateCcw', 16)} Relokalisasi Posisi Robot (AMCL)`;
     document.getElementById('modal-body').innerHTML = `
         <p style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:12px; line-height:1.5;">
-            Gunakan fitur ini untuk menyelaraskan kembali posisi dan orientasi AMCL robot dengan dinding menggunakan pantulan sensor LiDAR dengan memutar robot 360°.
+            Menyelaraskan kembali posisi dan orientasi AMCL dengan dinding via LiDAR. Proses otomatis berhenti seketika begitu posisi AMCL terkunci.
         </p>
+
+        ${missionBannerHtml}
 
         <!-- PILIHAN METODE RELOKALISASI -->
         <div style="background:var(--bg-tertiary, rgba(255,255,255,0.02)); border:1px solid var(--border-subtle); border-radius:8px; padding:10px 12px; margin-bottom:12px;">
@@ -4053,9 +4092,9 @@ function openAutoRelocalizeModal() {
                 <label style="display:flex; align-items:flex-start; gap:8px; padding:8px 10px; background:rgba(16, 185, 129, 0.08); border:1px solid rgba(16, 185, 129, 0.3); border-radius:6px; cursor:pointer;">
                     <input type="radio" name="relocalize-mode" value="local" checked style="margin-top:2px;">
                     <div style="font-size:0.74rem;">
-                        <strong style="color:var(--success);">Kalibrasi Halus Posisi Saat Ini (Putar 360°) [Direkomendasikan]</strong>
+                        <strong style="color:var(--success);">Kalibrasi Cepat Posisi Saat Ini [Direkomendasikan]</strong>
                         <div style="color:var(--text-secondary); font-size:0.7rem; margin-top:2px; line-height:1.4;">
-                            Robot memutar 360° untuk mengunci dinding terhadap posisi perkiraan saat ini. <strong>Paling aman untuk koridor & lorong simetris agar hadap robot tidak tertukar 180°</strong>.
+                            Mencocokkan scan diam terlebih dahulu lalu memutar seperlunya hingga dinding &amp; orientasi terkunci (langsung berhenti saat konvergen).
                         </div>
                     </div>
                 </label>
@@ -4064,7 +4103,7 @@ function openAutoRelocalizeModal() {
                     <div style="font-size:0.74rem;">
                         <strong>Pencarian Global (Sebar Partikel ke Seluruh Peta)</strong>
                         <div style="color:var(--text-secondary); font-size:0.7rem; margin-top:2px; line-height:1.4;">
-                            AMCL menyebarkan partikel ke seluruh area peta. Gunakan hanya jika robot benar-benar diletakkan di lokasi yang tidak diketahui sama sekali.
+                            AMCL menyebarkan partikel ke seluruh area peta. Gunakan jika posisi robot berpindah sangat jauh dan tidak diketahui.
                         </div>
                     </div>
                 </label>
@@ -4116,15 +4155,12 @@ function openAutoRelocalizeModal() {
     btnCancel.className = 'btn btn-outline';
     btnCancel.id = 'relocalize-btn-cancel';
     btnCancel.textContent = 'Batal';
-    btnCancel.onclick = () => {
-        cancelAutoRelocalize();
-        hideModal();
-    };
+    btnCancel.onclick = hideModal;
 
     const btnStart = document.createElement('button');
     btnStart.className = `btn ${canStart ? 'btn-primary' : 'btn-secondary'}`;
     btnStart.id = 'relocalize-btn-start';
-    btnStart.innerHTML = `${getIcon('play', 14)} Mulai Putar & Kalibrasi (360°)`;
+    btnStart.innerHTML = `${getIcon('play', 14)} Mulai Kalibrasi`;
     btnStart.disabled = !canStart;
     btnStart.onclick = startAutoRelocalize;
 
@@ -4233,9 +4269,28 @@ async function pollRelocalizeProgress() {
                 statLbl.innerHTML = `<strong>${getIcon('checkCircle', 14)} Selesai!</strong> ${st.message}`;
                 statLbl.style.color = 'var(--success)';
             }
-            if (btnCancel) {
+            const canResume = !!(st.was_paused || st.delivery_status === 'paused' || (APP.delivery && APP.delivery.status === 'paused'));
+            const actionsEl = document.getElementById('modal-actions');
+            if (canResume && actionsEl) {
+                actionsEl.innerHTML = '';
+                const btnClose = document.createElement('button');
+                btnClose.className = 'btn btn-outline';
+                btnClose.textContent = 'Tutup';
+                btnClose.onclick = hideModal;
+
+                const btnResume = document.createElement('button');
+                btnResume.className = 'btn btn-success';
+                btnResume.innerHTML = `${getIcon('play', 14)} Selesai &amp; Lanjut Misi (Resume)`;
+                btnResume.onclick = async () => {
+                    hideModal();
+                    await controlMission('resume');
+                };
+
+                actionsEl.appendChild(btnClose);
+                actionsEl.appendChild(btnResume);
+            } else if (btnCancel) {
                 btnCancel.className = 'btn btn-success';
-                btnCancel.innerHTML = `${getIcon('check', 14)} Selesai & Tutup`;
+                btnCancel.innerHTML = `${getIcon('check', 14)} Selesai &amp; Tutup`;
                 btnCancel.onclick = hideModal;
             }
             showToast(st.message || 'Relokalisasi selesai!', 'success');
@@ -4333,50 +4388,70 @@ async function refreshMapsConfigFromUI() {
     showToast(`Daftar peta diperbarui (${(APP.availableMaps || []).filter(m => m.id !== 'live').length} peta tersimpan)`, 'info');
 }
 
-function renderSavedMapsManager() {
-    const container = document.getElementById('settings-saved-maps-list');
-    if (!container) return;
+function updateDeleteMapButtonState() {
+    const sel = document.getElementById('settings-manage-map-select');
+    const btn = document.getElementById('btn-delete-selected-map');
+    if (!sel || !btn) return;
+    const mapId = sel.value || '';
+    if (!mapId) {
+        btn.disabled = true;
+        btn.style.opacity = '0.45';
+        btn.title = 'Tidak ada file peta yang dapat dihapus';
+        return;
+    }
+    btn.disabled = false;
+    const navBlocking = !!(APP.navActive && mapId === APP.mapFile);
+    btn.style.opacity = navBlocking ? '0.55' : '1';
+    btn.title = navBlocking
+        ? 'Hentikan Navigasi terlebih dahulu sebelum menghapus peta aktif'
+        : `Hapus file peta ${mapId} dan seluruh titiknya`;
+}
 
+function renderSavedMapsManager() {
+    const sel = document.getElementById('settings-manage-map-select');
+    if (!sel) return;
+
+    const prevVal = sel.value;
     const diskMaps = (APP.availableMaps || []).filter(m => {
         const id = (typeof m === 'object' && m.id) ? m.id : m;
         return id && id !== 'live';
     });
 
     if (diskMaps.length === 0) {
-        container.innerHTML = '<div class="history-empty">Belum ada file peta <code>.yaml</code> tersimpan. Jalankan <strong>SLAM Mapping</strong> untuk membuat peta baru.</div>';
+        sel.innerHTML = '<option value="">Belum ada file peta (.yaml)</option>';
+        sel.disabled = true;
+        updateDeleteMapButtonState();
         return;
     }
 
-    container.innerHTML = diskMaps.map(m => {
+    sel.disabled = false;
+    const diskIds = new Set(diskMaps.map(m => (typeof m === 'object' && m.id) ? m.id : m));
+    const preferred = diskIds.has(prevVal)
+        ? prevVal
+        : (diskIds.has(APP.mapFile) ? APP.mapFile : ((typeof diskMaps[0] === 'object' && diskMaps[0].id) ? diskMaps[0].id : diskMaps[0]));
+
+    sel.innerHTML = diskMaps.map(m => {
         const mapId = (typeof m === 'object' && m.id) ? m.id : m;
         const mapLabel = (typeof m === 'object' && m.name) ? m.name : mapId;
         const ptsCount = (typeof m === 'object' && typeof m.points_count === 'number') ? m.points_count : 0;
         const isActive = (mapId === APP.mapFile);
-        const encodedId = encodeURIComponent(mapId);
-        const navBlocking = !!(APP.navActive && isActive);
-
-        return `
-            <div class="setting-row" style="padding:8px 10px; border:1px solid ${isActive ? 'var(--accent)' : 'var(--border-subtle, rgba(255,255,255,0.08))'}; border-radius:6px; background:${isActive ? 'rgba(56,189,248,0.06)' : 'rgba(255,255,255,0.015)'}; gap:10px; flex-wrap:wrap;">
-                <div style="min-width:0; flex:1;">
-                    <div class="setting-label" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-                        <span>${escapeHtmlAttr(mapLabel)}</span>
-                        ${isActive ? '<span class="badge badge-online" style="font-size:0.6rem; padding:2px 6px;">AKTIF</span>' : ''}
-                    </div>
-                    <div class="setting-desc mono" style="font-size:0.7rem;">
-                        File: ${escapeHtmlAttr(mapId)} // ${ptsCount} titik tersimpan
-                    </div>
-                </div>
-                <div style="display:flex; gap:6px; align-items:center;">
-                    ${isActive ? '' : `<button type="button" class="btn btn-outline btn-sm" style="padding:4px 9px; font-size:0.7rem;" onclick="onChangeActiveMap(decodeURIComponent('${encodedId}'))">Gunakan</button>`}
-                    <button type="button" class="btn btn-outline btn-sm" style="padding:4px 9px; font-size:0.7rem; border-color:rgba(239,68,68,0.45); color:#ef4444; ${navBlocking ? 'opacity:0.5;' : ''}"
-                            title="${navBlocking ? 'Hentikan Navigasi terlebih dahulu sebelum menghapus peta aktif' : 'Hapus peta & seluruh titik di peta ini'}"
-                            onclick="confirmDeleteSavedMap(decodeURIComponent('${encodedId}'), ${ptsCount})">
-                        ${getIcon('trash', 13)} Hapus Peta
-                    </button>
-                </div>
-            </div>
-        `;
+        const activeTag = isActive ? ' (AKTIF)' : '';
+        return `<option value="${escapeHtmlAttr(mapId)}" ${mapId === preferred ? 'selected' : ''}>${escapeHtmlAttr(mapLabel)} [${ptsCount} titik]${activeTag}</option>`;
     }).join('');
+
+    updateDeleteMapButtonState();
+}
+
+function deleteSelectedSavedMap() {
+    const sel = document.getElementById('settings-manage-map-select');
+    if (!sel || !sel.value) {
+        showToast('Tidak ada file peta yang dipilih untuk dihapus.', 'warning');
+        return;
+    }
+    const mapId = sel.value;
+    const found = (APP.availableMaps || []).find(m => ((typeof m === 'object' && m.id) ? m.id : m) === mapId);
+    const ptsCount = (found && typeof found.points_count === 'number') ? found.points_count : 0;
+    confirmDeleteSavedMap(mapId, ptsCount);
 }
 
 function confirmDeleteSavedMap(mapId, ptsCount = 0) {
@@ -4446,6 +4521,8 @@ window.startAutoRelocalize = startAutoRelocalize;
 window.cancelAutoRelocalize = cancelAutoRelocalize;
 window.openSavePointFromMapModal = openSavePointFromMapModal;
 window.renderSavedMapsManager = renderSavedMapsManager;
+window.updateDeleteMapButtonState = updateDeleteMapButtonState;
+window.deleteSelectedSavedMap = deleteSelectedSavedMap;
 window.refreshMapsConfigFromUI = refreshMapsConfigFromUI;
 window.confirmDeleteSavedMap = confirmDeleteSavedMap;
 
