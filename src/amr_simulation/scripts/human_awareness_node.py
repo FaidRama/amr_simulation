@@ -28,12 +28,16 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-import rclpy
-from rclpy.node import Node
-from rclpy.executors import SingleThreadedExecutor
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from std_msgs.msg import String
-from sensor_msgs.msg import CompressedImage, Image
+try:
+    import rclpy
+    from rclpy.node import Node
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+    from std_msgs.msg import String
+    from sensor_msgs.msg import CompressedImage, Image
+    HAS_ROS2 = True
+except ImportError:
+    HAS_ROS2 = False
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -575,37 +579,46 @@ def main():
         parser.error("--corridor-width harus berada pada rentang 0.1 sampai 1.0")
 
     # --------------------------------------------------------
-    # ROS INITIALIZATION
+    # ROS INITIALIZATION (OPTIONAL ON STANDALONE LAPTOP)
     # --------------------------------------------------------
 
-    rclpy.init()
-    ros_node = Node("human_awareness_node")
+    use_ros_camera = args.source.lower() in ("ros", "topic")
+    if use_ros_camera and not HAS_ROS2:
+        raise RuntimeError(
+            "ROS 2 (rclpy) tidak tersedia di environment ini. "
+            "Gunakan '--source 0' untuk menguji langsung dengan kamera laptop!"
+        )
 
-    state_pub = ros_node.create_publisher(
-        String, "/human_state", 10
-    )
-    status_pub = ros_node.create_publisher(
-        String, "/human_status", 10
-    )
-
-    info_pub = ros_node.create_publisher(
-        String, args.info_topic, 10
-    )
-
+    ros_node = None
+    state_pub = None
+    status_pub = None
+    info_pub = None
     annotated_pub = None
     annotated_raw_pub = None
-    if args.publish_annotated:
-        annotated_pub = ros_node.create_publisher(
-            CompressedImage, args.annotated_topic, 1
+
+    if HAS_ROS2:
+        rclpy.init()
+        ros_node = Node("human_awareness_node")
+
+        state_pub = ros_node.create_publisher(
+            String, "/human_state", 10
         )
-        annotated_raw_pub = ros_node.create_publisher(
-            Image, "/camera/image_annotated", 1
+        status_pub = ros_node.create_publisher(
+            String, "/human_status", 10
         )
 
-    use_ros_camera = args.source.lower() in ("ros", "topic")
-    # Callback kamera hanya MENYIMPAN frame JPEG terbaru (murah).
-    # Decode + YOLO dilakukan di loop utama hanya untuk frame terbaru,
-    # jadi frame lama otomatis dilewati dan tidak menumpuk (anti-lag).
+        info_pub = ros_node.create_publisher(
+            String, args.info_topic, 10
+        )
+
+        if args.publish_annotated:
+            annotated_pub = ros_node.create_publisher(
+                CompressedImage, args.annotated_topic, 1
+            )
+            annotated_raw_pub = ros_node.create_publisher(
+                Image, "/camera/image_annotated", 1
+            )
+
     latest = {"data": None, "seq": 0}
     frame_lock = threading.Lock()
     executor = None
@@ -613,14 +626,13 @@ def main():
     camera_sub = None
     cap = None
 
-    # Latest-frame QoS: hindari antrean gambar lama
-    camera_qos = QoSProfile(
-        history=HistoryPolicy.KEEP_LAST,
-        depth=1,
-        reliability=ReliabilityPolicy.BEST_EFFORT
-    )
-
     if use_ros_camera:
+        # Latest-frame QoS: hindari antrean gambar lama
+        camera_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT
+        )
         def camera_callback(msg):
             if not msg.format.lower().startswith("jpeg"):
                 ros_node.get_logger().warning(
@@ -671,8 +683,10 @@ def main():
             cap = cv2.VideoCapture(source)
 
         if not cap.isOpened():
-            ros_node.destroy_node()
-            rclpy.shutdown()
+            if ros_node is not None:
+                ros_node.destroy_node()
+            if HAS_ROS2 and rclpy.ok():
+                rclpy.shutdown()
             raise RuntimeError(
                 f"Gagal membuka sumber gambar: {source}"
             )
@@ -746,8 +760,10 @@ def main():
     except Exception:
         if cap is not None:
             cap.release()
-        ros_node.destroy_node()
-        rclpy.shutdown()
+        if ros_node is not None:
+            ros_node.destroy_node()
+        if HAS_ROS2 and rclpy.ok():
+            rclpy.shutdown()
         raise
 
     # --------------------------------------------------------
@@ -763,12 +779,15 @@ def main():
     t_start = time.time()
     last_no_frame_log = 0.0
 
-    ros_node.get_logger().info(
-        "Human-Aware berjalan. Output: /human_state"
-    )
+    if ros_node is not None:
+        ros_node.get_logger().info(
+            "Human-Aware berjalan. Output: /human_state"
+        )
+    else:
+        print("[INFO] Human-Aware Standalone (Kamera Lokal) berjalan. Tekan 'q' untuk berhenti.")
 
     try:
-        while rclpy.ok():
+        while (rclpy.ok() if HAS_ROS2 else True):
             t_frame = time.perf_counter()
 
             if use_ros_camera:
@@ -807,9 +826,12 @@ def main():
                 ret, frame = cap.read()
 
                 if not ret:
-                    ros_node.get_logger().warning(
-                        "Sumber gambar berhenti atau frame gagal dibaca."
-                    )
+                    if ros_node is not None:
+                        ros_node.get_logger().warning(
+                            "Sumber gambar berhenti atau frame gagal dibaca."
+                        )
+                    else:
+                        print("[INFO] Sumber gambar selesai / frame berhenti.")
                     break
 
             frame_count += 1
@@ -1023,19 +1045,21 @@ def main():
                 )
 
             # 6. PUBLISH STATE ONCE PER FRAME
-            state_msg = String()
-            state_msg.data = state.value
-            state_pub.publish(state_msg)
+            if state_pub is not None:
+                state_msg = String()
+                state_msg.data = state.value
+                state_pub.publish(state_msg)
 
             # Publish juga ke /human_status untuk dashboard AMR
-            status_msg = String()
-            if target is not None:
-                status_msg.data = state.value
-            elif persons:
-                status_msg.data = "HUMAN_OUTSIDE_CORRIDOR"
-            else:
-                status_msg.data = "NO_HUMAN"
-            status_pub.publish(status_msg)
+            if status_pub is not None:
+                status_msg = String()
+                if target is not None:
+                    status_msg.data = state.value
+                elif persons:
+                    status_msg.data = "HUMAN_OUTSIDE_CORRIDOR"
+                else:
+                    status_msg.data = "NO_HUMAN"
+                status_pub.publish(status_msg)
 
             # 7. FPS
             inst_fps = 1.0 / max(
@@ -1115,9 +1139,10 @@ def main():
                     "at_edge": bool(target["at_edge"]),
                 })
 
-            info_msg = String()
-            info_msg.data = json.dumps(info)
-            info_pub.publish(info_msg)
+            if info_pub is not None:
+                info_msg = String()
+                info_msg.data = json.dumps(info)
+                info_pub.publish(info_msg)
 
             # 8. CSV LOGGING
             writer.writerow([
@@ -1361,9 +1386,10 @@ def main():
         if spin_thread is not None:
             spin_thread.join(timeout=1.0)
 
-        ros_node.destroy_node()
+        if ros_node is not None:
+            ros_node.destroy_node()
 
-        if rclpy.ok():
+        if HAS_ROS2 and rclpy.ok():
             rclpy.shutdown()
 
         elapsed = time.time() - t_start
