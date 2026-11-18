@@ -515,11 +515,13 @@ class DashboardNode(Node):
         self.initialpose_pub_vol = self.create_publisher(
             PoseWithCovarianceStamped, '/initialpose', 10)
         
-        # Service client untuk AMCL global localization (sebar partikel)
+        # Service client untuk AMCL global localization & nomotion scan update
         if HAS_STD_SRVS:
             self.relocalize_client = self.create_client(Empty, '/reinitialize_global_localization')
+            self.nomotion_client = self.create_client(Empty, '/request_nomotion_update')
         else:
             self.relocalize_client = None
+            self.nomotion_client = None
         
         # === CAMERA SUBSCRIBER ===
         if HAS_CAMERA:
@@ -970,6 +972,19 @@ class DashboardNode(Node):
             return True
         except Exception as e:
             self.get_logger().error(f'Error call /reinitialize_global_localization: {e}')
+            return False
+
+    def request_nomotion_update(self):
+        """Panggil service /request_nomotion_update secara non-blocking agar AMCL segera mengunci scan saat diam."""
+        cli = getattr(self, 'nomotion_client', None)
+        if cli is None:
+            return False
+        try:
+            if not cli.service_is_ready():
+                return False
+            cli.call_async(Empty.Request())
+            return True
+        except Exception:
             return False
 
 
@@ -1819,10 +1834,25 @@ RELOCALIZE_LOCK = threading.Lock()
 RELOCALIZE_THREAD = None
 
 
+def _is_relocalize_converged(since_t):
+    if ros_node is None:
+        return False
+    with ros_node.lock:
+        cov_info = dict(ros_node.amcl_cov)
+    return (
+        cov_info.get('stamp', 0.0) > since_t
+        and cov_info.get('sigma_xy', 99.0) <= 0.18
+        and cov_info.get('sigma_yaw', 99.0) <= 0.14
+    )
+
+
 def _run_relocalize_sequence(mode='local'):
-    """Sequence relokalisasi: (opsional) sebar partikel AMCL -> putar robot 360° -> konvergensi partikel."""
+    """Sequence relokalisasi cepat: sebar partikel -> nomotion lock -> putar seperlunya -> langsung kunci."""
     global RELOCALIZE_STATE
     try:
+        converged_early = False
+        converged_nomotion = False
+
         if mode == 'global':
             # Phase 1: Reset partikel AMCL global
             with RELOCALIZE_LOCK:
@@ -1832,14 +1862,14 @@ def _run_relocalize_sequence(mode='local'):
 
             if ros_node is not None:
                 ros_node.request_global_localization()
-            time.sleep(1.2)
+            time.sleep(0.8)
         else:
-            # Mode local: Pertahankan posisi perkiraan AMCL dengan sebaran sudut 360° (pi^2)
-            # agar robot yang hadap awalnya meleset (hingga 180°) tetap bisa mengunci arah benar
+            # Mode local: Pertahankan perkiraan posisi AMCL dengan sebaran sudut 360° (pi^2)
+            # lalu cek penguncian diam (/request_nomotion_update) sebelum memutar robot
             with RELOCALIZE_LOCK:
                 RELOCALIZE_STATE['phase'] = 'starting'
                 RELOCALIZE_STATE['progress'] = 15
-                RELOCALIZE_STATE['message'] = 'Menyebarkan sebaran sudut 360° di sekitar posisi AMCL...'
+                RELOCALIZE_STATE['message'] = 'Mencocokkan scan LiDAR sekitar posisi AMCL (360°)...'
             if ros_node is not None:
                 with ros_node.lock:
                     cur_pose = dict(ros_node.robot_pose)
@@ -1849,61 +1879,72 @@ def _run_relocalize_sequence(mode='local'):
                         cur_pose.get('x', 0.0),
                         cur_pose.get('y', 0.0),
                         cur_pose.get('yaw', 0.0),
-                        cov_xy=0.49,
+                        cov_xy=0.64,
                         cov_yaw=math.pi ** 2
                     )
-            time.sleep(0.8)
+            time.sleep(0.4)
 
-        with RELOCALIZE_LOCK:
-            if RELOCALIZE_STATE['cancel_requested']:
-                raise InterruptedError('Dibatalkan oleh pengguna')
-            RELOCALIZE_STATE['phase'] = 'spinning'
-            RELOCALIZE_STATE['progress'] = 20
-            RELOCALIZE_STATE['message'] = 'Robot berputar 360° membaca dinding dengan LiDAR...'
+            if ros_node is not None and hasattr(ros_node, 'request_nomotion_update'):
+                prep_t = time.time()
+                for _ in range(2):
+                    with RELOCALIZE_LOCK:
+                        if RELOCALIZE_STATE['cancel_requested']:
+                            raise InterruptedError('Dibatalkan oleh pengguna')
+                    ros_node.request_nomotion_update()
+                    time.sleep(0.25)
+                    if _is_relocalize_converged(prep_t + 0.05):
+                        converged_nomotion = True
+                        converged_early = True
+                        break
 
-        # Phase 2: Putar robot ~360° perlahan, berhenti lebih cepat bila partikel AMCL sudah konvergen
-        spin_speed = 0.35
-        spin_duration = 18.0  # detik batas maksimal
-        start_t = time.time()
-        converged_early = False
-
-        while (time.time() - start_t) < spin_duration:
-            elapsed = time.time() - start_t
+        if not converged_nomotion:
             with RELOCALIZE_LOCK:
                 if RELOCALIZE_STATE['cancel_requested']:
                     raise InterruptedError('Dibatalkan oleh pengguna')
-                pct = int(20 + (elapsed / spin_duration) * 65)  # 20% s.d. 85%
-                RELOCALIZE_STATE['progress'] = min(pct, 85)
-                deg_done = int((elapsed / spin_duration) * 360)
-                RELOCALIZE_STATE['message'] = f'Robot berputar mencocokkan LiDAR ({deg_done}° / 360°)...'
+                RELOCALIZE_STATE['phase'] = 'spinning'
+                RELOCALIZE_STATE['progress'] = 25
+                RELOCALIZE_STATE['message'] = 'Robot memutar pelan sampai AMCL mengunci posisi...'
 
-            if ros_node is not None:
-                ros_node.send_cmd_vel(0.0, spin_speed)
-                if elapsed >= 2.5:
-                    with ros_node.lock:
-                        cov_info = dict(ros_node.amcl_cov)
-                    if (
-                        cov_info.get('stamp', 0.0) > (start_t + 0.5)
-                        and cov_info.get('sigma_xy', 99.0) <= 0.18
-                        and cov_info.get('sigma_yaw', 99.0) <= 0.14
-                    ):
+            # Phase 2: Putar pelan, langsung berhenti seketika begitu AMCL konvergen
+            spin_speed = 0.40
+            spin_duration = 16.0  # detik batas maksimal (~1 putaran penuh)
+            start_t = time.time()
+            last_nomotion_t = start_t
+
+            while (time.time() - start_t) < spin_duration:
+                now_t = time.time()
+                elapsed = now_t - start_t
+                with RELOCALIZE_LOCK:
+                    if RELOCALIZE_STATE['cancel_requested']:
+                        raise InterruptedError('Dibatalkan oleh pengguna')
+                    pct = int(25 + (elapsed / spin_duration) * 60)  # 25% s.d. 85%
+                    RELOCALIZE_STATE['progress'] = min(pct, 85)
+                    deg_done = int((elapsed / spin_duration) * 360)
+                    RELOCALIZE_STATE['message'] = f'Mencocokkan dinding LiDAR ({deg_done}° / 360°)...'
+
+                if ros_node is not None:
+                    ros_node.send_cmd_vel(0.0, spin_speed)
+                    if (now_t - last_nomotion_t) >= 0.65 and hasattr(ros_node, 'request_nomotion_update'):
+                        ros_node.request_nomotion_update()
+                        last_nomotion_t = now_t
+                    if elapsed >= 0.8 and _is_relocalize_converged(start_t + 0.25):
                         converged_early = True
                         break
-            time.sleep(0.1)
+                time.sleep(0.1)
 
-        # Phase 3: Hentikan robot
-        if ros_node is not None:
-            for _ in range(5):
-                ros_node.send_cmd_vel(0.0, 0.0)
-                time.sleep(0.05)
+            # Phase 3: Hentikan robot
+            if ros_node is not None:
+                for _ in range(4):
+                    ros_node.send_cmd_vel(0.0, 0.0)
+                    time.sleep(0.04)
 
-        # Phase 4: Konvergensi AMCL
+        # Phase 4: Konvergensi singkat
         with RELOCALIZE_LOCK:
             RELOCALIZE_STATE['phase'] = 'converging'
-            RELOCALIZE_STATE['progress'] = 90
+            RELOCALIZE_STATE['progress'] = 92
             RELOCALIZE_STATE['message'] = 'Mengunci koordinat posisi akhir AMCL...'
 
-        time.sleep(1.0 if converged_early else 2.0)
+        time.sleep(0.15 if converged_nomotion else (0.35 if converged_early else 1.2))
 
         # Selesai
         cur_pose = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
@@ -1915,7 +1956,12 @@ def _run_relocalize_sequence(mode='local'):
                     sigma_yaw_deg = math.degrees(ros_node.amcl_cov.get('sigma_yaw', 0.0))
 
         yaw_deg = int(math.degrees(cur_pose.get('yaw', 0.0)))
-        cov_note = f' [konvergen awal, sigma={sigma_yaw_deg:.1f}°]' if (converged_early and sigma_yaw_deg is not None) else ''
+        if converged_nomotion and sigma_yaw_deg is not None:
+            cov_note = f' [kunci instan pindaian diam, sigma={sigma_yaw_deg:.1f}°]'
+        elif converged_early and sigma_yaw_deg is not None:
+            cov_note = f' [konvergen awal, sigma={sigma_yaw_deg:.1f}°]'
+        else:
+            cov_note = ''
         with RELOCALIZE_LOCK:
             RELOCALIZE_STATE['active'] = False
             RELOCALIZE_STATE['phase'] = 'completed'
@@ -2505,6 +2551,17 @@ def api_delete_map():
     return jsonify(res), status
 
 
+def _nudge_amcl_nomotion():
+    """Picu 2x /request_nomotion_update non-blocking agar AMCL segera mengunci pose setelah /initialpose."""
+    if ros_node is None or not hasattr(ros_node, 'request_nomotion_update'):
+        return
+    for delay in (0.2, 0.35):
+        time.sleep(delay)
+        if ros_node is None:
+            return
+        ros_node.request_nomotion_update()
+
+
 @app.route('/api/initialpose', methods=['POST'])
 def api_initialpose():
     """Set posisi awal robot (/initialpose untuk AMCL) dan opsional simpan sebagai Home peta aktif."""
@@ -2517,6 +2574,7 @@ def api_initialpose():
     set_as_home = bool(data.get('set_as_home', False))
 
     ros_node.send_initial_pose(x, y, yaw)
+    threading.Thread(target=_nudge_amcl_nomotion, daemon=True).start()
     _append_navigation_log(f'[AMCL] Initial Pose dikirim: X={x:.2f}m, Y={y:.2f}m, Yaw={math.degrees(yaw):.1f}°{" (disimpan sebagai Home)" if set_as_home else ""}')
 
     if set_as_home:
@@ -2542,12 +2600,15 @@ def api_relocalize_status():
     """Status proses relokalisasi AMCL saat ini."""
     with RELOCALIZE_LOCK:
         st = dict(RELOCALIZE_STATE)
+    if ros_node is not None:
+        with ros_node.lock:
+            st['delivery_status'] = ros_node.delivery_status.get('status', 'idle')
     return jsonify(st)
 
 
 @app.route('/api/relocalize/start', methods=['POST'])
 def api_relocalize_start():
-    """Mulai proses relokalisasi otomatis (sebar partikel AMCL + putar robot 360°)."""
+    """Mulai proses relokalisasi otomatis cepat (saat idle maupun saat misi sedang Pause)."""
     global RELOCALIZE_THREAD
     if not is_navigation_active():
         return jsonify({
@@ -2561,12 +2622,14 @@ def api_relocalize_start():
             'error': 'Arduino Bridge belum aktif! Nyalakan Arduino Bridge agar motor dapat berputar.'
         }), 400
 
+    d_status = 'idle'
     if ros_node is not None:
         with ros_node.lock:
-            if ros_node.delivery_status.get('status') == 'running':
+            d_status = ros_node.delivery_status.get('status', 'idle')
+            if d_status == 'running':
                 return jsonify({
                     'success': False,
-                    'error': 'Tidak dapat melakukan relokalisasi saat misi pengantaran sedang berjalan!'
+                    'error': 'Jeda (Pause) atau batalkan misi pengantaran terlebih dahulu sebelum melakukan relokalisasi!'
                 }), 400
 
     data = request.get_json(silent=True) or {}
@@ -2584,15 +2647,17 @@ def api_relocalize_start():
         RELOCALIZE_STATE['cancel_requested'] = False
         RELOCALIZE_STATE['phase'] = 'starting'
         RELOCALIZE_STATE['progress'] = 5
+        RELOCALIZE_STATE['was_paused'] = (d_status == 'paused')
         RELOCALIZE_STATE['message'] = f'Memulai proses relokalisasi AMCL (mode: {reloc_mode})...'
 
     RELOCALIZE_THREAD = threading.Thread(target=_run_relocalize_sequence, args=(reloc_mode,), daemon=True)
     RELOCALIZE_THREAD.start()
 
-    mode_label = 'Kalibrasi Halus Posisi Saat Ini' if reloc_mode == 'local' else 'Pencarian Global'
+    mode_label = 'Kalibrasi Cepat Posisi Saat Ini' if reloc_mode == 'local' else 'Pencarian Global'
     return jsonify({
         'success': True,
-        'message': f'Relokalisasi AMCL ({mode_label}) dimulai! Robot akan berputar 360° perlahan.'
+        'was_paused': (d_status == 'paused'),
+        'message': f'Relokalisasi AMCL ({mode_label}) dimulai! Otomatis berhenti begitu AMCL mengunci posisi.'
     })
 
 

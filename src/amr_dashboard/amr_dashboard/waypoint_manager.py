@@ -300,10 +300,16 @@ class WaypointManager(Node):
                 except Exception:
                     pass
             self.emergency_stop()
+            if self.mission and self.mission.get('status') not in ('completed', 'cancelled', 'failed', 'partial_success'):
+                self.mission['status'] = 'paused'
+                self.publish_status()
             
         elif command == 'resume':
             self.log('info', '▶️ PERINTAH RESUME DITERIMA: Melanjutkan misi...')
             self.is_paused = False
+            if self.mission and self.mission.get('status') == 'paused':
+                self.mission['status'] = 'running'
+                self.publish_status()
             
         elif command == 'skip':
             self.log('warn', '⏭️ PERINTAH SKIP TASK DITERIMA: Melewati task aktif...')
@@ -802,6 +808,9 @@ class WaypointManager(Node):
                     time.sleep(0.2)
                 if self.stop_navigation or self.is_cancelled:
                     return False
+                if self.mission and self.mission.get('status') == 'paused':
+                    self.mission['status'] = 'running'
+                    self.publish_status()
                 self._sync_human_mission_phase()
                 if mode_now == 'BYPASS_HUMAN':
                     self.log('info', '🚶 [HUMAN AWARE] Manusia masih di jalur >= 15s (BYPASS_HUMAN): Mengirim ulang goal Nav2 untuk melewati lewat costmap...')
