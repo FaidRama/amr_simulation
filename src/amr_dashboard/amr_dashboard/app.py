@@ -363,6 +363,7 @@ class DashboardNode(Node):
         self.last_path_time = 0.0
         self.last_odom_pose = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
         self.odom_to_map_offset = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+        self.amcl_cov = {'sigma_xy': 99.0, 'sigma_yaw': math.pi, 'stamp': 0.0}
         
         # === TF2 LISTENER (Real-time map -> base_link seperti RViz) ===
         if HAS_TF2:
@@ -544,6 +545,14 @@ class DashboardNode(Node):
         siny = 2.0 * (q.w * q.z + q.x * q.y)
         cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         yaw = math.atan2(siny, cosy)
+        cov = msg.pose.covariance
+        sigma_xy = None
+        sigma_yaw = None
+        if len(cov) >= 36:
+            sigma_x = math.sqrt(max(0.0, float(cov[0])))
+            sigma_y = math.sqrt(max(0.0, float(cov[7])))
+            sigma_xy = max(sigma_x, sigma_y)
+            sigma_yaw = math.sqrt(max(0.0, float(cov[35])))
         
         with self.lock:
             self.last_amcl_time = time.time()
@@ -554,6 +563,12 @@ class DashboardNode(Node):
                 'y': round(p.position.y, 3),
                 'yaw': round(yaw, 3)
             }
+            if sigma_xy is not None and sigma_yaw is not None:
+                self.amcl_cov = {
+                    'sigma_xy': sigma_xy,
+                    'sigma_yaw': sigma_yaw,
+                    'stamp': self.last_amcl_time
+                }
             ox = self.last_odom_pose['x']
             oy = self.last_odom_pose['y']
             oyaw = self.last_odom_pose['yaw']
@@ -845,7 +860,7 @@ class DashboardNode(Node):
         with self.lock:
             self.cmd_vel_current = {'linear': linear, 'angular': angular}
 
-    def send_initial_pose(self, x, y, yaw=0.0):
+    def send_initial_pose(self, x, y, yaw=0.0, cov_xy=0.25, cov_yaw=0.0685):
         """Publish 2D Pose Estimate ke /initialpose untuk lokalisasi AMCL."""
         msg = PoseWithCovarianceStamped()
         msg.header.frame_id = 'map'
@@ -857,9 +872,9 @@ class DashboardNode(Node):
         msg.pose.pose.orientation.w = math.cos(float(yaw) / 2.0)
         # Covariance standar AMCL (x, y, yaw)
         cov = [0.0] * 36
-        cov[0] = 0.25
-        cov[7] = 0.25
-        cov[35] = 0.0685
+        cov[0] = float(cov_xy)
+        cov[7] = float(cov_xy)
+        cov[35] = float(cov_yaw)
         msg.pose.covariance = cov
         self.initialpose_pub.publish(msg)
         if hasattr(self, 'initialpose_pub_vol'):
@@ -1501,12 +1516,25 @@ def _run_relocalize_sequence(mode='local'):
                 ros_node.request_global_localization()
             time.sleep(1.2)
         else:
-            # Mode local: Pertahankan partikel di sekitar perkiraan posisi saat ini, langsung kalibrasi
+            # Mode local: Pertahankan posisi perkiraan AMCL dengan sebaran sudut 360° (pi^2)
+            # agar robot yang hadap awalnya meleset (hingga 180°) tetap bisa mengunci arah benar
             with RELOCALIZE_LOCK:
                 RELOCALIZE_STATE['phase'] = 'starting'
                 RELOCALIZE_STATE['progress'] = 15
-                RELOCALIZE_STATE['message'] = 'Menyelaraskan orientasi robot dengan dinding sekitar (tanpa sebar ulang global)...'
-            time.sleep(0.5)
+                RELOCALIZE_STATE['message'] = 'Menyebarkan sebaran sudut 360° di sekitar posisi AMCL...'
+            if ros_node is not None:
+                with ros_node.lock:
+                    cur_pose = dict(ros_node.robot_pose)
+                    has_amcl = (ros_node.last_amcl_time > 0.0)
+                if has_amcl:
+                    ros_node.send_initial_pose(
+                        cur_pose.get('x', 0.0),
+                        cur_pose.get('y', 0.0),
+                        cur_pose.get('yaw', 0.0),
+                        cov_xy=0.49,
+                        cov_yaw=math.pi ** 2
+                    )
+            time.sleep(0.8)
 
         with RELOCALIZE_LOCK:
             if RELOCALIZE_STATE['cancel_requested']:
@@ -1515,17 +1543,17 @@ def _run_relocalize_sequence(mode='local'):
             RELOCALIZE_STATE['progress'] = 20
             RELOCALIZE_STATE['message'] = 'Robot berputar 360° membaca dinding dengan LiDAR...'
 
-        # Phase 2: Putar robot ~360° perlahan
-        # Kecepatan sudut 0.35 rad/s. Putaran 360° (6.28 rad) butuh ~18 detik
+        # Phase 2: Putar robot ~360° perlahan, berhenti lebih cepat bila partikel AMCL sudah konvergen
         spin_speed = 0.35
-        spin_duration = 18.0  # detik
+        spin_duration = 18.0  # detik batas maksimal
         start_t = time.time()
+        converged_early = False
 
         while (time.time() - start_t) < spin_duration:
+            elapsed = time.time() - start_t
             with RELOCALIZE_LOCK:
                 if RELOCALIZE_STATE['cancel_requested']:
                     raise InterruptedError('Dibatalkan oleh pengguna')
-                elapsed = time.time() - start_t
                 pct = int(20 + (elapsed / spin_duration) * 65)  # 20% s.d. 85%
                 RELOCALIZE_STATE['progress'] = min(pct, 85)
                 deg_done = int((elapsed / spin_duration) * 360)
@@ -1533,6 +1561,16 @@ def _run_relocalize_sequence(mode='local'):
 
             if ros_node is not None:
                 ros_node.send_cmd_vel(0.0, spin_speed)
+                if elapsed >= 2.5:
+                    with ros_node.lock:
+                        cov_info = dict(ros_node.amcl_cov)
+                    if (
+                        cov_info.get('stamp', 0.0) > (start_t + 0.5)
+                        and cov_info.get('sigma_xy', 99.0) <= 0.18
+                        and cov_info.get('sigma_yaw', 99.0) <= 0.14
+                    ):
+                        converged_early = True
+                        break
             time.sleep(0.1)
 
         # Phase 3: Hentikan robot
@@ -1547,20 +1585,27 @@ def _run_relocalize_sequence(mode='local'):
             RELOCALIZE_STATE['progress'] = 90
             RELOCALIZE_STATE['message'] = 'Mengunci koordinat posisi akhir AMCL...'
 
-        time.sleep(2.0)
+        time.sleep(1.0 if converged_early else 2.0)
 
         # Selesai
         cur_pose = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+        sigma_yaw_deg = None
         if ros_node is not None:
             with ros_node.lock:
                 cur_pose = dict(ros_node.robot_pose)
+                if ros_node.amcl_cov.get('stamp', 0.0) > 0.0:
+                    sigma_yaw_deg = math.degrees(ros_node.amcl_cov.get('sigma_yaw', 0.0))
 
         yaw_deg = int(math.degrees(cur_pose.get('yaw', 0.0)))
+        cov_note = f' [konvergen awal, sigma={sigma_yaw_deg:.1f}°]' if (converged_early and sigma_yaw_deg is not None) else ''
         with RELOCALIZE_LOCK:
             RELOCALIZE_STATE['active'] = False
             RELOCALIZE_STATE['phase'] = 'completed'
             RELOCALIZE_STATE['progress'] = 100
-            RELOCALIZE_STATE['message'] = f'Relokalisasi AMCL berhasil! Robot terkunci di X: {cur_pose.get("x", 0.0):.2f}m, Y: {cur_pose.get("y", 0.0):.2f}m ({yaw_deg}°)'
+            RELOCALIZE_STATE['message'] = (
+                f'Relokalisasi AMCL berhasil{cov_note}! Robot terkunci di '
+                f'X: {cur_pose.get("x", 0.0):.2f}m, Y: {cur_pose.get("y", 0.0):.2f}m ({yaw_deg}°)'
+            )
 
     except InterruptedError:
         if ros_node is not None:

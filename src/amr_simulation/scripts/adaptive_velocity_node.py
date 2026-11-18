@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 from collections import deque
+import json
+import math
+import os
 import time
+import yaml
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
@@ -10,6 +14,12 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String, Bool
 from tf2_msgs.msg import TFMessage
 from tf2_ros import TransformBroadcaster, Buffer, TransformListener
+
+try:
+    from std_srvs.srv import Empty
+    HAS_STD_SRVS = True
+except ImportError:
+    HAS_STD_SRVS = False
 
 
 class AdaptiveVelocityNode(Node):
@@ -27,6 +37,17 @@ class AdaptiveVelocityNode(Node):
         self.declare_parameter('safe_stop_wait_duration', 15.0)
         self.declare_parameter('bypass_clear_duration', 8.0)
         self.declare_parameter('human_state_timeout', 3.0)
+
+        # Parameter Auto-Alignment Orientasi & Posisi AMCL saat Startup / Pra-Jalan
+        self.declare_parameter('auto_align_on_startup', True)
+        self.declare_parameter('startup_align_spin_enabled', True)
+        self.declare_parameter('align_max_sigma_xy', 0.18)
+        self.declare_parameter('align_max_sigma_yaw', 0.14)
+        self.declare_parameter('align_spin_speed', 0.40)
+        self.declare_parameter('align_spin_timeout', 16.0)
+        self.declare_parameter('align_min_clearance', 0.34)
+        self.declare_parameter('initial_cov_xy', 0.64)
+        self.declare_parameter('initial_cov_yaw', math.pi ** 2)
 
         self.effective_state = "NORMAL"
         self.last_state_change_time = self.get_clock().now()
@@ -54,8 +75,10 @@ class AdaptiveVelocityNode(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.last_amcl_tf_wall = 0.0
+        self.last_amcl_pose_wall = 0.0
         self.amcl_valid_until_sec = 0.0
         self.own_tf_stamps = deque(maxlen=30)
+        self.own_initialpose_stamps = deque(maxlen=20)
         self.initialpose_pause_until = 0.0
         self.last_keepalive_pub_wall = 0.0
         self.last_amcl_alive_check_wall = 0.0
@@ -69,12 +92,33 @@ class AdaptiveVelocityNode(Node):
         self.last_ready_check_time = 0.0
         self.last_scan_wall_time = 0.0
         self.first_scan_wall_time = 0.0
+        self.last_min_scan_range = 99.0
         self.last_initpose_sent_time = 0.0
         self.initpose_sent_count = 0
         self.last_map_odom_x = 0.0
         self.last_map_odom_y = 0.0
         self.last_map_odom_qz = 0.0
         self.last_map_odom_qw = 1.0
+
+        # --- STATE KALIBRASI & PENGUNCIAN ORIENTASI AMCL ---
+        self.amcl_sigma_x = 99.0
+        self.amcl_sigma_y = 99.0
+        self.amcl_sigma_yaw = 99.0
+        self.amcl_pose_x = 0.0
+        self.amcl_pose_y = 0.0
+        self.manual_initialpose_received = False
+        self.skip_auto_spin_once = False
+        self.startup_align_phase = 'WAIT_READY'  # WAIT_READY -> SETTLE_POSE -> NOMOTION_UPDATE -> ALIGN_SPIN -> LOCKED
+        self.align_phase_since_wall = 0.0
+        self.align_spin_elapsed = 0.0
+        self.align_spin_last_tick_wall = 0.0
+        self.align_nomotion_count = 0
+        self.align_nomotion_max = 6
+        self.align_last_nomotion_wall = 0.0
+        self.nomotion_future = None
+        self.align_warned_clearance = False
+        self.last_align_state_pub_wall = 0.0
+        self.last_align_state_payload = None
 
         # --- VERIFIKASI ENCODER ARDUINO (setara cek LiDAR) ---
         # require_encoder=False dipakai saat use_arduino:=False (odom->base_link static)
@@ -102,10 +146,15 @@ class AdaptiveVelocityNode(Node):
         self.create_subscription(PoseWithCovarianceStamped, '/initialpose', self.on_initialpose, tl_qos)
         self.create_subscription(PolygonStamped, '/local_costmap/published_footprint', self.on_local_footprint, 5)
         self.create_subscription(PolygonStamped, '/global_costmap/published_footprint', self.on_global_footprint, 5)
+        self.create_subscription(String, '/amr/request_align', self.on_request_align, 10)
+
         self.initialpose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', tl_qos)
         self.initialpose_pub_vol = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
         self.delivery_log_pub = self.create_publisher(String, '/amr/delivery_log', 10)
         self.human_nav_mode_pub = self.create_publisher(String, '/human_nav_mode', 10)
+        self.align_state_pub = self.create_publisher(String, '/amr/amcl_alignment_state', 10)
+
+        self.nomotion_client = self.create_client(Empty, '/request_nomotion_update') if HAS_STD_SRVS else None
 
         self.create_subscription(String, '/human_state', self.state_callback, 10)
         self.create_subscription(
@@ -115,7 +164,7 @@ class AdaptiveVelocityNode(Node):
 
         # Loop kontrol tetap 20 Hz, independen dari Nav2
         self.create_timer(0.05, self.control_loop)
-        self.get_logger().info("Adaptive Velocity & Nav2 Bootstrap TF aktif")
+        self.get_logger().info("Adaptive Velocity, Auto-Align AMCL & Nav2 Bootstrap TF aktif")
 
     def on_map(self, msg: OccupancyGrid):
         if not self.map_received:
@@ -127,6 +176,9 @@ class AdaptiveVelocityNode(Node):
         if self.first_scan_wall_time == 0.0:
             self.first_scan_wall_time = now
         self.last_scan_wall_time = now
+        if msg.ranges:
+            valid = [r for r in msg.ranges if math.isfinite(r) and r > 0.05]
+            self.last_min_scan_range = min(valid) if valid else 99.0
 
     def on_arduino_ready(self, msg: Bool):
         self.arduino_ready = bool(msg.data)
@@ -158,15 +210,35 @@ class AdaptiveVelocityNode(Node):
                     self.get_logger().info("✅ AMCL telah aktif (TF map->odom diterima) -> AMCL + Continuity Keeper aktif.")
 
     def on_initialpose(self, msg: PoseWithCovarianceStamped):
+        stamp_key = (int(msg.header.stamp.sec), int(msg.header.stamp.nanosec))
+        is_own = stamp_key in self.own_initialpose_stamps
+        now_wall = time.time()
+
         if self.amcl_initialized:
-            now_wall = time.time()
             should_log = now_wall + 2.0 > self.initialpose_pause_until
             self.initialpose_pause_until = now_wall + 2.5
             if should_log:
                 self.get_logger().info("📍 /initialpose diterima -> menjeda TF keepalive 2.5s agar AMCL memperbarui map->odom.")
 
+        if not is_own:
+            self.manual_initialpose_received = True
+            self.skip_auto_spin_once = True
+            if self.startup_align_phase == 'ALIGN_SPIN':
+                self.startup_align_phase = 'LOCKED'
+                self.get_logger().info("📍 Manual /initialpose diterima -> menghentikan putaran kalibrasi otomatis.")
+
     def on_amcl_pose(self, msg: PoseWithCovarianceStamped):
-        self.last_amcl_tf_wall = time.time()
+        now_wall = time.time()
+        self.last_amcl_tf_wall = now_wall
+        self.last_amcl_pose_wall = now_wall
+        pos = msg.pose.pose.position
+        self.amcl_pose_x = float(pos.x)
+        self.amcl_pose_y = float(pos.y)
+        cov = msg.pose.covariance
+        if len(cov) >= 36:
+            self.amcl_sigma_x = math.sqrt(max(0.0, float(cov[0])))
+            self.amcl_sigma_y = math.sqrt(max(0.0, float(cov[7])))
+            self.amcl_sigma_yaw = math.sqrt(max(0.0, float(cov[35])))
         if not self.amcl_initialized:
             self.amcl_initialized = True
             self.get_logger().info("✅ AMCL telah aktif (/amcl_pose diterima) -> AMCL + Continuity Keeper aktif.")
@@ -176,6 +248,235 @@ class AdaptiveVelocityNode(Node):
 
     def on_global_footprint(self, msg: PolygonStamped):
         self.global_costmap_active = True
+
+    def on_request_align(self, msg: String):
+        """Terima permintaan relokalisasi pra-jalan dari waypoint_manager/dashboard."""
+        req = msg.data.strip().lower()
+        if not req:
+            return
+        if self.startup_align_phase == 'LOCKED':
+            self.skip_auto_spin_once = False
+            self.manual_initialpose_received = False
+            now_wall = time.time()
+            if 'wide' in req or self.amcl_sigma_yaw > 0.45:
+                cov_xy = float(self.get_parameter('initial_cov_xy').value)
+                cov_yaw = float(self.get_parameter('initial_cov_yaw').value)
+                self.send_auto_initialpose(
+                    self.get_clock().now().to_msg(),
+                    x=self.amcl_pose_x, y=self.amcl_pose_y, yaw=0.0,
+                    cov_xy=cov_xy, cov_yaw=cov_yaw
+                )
+            self.startup_align_phase = 'SETTLE_POSE'
+            self.align_phase_since_wall = now_wall
+            self.align_nomotion_count = 0
+            self.align_last_nomotion_wall = 0.0
+            self.align_spin_elapsed = 0.0
+            self.get_logger().info("🧭 [AUTO-ALIGN] Permintaan penguncian orientasi AMCL diterima sebelum jalan...")
+
+    def _load_home_pose(self):
+        """Muat home_position aktual dari waypoints.yaml (profil real jika ada)."""
+        candidates = [
+            os.path.join(os.path.expanduser('~'), 'deliver_amr', 'src', 'amr_dashboard', 'config', 'waypoints.yaml'),
+            os.path.join(os.path.expanduser('~'), 'Documents', 'amr_ws', 'src', 'amr_dashboard', 'config', 'waypoints.yaml'),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'amr_dashboard', 'config', 'waypoints.yaml'),
+        ]
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            candidates.append(os.path.join(get_package_share_directory('amr_dashboard'), 'config', 'waypoints.yaml'))
+        except Exception:
+            pass
+
+        for path in candidates:
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        cfg = yaml.safe_load(f) or {}
+                    mode = str(cfg.get('operation_mode', 'real')).strip().lower()
+                    profiles = cfg.get('profiles', {})
+                    mode_hp = profiles.get(mode, {}).get('home_position') if isinstance(profiles.get(mode), dict) else None
+                    if isinstance(mode_hp, dict) and 'x' in mode_hp and 'y' in mode_hp:
+                        hp = mode_hp
+                    elif isinstance(profiles.get('real'), dict) and isinstance(profiles['real'].get('home_position'), dict):
+                        hp = profiles['real']['home_position']
+                    else:
+                        hp = cfg.get('home_position', {})
+                    if isinstance(hp, dict) and 'x' in hp and 'y' in hp:
+                        return float(hp.get('x', 0.0)), float(hp.get('y', 0.0)), float(hp.get('yaw', 0.0))
+                except Exception:
+                    pass
+        return 0.0, 0.0, 0.0
+
+    def _is_amcl_converged(self) -> bool:
+        max_xy = float(self.get_parameter('align_max_sigma_xy').value)
+        max_yaw = float(self.get_parameter('align_max_sigma_yaw').value)
+        return (
+            self.amcl_initialized
+            and max(self.amcl_sigma_x, self.amcl_sigma_y) <= max_xy
+            and self.amcl_sigma_yaw <= max_yaw
+        )
+
+    def _call_nomotion_async(self):
+        if self.nomotion_client is None:
+            return False
+        if self.nomotion_future is not None and not self.nomotion_future.done():
+            return False
+        if not self.nomotion_client.service_is_ready():
+            return False
+        self.nomotion_future = self.nomotion_client.call_async(Empty.Request())
+        return True
+
+    def _publish_align_state(self, wall_now: float, force: bool = False):
+        payload_dict = {
+            'phase': self.startup_align_phase,
+            'localized': self._is_amcl_converged(),
+            'sigma_xy': round(self.amcl_sigma_x, 3),
+            'sigma_yaw_deg': round(math.degrees(self.amcl_sigma_yaw), 1),
+        }
+        payload = json.dumps(payload_dict, sort_keys=True)
+        if force or payload != self.last_align_state_payload or (wall_now - self.last_align_state_pub_wall) >= 0.5:
+            self.last_align_state_payload = payload
+            self.last_align_state_pub_wall = wall_now
+            m = String()
+            m.data = payload
+            self.align_state_pub.publish(m)
+
+    def _step_startup_alignment(self, now_msg, wall_now: float, scan_stable: bool, enc_ok: bool, dt: float):
+        """
+        Kalibrasi otomatis posisi & hadap awal AMCL:
+        1. Sebar partikel 360 derajat di sekitar Home (kecuali /initialpose manual sudah ada).
+        2. Coba kunci diam-diam via /request_nomotion_update.
+        3. Jika sigma_yaw masih lebar -> putar pelan di tempat sampai terkunci (jeda bila SAFE_STOP/terlalu rapat).
+        """
+        if not bool(self.get_parameter('auto_align_on_startup').value):
+            if self.startup_align_phase != 'LOCKED':
+                self.startup_align_phase = 'LOCKED'
+            self._publish_align_state(wall_now)
+            return False, 0.0, 0.0
+
+        override = False
+        spin_w = 0.0
+
+        if self.startup_align_phase == 'WAIT_READY':
+            nav_nodes_ready = (
+                self.map_received
+                and scan_stable
+                and enc_ok
+                and self.amcl_initialized
+                and self.local_costmap_active
+                and self.global_costmap_active
+            )
+            if nav_nodes_ready:
+                if self.manual_initialpose_received:
+                    self.align_phase_since_wall = wall_now
+                    self.align_nomotion_count = 0
+                    self.align_last_nomotion_wall = 0.0
+                    self.startup_align_phase = 'NOMOTION_UPDATE'
+                    self.get_logger().info("🧭 [AUTO-ALIGN] Pose manual terdeteksi -> verifikasi konvergensi AMCL tanpa menimpa pose...")
+                else:
+                    hx, hy, hyaw = self._load_home_pose()
+                    cov_xy = float(self.get_parameter('initial_cov_xy').value)
+                    cov_yaw = float(self.get_parameter('initial_cov_yaw').value)
+                    self.initialpose_pause_until = wall_now + 2.5
+                    self.send_auto_initialpose(now_msg, x=hx, y=hy, yaw=hyaw, cov_xy=cov_xy, cov_yaw=cov_yaw)
+                    self.align_phase_since_wall = wall_now
+                    self.align_nomotion_count = 0
+                    self.align_last_nomotion_wall = 0.0
+                    self.startup_align_phase = 'SETTLE_POSE'
+                    self.get_logger().info(
+                        f"🧭 [AUTO-ALIGN] Mengirim initialpose Home ({hx:.2f}, {hy:.2f}) sebaran hadap 360° untuk kunci arah AMCL..."
+                    )
+
+        elif self.startup_align_phase == 'SETTLE_POSE':
+            if (wall_now - self.align_phase_since_wall) >= 0.45:
+                self.startup_align_phase = 'NOMOTION_UPDATE'
+                self.align_phase_since_wall = wall_now
+
+        elif self.startup_align_phase == 'NOMOTION_UPDATE':
+            if (wall_now - self.align_last_nomotion_wall) >= 0.35 and self.align_nomotion_count < self.align_nomotion_max:
+                if self._call_nomotion_async():
+                    self.align_nomotion_count += 1
+                self.align_last_nomotion_wall = wall_now
+
+            fresh_pose = self.last_amcl_pose_wall > (self.align_phase_since_wall + 0.15)
+            if self.align_nomotion_count >= 2 and fresh_pose and self._is_amcl_converged():
+                self.startup_align_phase = 'LOCKED'
+                msg_txt = (
+                    f"✅ [AUTO-ALIGN] Posisi & hadap AMCL terkunci dari pindaian diam! "
+                    f"(sigma_xy={max(self.amcl_sigma_x, self.amcl_sigma_y):.2f}m, sigma_yaw={math.degrees(self.amcl_sigma_yaw):.1f}°)"
+                )
+                self.get_logger().info(msg_txt)
+                log_m = String(); log_m.data = msg_txt
+                self.delivery_log_pub.publish(log_m)
+            elif (
+                (self.align_nomotion_count >= self.align_nomotion_max and (wall_now - self.align_last_nomotion_wall) >= 0.4)
+                or (wall_now - self.align_phase_since_wall) >= 3.2
+            ):
+                if self.skip_auto_spin_once or not bool(self.get_parameter('startup_align_spin_enabled').value):
+                    self.startup_align_phase = 'LOCKED'
+                else:
+                    self.startup_align_phase = 'ALIGN_SPIN'
+                    self.align_phase_since_wall = wall_now
+                    self.align_spin_elapsed = 0.0
+                    self.align_spin_last_tick_wall = wall_now
+                    self.align_warned_clearance = False
+                    msg_txt = (
+                        f"🧭 [AUTO-ALIGN] Hadap awal belum yakin (sigma_yaw={math.degrees(self.amcl_sigma_yaw):.1f}°): "
+                        "memutar pelan di tempat sampai AMCL mengunci hadap..."
+                    )
+                    self.get_logger().info(msg_txt)
+                    log_m = String(); log_m.data = msg_txt
+                    self.delivery_log_pub.publish(log_m)
+
+        elif self.startup_align_phase == 'ALIGN_SPIN':
+            override = True
+            min_clr = float(self.get_parameter('align_min_clearance').value)
+            too_close = self.last_min_scan_range < min_clr
+            human_near = (self.effective_state == "SAFE_STOP")
+
+            if human_near or too_close:
+                spin_w = 0.0
+                if too_close and not self.align_warned_clearance:
+                    self.align_warned_clearance = True
+                    self.get_logger().warn(
+                        f"⚠️ [AUTO-ALIGN] Objek sangat dekat ({self.last_min_scan_range:.2f}m < {min_clr:.2f}m): menjeda putaran kalibrasi."
+                    )
+            else:
+                self.align_warned_clearance = False
+                spin_w = float(self.get_parameter('align_spin_speed').value)
+                self.align_spin_elapsed += dt
+                if (wall_now - self.align_last_nomotion_wall) >= 0.9:
+                    self._call_nomotion_async()
+                    self.align_last_nomotion_wall = wall_now
+
+            fresh_spin_pose = self.last_amcl_pose_wall > (self.align_phase_since_wall + 0.6)
+            if self.align_spin_elapsed >= 1.2 and fresh_spin_pose and self._is_amcl_converged():
+                self.startup_align_phase = 'LOCKED'
+                override = False
+                spin_w = 0.0
+                msg_txt = (
+                    f"✅ [AUTO-ALIGN] Arah hadap AMCL terkunci ({self.align_spin_elapsed:.1f}s putaran)! "
+                    f"(sigma_xy={max(self.amcl_sigma_x, self.amcl_sigma_y):.2f}m, sigma_yaw={math.degrees(self.amcl_sigma_yaw):.1f}°)"
+                )
+                self.get_logger().info(msg_txt)
+                log_m = String(); log_m.data = msg_txt
+                self.delivery_log_pub.publish(log_m)
+            elif (
+                self.align_spin_elapsed >= float(self.get_parameter('align_spin_timeout').value)
+                or (wall_now - self.align_phase_since_wall) >= (float(self.get_parameter('align_spin_timeout').value) + 10.0)
+            ):
+                self.startup_align_phase = 'LOCKED'
+                override = False
+                spin_w = 0.0
+                msg_txt = (
+                    f"⚠️ [AUTO-ALIGN] Batas putaran selesai (sigma_yaw={math.degrees(self.amcl_sigma_yaw):.1f}°). "
+                    "Bila area simetris, cek hadap robot di peta Dashboard sebelum berangkat."
+                )
+                self.get_logger().warn(msg_txt)
+                log_m = String(); log_m.data = msg_txt
+                self.delivery_log_pub.publish(log_m)
+
+        self._publish_align_state(wall_now)
+        return override, 0.0, spin_w
 
     def publish_bootstrap_tf(self, now_msg):
         stamp_ns = int(now_msg.sec) * 1_000_000_000 + int(now_msg.nanosec)
@@ -193,20 +494,21 @@ class AdaptiveVelocityNode(Node):
         t.transform.rotation.w = self.last_map_odom_qw
         self.tf_broadcaster.sendTransform(t)
 
-    def send_auto_initialpose(self, now_msg):
+    def send_auto_initialpose(self, now_msg, x=0.0, y=0.0, yaw=0.0, cov_xy=None, cov_yaw=None):
         msg = PoseWithCovarianceStamped()
         msg.header.stamp = now_msg
         msg.header.frame_id = 'map'
-        msg.pose.pose.position.x = 0.0
-        msg.pose.pose.position.y = 0.0
+        msg.pose.pose.position.x = float(x)
+        msg.pose.pose.position.y = float(y)
         msg.pose.pose.position.z = 0.0
         msg.pose.pose.orientation.x = 0.0
         msg.pose.pose.orientation.y = 0.0
-        msg.pose.pose.orientation.z = 0.0
-        msg.pose.pose.orientation.w = 1.0
-        msg.pose.covariance[0] = 0.25
-        msg.pose.covariance[7] = 0.25
-        msg.pose.covariance[35] = 0.06853891945200942
+        msg.pose.pose.orientation.z = math.sin(float(yaw) / 2.0)
+        msg.pose.pose.orientation.w = math.cos(float(yaw) / 2.0)
+        msg.pose.covariance[0] = float(cov_xy if cov_xy is not None else self.get_parameter('initial_cov_xy').value)
+        msg.pose.covariance[7] = float(cov_xy if cov_xy is not None else self.get_parameter('initial_cov_xy').value)
+        msg.pose.covariance[35] = float(cov_yaw if cov_yaw is not None else self.get_parameter('initial_cov_yaw').value)
+        self.own_initialpose_stamps.append((int(now_msg.sec), int(now_msg.nanosec)))
         self.initialpose_pub.publish(msg)
         self.initialpose_pub_vol.publish(msg)
 
@@ -380,20 +682,30 @@ class AdaptiveVelocityNode(Node):
             self.get_logger().info("✅ Encoder Arduino terverifikasi (/arduino/ready=True & /odom mengalir).")
         self.encoder_was_ok = enc_ok
 
-        # 2. Kirim otomatis /initialpose (0,0,0) saat /map, /scan_filtered & ENCODER sudah siap tapi AMCL belum init.
+        # 2. Kirim otomatis /initialpose sebaran 360° di Home saat /map, /scan_filtered & ENCODER siap tapi AMCL belum aktif.
         #    Beri jeda minimal 2.5 detik sejak paket /scan pertama agar AMCL selesai menginisialisasi
-        #    createLaserObject dan likelihood field. Ini mencegah bug race-condition Nav2 pf_update_resample
-        #    assertion failed (Issue #2711) yang mematikan proses AMCL.
+        #    createLaserObject dan likelihood field (mencegah Issue #2711 pf_update_resample).
         scan_stable = scan_active and (self.first_scan_wall_time > 0.0) and ((wall_now - self.first_scan_wall_time) >= 2.5)
-        if (not self.amcl_initialized) and self.map_received and scan_stable and enc_ok:
+        if (not self.amcl_initialized) and self.map_received and scan_stable and enc_ok and (not self.manual_initialpose_received):
             interval = 2.5 if self.initpose_sent_count < 5 else 4.0
             if (wall_now - self.start_wall_time > 4.0) and (wall_now - self.last_initpose_sent_time > interval):
                 self.last_initpose_sent_time = wall_now
                 self.initpose_sent_count += 1
-                self.get_logger().info(f"📍 Mengirim auto-initialpose ke AMCL (percobaan #{self.initpose_sent_count})...")
-                self.send_auto_initialpose(now_msg)
+                hx, hy, hyaw = self._load_home_pose()
+                self.get_logger().info(
+                    f"📍 Mengirim auto-initialpose Home ({hx:.2f}, {hy:.2f}) sebaran hadap 360° ke AMCL (percobaan #{self.initpose_sent_count})..."
+                )
+                self.send_auto_initialpose(now_msg, x=hx, y=hy, yaw=hyaw)
 
-        # 3. Verifikasi kesiapan penuh (Peta + LiDAR + Encoder + AMCL + Local/Global Costmap + Nav2 Stack Aktif)
+        dt = (now - self.last_time).nanoseconds / 1e9
+        self.last_time = now
+        if dt <= 0.0 or dt > 0.5:
+            dt = 0.05
+
+        # 2B. Jalankan mesin kalibrasi posisi & orientasi AMCL (nomotion -> align spin jika masih belum konvergen)
+        align_override, align_v, align_w = self._step_startup_alignment(now_msg, wall_now, scan_stable, enc_ok, dt)
+
+        # 3. Verifikasi kesiapan penuh (Peta + LiDAR + Encoder + AMCL + Auto-Align LOCKED + Costmap + Nav2 Stack Aktif)
         if not self.nav_ready_announced and (wall_now - self.last_ready_check_time >= 1.0):
             self.last_ready_check_time = wall_now
             if (
@@ -401,6 +713,7 @@ class AdaptiveVelocityNode(Node):
                 and scan_active
                 and enc_ok
                 and self.amcl_initialized
+                and self.startup_align_phase == 'LOCKED'
                 and self.local_costmap_active
                 and self.global_costmap_active
             ):
@@ -413,12 +726,14 @@ class AdaptiveVelocityNode(Node):
                     self.get_logger().info("   ✔ Sensor LiDAR (/scan) : AKTIF")
                     if self.require_encoder:
                         self.get_logger().info("   ✔ Encoder Arduino(/odom): AKTIF & TERVERIFIKASI")
-                    self.get_logger().info("   ✔ Lokalisasi (AMCL)    : TERLOKALISASI")
+                    self.get_logger().info(
+                        f"   ✔ Lokalisasi (AMCL)    : TERLOKALISASI (sigma_yaw={math.degrees(self.amcl_sigma_yaw):.1f}°)"
+                    )
                     self.get_logger().info("   ✔ Local/Global Costmap : AKTIF")
                     self.get_logger().info("   ✔ Nav2 Stack           : SIAP (bt_navigator, planner, controller)")
                     self.get_logger().info("============================================================")
                     log_msg = String()
-                    log_msg.data = "🟢 [SIAP NAVIGASI] AMR SIAP UNTUK NAVIGASI & MENGANTAR! (Peta + LiDAR + Encoder + AMCL + Costmap + Nav2 Aktif)"
+                    log_msg.data = "🟢 [SIAP NAVIGASI] AMR SIAP UNTUK NAVIGASI & MENGANTAR! (Peta + LiDAR + Encoder + AMCL Terkunci + Costmap + Nav2 Aktif)"
                     self.delivery_log_pub.publish(log_msg)
             elif wall_now - self.last_wait_log_time >= 5.0:
                 # Tampilkan apa saja yang masih ditunggu agar mudah didiagnosis
@@ -428,7 +743,7 @@ class AdaptiveVelocityNode(Node):
                 self.get_logger().info(
                     f"[MENUNGGU] Peta {mark(self.map_received)} | LiDAR {mark(scan_active)} | "
                     f"Encoder {mark(enc_ok)} | AMCL {mark(self.amcl_initialized)} | "
-                    f"Costmap {mark(self.local_costmap_active and self.global_costmap_active)}"
+                    f"Align {self.startup_align_phase} | Costmap {mark(self.local_costmap_active and self.global_costmap_active)}"
                 )
                 if not self.amcl_initialized and self.initpose_sent_count >= 3:
                     node_names = self.get_node_names()
@@ -436,11 +751,6 @@ class AdaptiveVelocityNode(Node):
                         self.get_logger().error(
                             "🔴 [AMCL CRASH] Node 'amcl' terdeteksi mati! Harap matikan (STOP) dan nyalakan (START) ulang Navigasi di Dashboard."
                         )
-
-        dt = (now - self.last_time).nanoseconds / 1e9
-        self.last_time = now
-        if dt <= 0.0 or dt > 0.5:
-            dt = 0.05
 
         # Watchdog: Nav2 diam -> anggap perintah nol. Encoder tidak valid -> paksa nol juga.
         age = (now - self.last_cmd_time).nanoseconds / 1e9
@@ -450,6 +760,17 @@ class AdaptiveVelocityNode(Node):
             orig_v, orig_w = self.in_v, self.in_w
 
         ceiling, is_safe_stop_active, _ = self._update_human_safety_mode(now, wall_now)
+
+        # Saat sedang mengunci posisi/orientasi awal AMCL, jangan jalankan gerak maju Nav2 dulu
+        if align_override:
+            self.last_linear_v = 0.0
+            out = Twist()
+            out.linear.x = float(align_v)
+            out.angular.z = float(align_w)
+            self.pub.publish(out)
+            return
+        if self.startup_align_phase in ('SETTLE_POSE', 'NOMOTION_UPDATE'):
+            orig_v, orig_w = 0.0, 0.0
 
         target_v = max(-ceiling, min(ceiling, orig_v))
 
