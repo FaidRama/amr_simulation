@@ -536,6 +536,34 @@ function renderHome() {
 }
 
 // ====================== PAGE: DELIVERY CONTROL ======================
+function escapeHtmlAttr(str) {
+    return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+function buildMapOptionsHtml(selectedMap) {
+    const active = selectedMap || APP.mapFile || 'live';
+    const seen = new Set(['live']);
+    const opts = [
+        `<option value="live" ${active === 'live' ? 'selected' : ''}>Live ROS /map Topic (SLAM / Nav2)</option>`
+    ];
+    (APP.availableMaps || []).forEach(m => {
+        const mapId = (typeof m === 'object' && m.id) ? m.id : (typeof m === 'object' ? m.name : m);
+        if (!mapId || seen.has(mapId)) return;
+        seen.add(mapId);
+        const mapLabel = (typeof m === 'object' && m.name) ? m.name : mapId;
+        const ptsCount = (typeof m === 'object' && typeof m.points_count === 'number') ? m.points_count : null;
+        const countSuffix = (ptsCount !== null) ? ` [${ptsCount} titik]` : '';
+        const isSelected = active === mapId || active === mapLabel;
+        opts.push(`<option value="${escapeHtmlAttr(mapId)}" ${isSelected ? 'selected' : ''}>${escapeHtmlAttr(mapLabel)}${countSuffix}</option>`);
+    });
+    return opts.join('');
+}
+
 function renderDelivery() {
     const div = document.createElement('div');
     div.className = 'page-enter';
@@ -543,15 +571,7 @@ function renderDelivery() {
     const modeBadgeText = APP.mode === 'sim'
         ? `${getIcon('gamepad', 13)} MODE SIMULASI (GAZEBO)`
         : `${getIcon('bot', 13)} MODE REAL ROBOT`;
-    const mapOptionsHtml = [
-        `<option value="live" ${APP.mapFile === 'live' ? 'selected' : ''}>Live ROS /map Topic (SLAM / Nav2)</option>`,
-        ...(APP.availableMaps || []).map(m => {
-            const mapId = (typeof m === 'object' && m.id) ? m.id : (typeof m === 'object' ? m.name : m);
-            const mapLabel = (typeof m === 'object' && m.name) ? m.name : mapId;
-            const isSelected = APP.mapFile === mapId || APP.mapFile === mapLabel;
-            return `<option value="${mapId}" ${isSelected ? 'selected' : ''}>${mapLabel}</option>`;
-        })
-    ].join('');
+    const mapOptionsHtml = buildMapOptionsHtml(APP.mapFile);
 
     div.innerHTML = `
         <div class="studio-two-col">
@@ -2704,7 +2724,15 @@ async function saveSlamMap() {
     if (res && res.success) {
         showToast(res.message || `Peta ${res.map_file} berhasil disimpan!`, 'success');
         if (res.available_maps) APP.availableMaps = res.available_maps;
-        if (setActive && res.map_file) APP.mapFile = res.map_file;
+        if (setActive && res.map_file) {
+            APP.mapFile = res.map_file;
+            if (Array.isArray(res.points)) APP.savedPoints = res.points;
+            if (res.home) APP.homePosition = res.home;
+            APP.pendingPickup = null;
+            APP.pendingDelivery = null;
+            renderWaypointChips();
+            renderSavedPointsList();
+        }
 
         if (resultBox) {
             resultBox.classList.remove('hidden');
@@ -3397,15 +3425,7 @@ function renderSettings() {
     const currentSoundMode = getSoundMode();
     const activeTheme = getTheme();
 
-    const mapOptionsHtml = [
-        `<option value="live" ${APP.mapFile === 'live' ? 'selected' : ''}>Live ROS /map Topic (SLAM / Nav2)</option>`,
-        ...(APP.availableMaps || []).map(m => {
-            const mapId = (typeof m === 'object' && m.id) ? m.id : (typeof m === 'object' ? m.name : m);
-            const mapLabel = (typeof m === 'object' && m.name) ? m.name : mapId;
-            const isSelected = APP.mapFile === mapId || APP.mapFile === mapLabel;
-            return `<option value="${mapId}" ${isSelected ? 'selected' : ''}>${mapLabel}</option>`;
-        })
-    ].join('');
+    const mapOptionsHtml = buildMapOptionsHtml(APP.mapFile);
 
     const themeCardsHtml = STUDIO_THEMES.map(t => `
         <button type="button" class="theme-card ${t.id === activeTheme ? 'active' : ''}"
@@ -3477,6 +3497,19 @@ function renderSettings() {
                             ${getIcon('rotateCcw', 13)} Relokalisasi (360°)
                         </button>
                     </div>
+                </div>
+
+                <div style="border-top:1px solid var(--border-subtle, rgba(255,255,255,0.08)); margin-top:12px; padding-top:12px;">
+                    <div class="flex-between" style="gap:8px; margin-bottom:8px; flex-wrap:wrap;">
+                        <div>
+                            <div class="setting-label">Manajemen File Peta Tersimpan (Re-mapping / Hapus Peta)</div>
+                            <div class="setting-desc">Menghapus file peta <code>.yaml</code>/<code>.pgm</code> otomatis menghapus seluruh titik pengantaran &amp; posisi Home yang tersimpan di peta tersebut.</div>
+                        </div>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="refreshMapsConfigFromUI()">
+                            ${getIcon('refresh', 12)} Segarkan Daftar
+                        </button>
+                    </div>
+                    <div id="settings-saved-maps-list" style="display:flex; flex-direction:column; gap:6px;"></div>
                 </div>
             </div>
         </div>
@@ -3683,8 +3716,8 @@ function renderSettings() {
             <div>
                 <div class="page-section">
                     <div class="section-title">
-                        <span>05 // DATABASE WAYPOINT (${APP.mode === 'sim' ? 'SIMULASI' : 'REAL ROBOT'})</span>
-                        <span>${APP.savedPoints.length} TITIK</span>
+                        <span>05 // DATABASE WAYPOINT (<span id="settings-waypoints-map">${escapeHtmlAttr(APP.mapFile || 'live')}</span>)</span>
+                        <span id="settings-points-count">${APP.savedPoints.length} TITIK</span>
                     </div>
                     <div class="panel">
                         <div id="saved-points-list"></div>
@@ -3745,6 +3778,7 @@ function renderSettings() {
     `;
 
     setTimeout(() => {
+        renderSavedMapsManager();
         renderSavedPointsList();
         updateSystemInfo();
         checkGeminiStatus();
@@ -3787,6 +3821,7 @@ async function setOperationMode(newMode, customMapFile = null) {
     if (res && res.success) {
         APP.mode = res.mode;
         APP.mapFile = res.map_file;
+        if (Array.isArray(res.available_maps)) APP.availableMaps = res.available_maps;
         APP.savedPoints = res.points || [];
         APP.homePosition = res.home || { x: 0, y: 0, yaw: 0 };
         APP.settings = res.settings || APP.settings;
@@ -4266,18 +4301,138 @@ function openSavePointFromMapModal(wx, wy) {
         if (!name) { showToast('Nama titik wajib diisi', 'error'); return; }
         const res = await apiPost('/api/saved_points', { name, x, y, type });
         if (res && res.success) {
-            const idx = APP.savedPoints.findIndex(p => p.name === res.point.name);
-            if (idx >= 0) APP.savedPoints[idx] = res.point;
-            else APP.savedPoints.push(res.point);
+            if (Array.isArray(res.points)) APP.savedPoints = res.points;
+            else {
+                const idx = APP.savedPoints.findIndex(p => p.name === res.point.name);
+                if (idx >= 0) APP.savedPoints[idx] = res.point;
+                else APP.savedPoints.push(res.point);
+            }
+            if (Array.isArray(res.available_maps)) APP.availableMaps = res.available_maps;
             renderWaypointChips();
+            renderSavedPointsList();
+            renderSavedMapsManager();
             hideModal();
-            showToast(`Lokasi "${name}" disimpan ke profil ${APP.mode.toUpperCase()}`, 'success');
+            showToast(`Lokasi "${name}" disimpan ke peta ${res.map_file || APP.mapFile}`, 'success');
         }
     };
 
     actionsEl.appendChild(btnCancel);
     actionsEl.appendChild(btnSave);
     document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
+async function refreshMapsConfigFromUI() {
+    await fetchModeState();
+    ['delivery-map-select', 'settings-map-select'].forEach(selId => {
+        const sel = document.getElementById(selId);
+        if (sel) sel.innerHTML = buildMapOptionsHtml(APP.mapFile);
+    });
+    renderSavedMapsManager();
+    renderSavedPointsList();
+    renderWaypointChips();
+    showToast(`Daftar peta diperbarui (${(APP.availableMaps || []).filter(m => m.id !== 'live').length} peta tersimpan)`, 'info');
+}
+
+function renderSavedMapsManager() {
+    const container = document.getElementById('settings-saved-maps-list');
+    if (!container) return;
+
+    const diskMaps = (APP.availableMaps || []).filter(m => {
+        const id = (typeof m === 'object' && m.id) ? m.id : m;
+        return id && id !== 'live';
+    });
+
+    if (diskMaps.length === 0) {
+        container.innerHTML = '<div class="history-empty">Belum ada file peta <code>.yaml</code> tersimpan. Jalankan <strong>SLAM Mapping</strong> untuk membuat peta baru.</div>';
+        return;
+    }
+
+    container.innerHTML = diskMaps.map(m => {
+        const mapId = (typeof m === 'object' && m.id) ? m.id : m;
+        const mapLabel = (typeof m === 'object' && m.name) ? m.name : mapId;
+        const ptsCount = (typeof m === 'object' && typeof m.points_count === 'number') ? m.points_count : 0;
+        const isActive = (mapId === APP.mapFile);
+        const encodedId = encodeURIComponent(mapId);
+        const navBlocking = !!(APP.navActive && isActive);
+
+        return `
+            <div class="setting-row" style="padding:8px 10px; border:1px solid ${isActive ? 'var(--accent)' : 'var(--border-subtle, rgba(255,255,255,0.08))'}; border-radius:6px; background:${isActive ? 'rgba(56,189,248,0.06)' : 'rgba(255,255,255,0.015)'}; gap:10px; flex-wrap:wrap;">
+                <div style="min-width:0; flex:1;">
+                    <div class="setting-label" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                        <span>${escapeHtmlAttr(mapLabel)}</span>
+                        ${isActive ? '<span class="badge badge-online" style="font-size:0.6rem; padding:2px 6px;">AKTIF</span>' : ''}
+                    </div>
+                    <div class="setting-desc mono" style="font-size:0.7rem;">
+                        File: ${escapeHtmlAttr(mapId)} // ${ptsCount} titik tersimpan
+                    </div>
+                </div>
+                <div style="display:flex; gap:6px; align-items:center;">
+                    ${isActive ? '' : `<button type="button" class="btn btn-outline btn-sm" style="padding:4px 9px; font-size:0.7rem;" onclick="onChangeActiveMap(decodeURIComponent('${encodedId}'))">Gunakan</button>`}
+                    <button type="button" class="btn btn-outline btn-sm" style="padding:4px 9px; font-size:0.7rem; border-color:rgba(239,68,68,0.45); color:#ef4444; ${navBlocking ? 'opacity:0.5;' : ''}"
+                            title="${navBlocking ? 'Hentikan Navigasi terlebih dahulu sebelum menghapus peta aktif' : 'Hapus peta & seluruh titik di peta ini'}"
+                            onclick="confirmDeleteSavedMap(decodeURIComponent('${encodedId}'), ${ptsCount})">
+                        ${getIcon('trash', 13)} Hapus Peta
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function confirmDeleteSavedMap(mapId, ptsCount = 0) {
+    if (!mapId || mapId === 'live') return;
+    if (APP.navActive && mapId === APP.mapFile) {
+        showToast('Hentikan Navigasi (Nav2) terlebih dahulu sebelum menghapus peta yang sedang aktif!', 'warning');
+        return;
+    }
+
+    const activeWarn = (mapId === APP.mapFile)
+        ? '<br><span style="color:var(--warning); font-size:0.74rem;">Catatan: Peta ini sedang dipilih aktif di dashboard; setelah dihapus, sistem akan otomatis beralih ke peta lain yang tersedia.</span>'
+        : '';
+
+    showModal(
+        'Hapus File Peta & Titiknya?',
+        `<p>Hapus permanen file peta <strong><code>${escapeHtmlAttr(mapId)}</code></strong> (beserta gambar <code>.pgm</code>) dari penyimpanan robot?</p>
+         <p style="margin-top:8px; font-size:0.78rem; color:var(--text-secondary);">
+            Seluruh titik pengantaran (<strong>${ptsCount} titik</strong>) dan posisi Home yang tersimpan khusus untuk peta ini juga akan <strong>ikut terhapus otomatis</strong>.
+            Cocok dilakukan sebelum re-mapping ruangan yang berubah.${activeWarn}
+         </p>`,
+        [
+            { label: 'Batal', class: 'btn-outline' },
+            {
+                label: 'Hapus Peta & Titiknya',
+                class: 'btn-danger',
+                action: async () => {
+                    const res = await apiPost('/api/maps/delete', { map_file: mapId });
+                    if (res && res.success) {
+                        if (Array.isArray(res.available_maps)) APP.availableMaps = res.available_maps;
+                        if (res.map_file) APP.mapFile = res.map_file;
+                        if (Array.isArray(res.points)) APP.savedPoints = res.points;
+                        if (res.home) APP.homePosition = res.home;
+                        if (res.switched_active_map) {
+                            APP.taskQueue = [];
+                            APP.pendingPickup = null;
+                            APP.pendingDelivery = null;
+                            if (typeof reloadMapData === 'function') {
+                                await reloadMapData();
+                            }
+                        }
+                        ['delivery-map-select', 'settings-map-select'].forEach(selId => {
+                            const sel = document.getElementById(selId);
+                            if (sel) sel.innerHTML = buildMapOptionsHtml(APP.mapFile);
+                        });
+                        renderSavedMapsManager();
+                        renderSavedPointsList();
+                        renderWaypointChips();
+                        showToast(res.message || `Peta "${mapId}" berhasil dihapus.`, 'success');
+                        if (APP.currentPage === 'settings') navigateTo('settings');
+                    } else {
+                        showToast((res && res.error) ? res.error : `Gagal menghapus peta "${mapId}"`, 'error');
+                    }
+                }
+            }
+        ]
+    );
 }
 
 window.toggleOperationMode = toggleOperationMode;
@@ -4290,29 +4445,40 @@ window.openAutoRelocalizeModal = openAutoRelocalizeModal;
 window.startAutoRelocalize = startAutoRelocalize;
 window.cancelAutoRelocalize = cancelAutoRelocalize;
 window.openSavePointFromMapModal = openSavePointFromMapModal;
+window.renderSavedMapsManager = renderSavedMapsManager;
+window.refreshMapsConfigFromUI = refreshMapsConfigFromUI;
+window.confirmDeleteSavedMap = confirmDeleteSavedMap;
 
 function renderSavedPointsList() {
+    const countEl = document.getElementById('settings-points-count');
+    if (countEl) countEl.textContent = `${APP.savedPoints.length} TITIK`;
+    const mapLblEl = document.getElementById('settings-waypoints-map');
+    if (mapLblEl) mapLblEl.textContent = APP.mapFile || 'live';
+
     const container = document.getElementById('saved-points-list');
     if (!container) return;
 
     if (APP.savedPoints.length === 0) {
-        container.innerHTML = '<div class="history-empty">Belum ada titik koordinat tersimpan.</div>';
+        container.innerHTML = `<div class="history-empty">Belum ada titik koordinat tersimpan pada peta <code>${escapeHtmlAttr(APP.mapFile || 'live')}</code>.</div>`;
         return;
     }
 
-    container.innerHTML = APP.savedPoints.map(p => `
+    container.innerHTML = APP.savedPoints.map(p => {
+        const encName = encodeURIComponent(p.name || '');
+        return `
         <div class="setting-row">
             <div>
-                <div class="setting-label">${p.name}</div>
+                <div class="setting-label">${escapeHtmlAttr(p.name)}</div>
                 <div class="setting-desc mono icon-inline">
                     ${p.type === 'pickup' ? getIcon('pickup', 12) + ' PICKUP' : getIcon('delivery_point', 12) + ' DELIVERY'}
                     // X: ${p.x}, Y: ${p.y}
                 </div>
             </div>
             <button class="btn btn-outline btn-sm" style="padding:5px 9px;"
-                    onclick="deletePoint('${p.name}')">${getIcon('trash', 13)}</button>
+                    onclick="deletePoint(decodeURIComponent('${encName}'))">${getIcon('trash', 13)}</button>
         </div>
-    `).join('');
+    `;
+    }).join('');
 }
 
 async function saveSettings() {
@@ -4545,12 +4711,18 @@ function showAddPointModal() {
 
         const result = await apiPost('/api/saved_points', { name, x, y, type });
         if (result && result.success) {
-            const idx = APP.savedPoints.findIndex(p => p.name === result.point.name);
-            if (idx >= 0) APP.savedPoints[idx] = result.point;
-            else APP.savedPoints.push(result.point);
+            if (Array.isArray(result.points)) APP.savedPoints = result.points;
+            else {
+                const idx = APP.savedPoints.findIndex(p => p.name === result.point.name);
+                if (idx >= 0) APP.savedPoints[idx] = result.point;
+                else APP.savedPoints.push(result.point);
+            }
+            if (Array.isArray(result.available_maps)) APP.availableMaps = result.available_maps;
             renderSavedPointsList();
+            renderSavedMapsManager();
+            renderWaypointChips();
             hideModal();
-            showToast(`Waypoint "${name}" ditambahkan`, 'success');
+            showToast(`Waypoint "${name}" ditambahkan ke peta ${result.map_file || APP.mapFile}`, 'success');
         }
     };
 
@@ -4560,14 +4732,21 @@ function showAddPointModal() {
 }
 
 async function deletePoint(name) {
-    showModal('Hapus Waypoint?', `Hapus titik <strong>"${name}"</strong> dari konfigurasi?`, [
+    showModal('Hapus Waypoint?', `Hapus titik <strong>"${escapeHtmlAttr(name)}"</strong> dari peta <code>${escapeHtmlAttr(APP.mapFile || 'live')}</code>?`, [
         { label: 'Batal', class: 'btn-outline' },
         {
             label: 'Hapus', class: 'btn-danger',
             action: async () => {
-                await apiPost('/api/saved_points/delete', { name });
-                APP.savedPoints = APP.savedPoints.filter(p => p.name !== name);
+                const res = await apiPost('/api/saved_points/delete', { name });
+                if (res && Array.isArray(res.points)) {
+                    APP.savedPoints = res.points;
+                } else {
+                    APP.savedPoints = APP.savedPoints.filter(p => p.name !== name);
+                }
+                if (res && Array.isArray(res.available_maps)) APP.availableMaps = res.available_maps;
                 renderSavedPointsList();
+                renderSavedMapsManager();
+                renderWaypointChips();
                 showToast(`"${name}" dihapus`, 'info');
             }
         }
@@ -4631,6 +4810,15 @@ async function globalStatusPoll() {
         if (data.map_file && data.map_file !== APP.mapFile) {
             APP.mapFile = data.map_file;
             if (typeof reloadMapData === 'function') reloadMapData();
+            fetchModeState().then(() => {
+                ['delivery-map-select', 'settings-map-select'].forEach(selId => {
+                    const sel = document.getElementById(selId);
+                    if (sel) sel.innerHTML = buildMapOptionsHtml(APP.mapFile);
+                });
+                renderWaypointChips();
+                renderSavedPointsList();
+                renderSavedMapsManager();
+            }).catch(() => {});
         }
 
         if (data.hasOwnProperty('arduino_active')) {

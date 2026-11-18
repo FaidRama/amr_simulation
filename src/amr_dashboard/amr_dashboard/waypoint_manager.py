@@ -190,7 +190,11 @@ class WaypointManager(Node):
                         cfg = yaml.safe_load(f) or {}
                     mode = cfg.get('operation_mode', 'sim')
                     profile = cfg.get('profiles', {}).get(mode, {})
-                    if 'home_position' in profile:
+                    active_map = profile.get('map_file', '') if isinstance(profile, dict) else ''
+                    map_cfg = cfg.get('map_configs', {}).get(active_map, {}) if active_map else {}
+                    if isinstance(map_cfg, dict) and isinstance(map_cfg.get('home_position'), dict):
+                        self.home_position = map_cfg['home_position']
+                    elif isinstance(profile, dict) and 'home_position' in profile:
                         self.home_position = profile['home_position']
                     elif 'home_position' in cfg:
                         self.home_position = cfg['home_position']

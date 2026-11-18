@@ -293,8 +293,18 @@ class AdaptiveVelocityNode(Node):
                         cfg = yaml.safe_load(f) or {}
                     mode = str(cfg.get('operation_mode', 'real')).strip().lower()
                     profiles = cfg.get('profiles', {})
-                    mode_hp = profiles.get(mode, {}).get('home_position') if isinstance(profiles.get(mode), dict) else None
-                    if isinstance(mode_hp, dict) and 'x' in mode_hp and 'y' in mode_hp:
+                    map_configs = cfg.get('map_configs', {})
+                    mode_prof = profiles.get(mode, {}) if isinstance(profiles.get(mode), dict) else {}
+                    active_map = str(mode_prof.get('map_file', '')).strip() if isinstance(mode_prof, dict) else ''
+                    map_hp = (
+                        map_configs.get(active_map, {}).get('home_position')
+                        if active_map and isinstance(map_configs, dict) and isinstance(map_configs.get(active_map), dict)
+                        else None
+                    )
+                    mode_hp = mode_prof.get('home_position') if isinstance(mode_prof, dict) else None
+                    if isinstance(map_hp, dict) and 'x' in map_hp and 'y' in map_hp:
+                        hp = map_hp
+                    elif isinstance(mode_hp, dict) and 'x' in mode_hp and 'y' in mode_hp:
                         hp = mode_hp
                     elif isinstance(profiles.get('real'), dict) and isinstance(profiles['real'].get('home_position'), dict):
                         hp = profiles['real']['home_position']
