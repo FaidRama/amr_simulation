@@ -238,41 +238,48 @@ class HumanAwareFSM:
 
     def evaluate_activity_state(
         self,
+        zone: Zone,
         activity: Activity,
         in_corridor: bool,
         distance: Optional[float] = None,
         direction: Direction = Direction.STATIONARY,
-        force_near: bool = False
     ) -> State:
         """
-        Pemetaan 3 Aktivitas Manusia terhadap Output FSM:
-        1. STANDING: luar lintasan -> NORMAL; di lintasan (>1.3m) -> REDUCED_SPEED; dekat (<=1.3m) -> SAFE_STOP
-        2. WALKING: luar lintasan -> NORMAL; searah (>2.0m) -> NORMAL; searah (<=2.0m) -> REDUCED_SPEED;
-                    berlawanan arah (>1.5m) -> REDUCED_SPEED; berlawanan arah (<=1.5m) -> SAFE_STOP
-        3. SITTING: luar lintasan -> NORMAL; di lintasan (>1.2m) -> REDUCED_SPEED; dekat (<=1.2m) -> SAFE_STOP
+        Pemetaan 3 Aktivitas Manusia terhadap Output FSM dengan batas jarak Zona (FAR/MEDIUM/NEAR):
+        - Jika jarak jauh (Zone.FAR / Zone.NONE) -> NORMAL.
+        1. STANDING: luar lintasan / FAR -> NORMAL; MEDIUM -> REDUCED_SPEED; NEAR -> SAFE_STOP.
+        2. WALKING: luar lintasan / FAR -> NORMAL;
+                    searah di MEDIUM -> NORMAL (kecuali dekat di NEAR -> REDUCED_SPEED);
+                    berlawanan arah di MEDIUM -> REDUCED_SPEED; berlawanan arah di NEAR -> SAFE_STOP.
+        3. SITTING: luar lintasan / FAR -> NORMAL; MEDIUM -> REDUCED_SPEED; NEAR -> SAFE_STOP.
         """
-        if force_near or (distance is not None and distance <= 0.85):
+        if zone == Zone.NEAR:
+            # Jika berjalan searah (menjauhi robot), cukup REDUCED_SPEED kecuali sangat mepet
+            if activity == Activity.WALKING and direction == Direction.SAME_DIRECTION:
+                if distance is not None and distance <= 1.0:
+                    return State.SAFE_STOP
+                return State.REDUCED_SPEED
             return State.SAFE_STOP
 
-        if activity == Activity.NONE or distance is None:
+        if activity == Activity.NONE or not in_corridor or zone in (Zone.NONE, Zone.FAR):
             return State.NORMAL
 
+        # Pada titik ini: target berada DI DALAM KORIDOR dan berada di ZONA MEDIUM
         if activity == Activity.STANDING:
-            if not in_corridor:
-                return State.NORMAL
-            return State.REDUCED_SPEED if distance > 1.30 else State.SAFE_STOP
+            return State.REDUCED_SPEED
 
         if activity == Activity.WALKING:
-            if not in_corridor:
-                return State.NORMAL
             if direction == Direction.SAME_DIRECTION:
-                return State.NORMAL if distance > 2.00 else State.REDUCED_SPEED
-            return State.REDUCED_SPEED if distance > 1.50 else State.SAFE_STOP
+                # Berjalan searah di jarak sedang -> tidak ada potensi konflik -> NORMAL
+                # Jika mulai mendekat dari belakang (misal <= 2.0m), baru REDUCED_SPEED
+                if distance is not None and distance <= 2.0:
+                    return State.REDUCED_SPEED
+                return State.NORMAL
+            # Berlawanan arah di jarak sedang -> REDUCED_SPEED
+            return State.REDUCED_SPEED
 
         if activity == Activity.SITTING:
-            if not in_corridor:
-                return State.NORMAL
-            return State.REDUCED_SPEED if distance > 1.20 else State.SAFE_STOP
+            return State.REDUCED_SPEED
 
         return State.NORMAL
 
@@ -286,11 +293,11 @@ class HumanAwareFSM:
     ) -> State:
         if activity is not None:
             target = self.evaluate_activity_state(
+                zone=zone,
                 activity=activity,
                 in_corridor=in_corridor,
                 distance=distance,
                 direction=direction,
-                force_near=(zone == Zone.NEAR),
             )
         else:
             target = self._target_state(zone)
