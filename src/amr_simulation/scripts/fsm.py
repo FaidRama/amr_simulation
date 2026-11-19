@@ -162,8 +162,26 @@ class HumanActivityClassifier:
                 if dx > 1.1 * dy:
                     return True
 
+            # Deteksi dari belakang (punggung orang): saat lutut tertutup punggung/sandaran kursi,
+            # bandingkan tinggi torso (bahu ke pinggul) vs tinggi kaki vertikal (pinggul ke mata kaki).
+            # Pada posisi duduk di kursi, jarak vertikal pinggul ke mata kaki pendek (leg_h/torso_h < 1.35).
+            l_sh, r_sh = keypoints[5], keypoints[6]
+            has_sh = (l_sh[2] >= 0.20 or r_sh[2] >= 0.20)
+            has_hip = (l_hip[2] >= 0.20 or r_hip[2] >= 0.20)
+            has_ank = (l_ankle[2] >= 0.20 or r_ankle[2] >= 0.20)
+            if has_sh and has_hip and has_ank:
+                sh_y = l_sh[1] if l_sh[2] >= 0.20 else r_sh[1]
+                hip_y = l_hip[1] if l_hip[2] >= 0.20 else r_hip[1]
+                ank_y = l_ankle[1] if l_ankle[2] >= 0.20 else r_ankle[1]
+                torso_h = max(1.0, abs(hip_y - sh_y))
+                leg_h = max(1.0, abs(ank_y - hip_y))
+                if leg_h / torso_h < 1.35:
+                    return True
+
+        # Fallback rasio aspek: orang duduk di kursi (termasuk dilihat dari belakang)
+        # memiliki rasio H/W < 2.30 (sedangkan orang dewasa berdiri tegak biasanya H/W > 2.80)
         aspect_ratio = bbox_h / max(bbox_w, 1.0)
-        return aspect_ratio < 1.40
+        return aspect_ratio < 2.30
 
     def classify(
         self,
@@ -259,6 +277,12 @@ class HumanAwareFSM:
         if activity == Activity.SITTING:
             return State.NORMAL
 
+        # 2. Jika orang berada di luar koridor lintasan robot (di pinggir / samping):
+        # Orang tersebut tidak menghalangi jalur robot, sehingga FSM tetap NORMAL!
+        if not in_corridor or activity == Activity.NONE or zone in (Zone.NONE, Zone.FAR):
+            return State.NORMAL
+
+        # 3. Orang berada DI DALAM KORIDOR dan di jarak dekat (NEAR):
         if zone == Zone.NEAR:
             # Jika berjalan searah (menjauhi robot), cukup REDUCED_SPEED kecuali sangat mepet
             if activity == Activity.WALKING and direction == Direction.SAME_DIRECTION:
@@ -266,9 +290,6 @@ class HumanAwareFSM:
                     return State.SAFE_STOP
                 return State.REDUCED_SPEED
             return State.SAFE_STOP
-
-        if activity == Activity.NONE or not in_corridor or zone in (Zone.NONE, Zone.FAR):
-            return State.NORMAL
 
         # Pada titik ini: target berada DI DALAM KORIDOR dan berada di ZONA MEDIUM
         if activity == Activity.STANDING:
