@@ -968,28 +968,33 @@ def main():
                 target["dist"] = dist_smooth
 
             # 5. PROXIMITY CLASSIFICATION, ACTIVITY RECOGNITION & FSM
-            # SAFE_STOP berlaku di mana pun: cek semua manusia untuk zona NEAR.
-            # REDUCED_SPEED / behavior evaluasi dipicu oleh target yang masuk koridor.
-            near_person_outside_or_inside = any(
-                person["r"] >= args.t_near_enter
-                for person in persons
-            )
+            # Evaluasi zona jarak:
+            # - Jika ada target di dalam koridor: evaluasi zona target secara mandiri.
+            #   Cek bahaya darurat samping hanya jika ada orang BERDIRI/BERJALAN sangat dekat (orang DUDUK diabaikan).
+            near_danger = False
+            for person in persons:
+                is_sitting = activity_classifier.detect_sitting(
+                    person.get("keypoints"), person["w"], person["h"]
+                )
+                if not is_sitting and person["r"] >= args.t_near_enter:
+                    near_danger = True
+                    break
 
-            if near_person_outside_or_inside or force_near:
+            if target is not None:
+                # Target di koridor diprioritaskan berdasarkan jarak riilnya sendiri
+                zone = classifier.update(
+                    active_ratio,
+                    force_near=force_near or near_danger
+                )
+            elif near_danger or force_near:
+                # Tidak ada target di koridor, tetapi ada orang berdiri/jalan sangat dekat
                 zone = classifier.update(
                     active_ratio,
                     force_near=True
                 )
-            elif target is None:
-                # Tidak ada manusia di koridor dan tidak ada manusia NEAR.
-                # Jangan biarkan MEDIUM lama bertahan hanya karena hysteresis.
-                zone = Zone.FAR
             else:
-                # Target ada di koridor: zona FAR/MEDIUM/NEAR normal dari classifier.
-                zone = classifier.update(
-                    active_ratio,
-                    force_near=False
-                )
+                # Tidak ada target di koridor dan tidak ada bahaya dekat
+                zone = Zone.FAR
 
             activity = Activity.NONE
             direction = Direction.UNKNOWN
