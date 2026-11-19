@@ -27,25 +27,6 @@ profiles:
       max_linear_speed: 0.35
       theme: nordic-slate
       waypoint_pause_duration: 3
-  sim:
-    home_position:
-      x: 0.0
-      y: 0.0
-      yaw: 0.0
-    map_file: peta_dc.yaml
-    max_angular_speed: 0.9
-    max_linear_speed: 1.0
-    predefined_points:
-    - description: Titik muat barang simulasi
-      name: Rak 1A
-      type: pickup
-      x: -6.0
-      y: 10.0
-    - description: Titik antar barang simulasi
-      name: Ruang 1B
-      type: delivery
-      x: -17.0
-      y: 3.0
 settings:
   arrival_sound_mode: human
   max_angular_speed: 0.4

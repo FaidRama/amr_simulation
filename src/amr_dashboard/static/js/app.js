@@ -121,7 +121,6 @@ window.cycleTheme = cycleTheme;
 const APP = {
     currentPage: 'home',
     connected: false,
-    mode: 'real', // 'real' atau 'sim'
     mapFile: 'peta_1b.yaml',
     availableMaps: [],
     hasLiveMap: false,
@@ -568,10 +567,8 @@ function renderDelivery() {
     const div = document.createElement('div');
     div.className = 'page-enter';
 
-    const modeBadgeText = APP.mode === 'sim'
-        ? `${getIcon('gamepad', 13)} MODE SIMULASI (GAZEBO)`
-        : `${getIcon('bot', 13)} MODE REAL ROBOT`;
     const mapOptionsHtml = buildMapOptionsHtml(APP.mapFile);
+    const activeMapBadge = `${getIcon('map', 13)} ${escapeHtmlAttr(APP.mapFile || 'live')}`;
 
     div.innerHTML = `
         <div class="studio-two-col">
@@ -580,7 +577,7 @@ function renderDelivery() {
                 <div class="page-section">
                     <div class="section-title">
                         <span>01 // PETA SLAM & TITIK TUJUAN</span>
-                        <span class="mono" style="color:var(--accent-bright); display:inline-flex; align-items:center; gap:5px;">${modeBadgeText}</span>
+                        <span class="mono" style="color:var(--accent-bright); display:inline-flex; align-items:center; gap:5px;">${activeMapBadge}</span>
                     </div>
 
                     <!-- NAV2 NAVIGATION RUNTIME CONTROLLER -->
@@ -3464,38 +3461,16 @@ function renderSettings() {
     `).join('');
 
     div.innerHTML = `
-        <!-- FULL-WIDTH SECTION 00: OPERATION MODE & MAP SWITCHER -->
+        <!-- FULL-WIDTH SECTION 00: MAP SWITCHER & AMCL -->
         <div class="page-section">
             <div class="section-title">
-                <span>00 // MODE OPERASI ROBOT & PETA AKTIF</span>
-                <span class="mono" style="color:var(--accent-bright);">${APP.mode === 'sim' ? `${getIcon('gamepad', 13)} SIMULASI (GAZEBO)` : `${getIcon('bot', 13)} REAL ROBOT`}</span>
+                <span>00 // PETA AKTIF & LOKALISASI AMCL</span>
+                <span class="mono" style="color:var(--accent-bright);">${getIcon('map', 13)} ${escapeHtmlAttr(APP.mapFile || 'live')}</span>
             </div>
             <div class="panel">
-                <div class="mode-selector-grid">
-                    <button type="button" class="mode-option-card ${APP.mode === 'real' ? 'active-real' : ''}" onclick="setOperationMode('real')">
-                        <div class="mode-option-title">
-                            <span>${getIcon('bot', 15)} MODE REAL ROBOT (NYATA)</span>
-                            ${APP.mode === 'real' ? `<span class="badge badge-online" style="font-size:0.62rem;">AKTIF</span>` : ''}
-                        </div>
-                        <div class="mode-option-desc">
-                            Terhubung ke AMR fisik (RPLiDAR A1 + Arduino PID Odometry + Nav2 / SLAM). Menggunakan profil koordinat dunia nyata & batas kecepatan aman (0.35 m/s).
-                        </div>
-                    </button>
-
-                    <button type="button" class="mode-option-card ${APP.mode === 'sim' ? 'active-sim' : ''}" onclick="setOperationMode('sim')">
-                        <div class="mode-option-title">
-                            <span>${getIcon('gamepad', 15)} MODE SIMULASI (GAZEBO)</span>
-                            ${APP.mode === 'sim' ? `<span class="badge badge-online" style="font-size:0.62rem;">AKTIF</span>` : ''}
-                        </div>
-                        <div class="mode-option-desc">
-                            Terhubung ke simulasi Gazebo (peta gudang peta_dc.yaml). Menggunakan profil koordinat gudang simulasi & kecepatan simulasi (1.0 m/s).
-                        </div>
-                    </button>
-                </div>
-
                 <div class="setting-row" style="flex-wrap:wrap; gap:10px;">
                     <div>
-                        <div class="setting-label">Sumber Peta 2D Aktif (${APP.mode.toUpperCase()})</div>
+                        <div class="setting-label">Sumber Peta 2D Aktif</div>
                         <div class="setting-desc">Pilih file peta .yaml atau gunakan Live ROS <code>/map</code> saat sedang menjalankan <code>real_mapping</code> / <code>real_navigation</code></div>
                     </div>
                     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -3554,7 +3529,7 @@ function renderSettings() {
         <div class="studio-two-col">
             <div>
                 <div class="page-section">
-                    <div class="section-title">02 // PARAMETER KINEMATIKA (${APP.mode.toUpperCase()})</div>
+                    <div class="section-title">02 // PARAMETER KINEMATIKA ROBOT</div>
                     <div class="panel">
                         <div class="setting-row">
                             <div>
@@ -3805,39 +3780,22 @@ function renderSettings() {
     return div;
 }
 
-// ====================== MODE SWITCHING & INITIAL POSE ======================
-function updateTopbarModeButton() {
-    const btn = document.getElementById('btn-topbar-mode');
-    const label = document.getElementById('topbar-mode-label');
-    if (!btn || !label) return;
-    if (APP.mode === 'sim') {
-        btn.className = 'topbar-mode-btn mode-sim';
-        label.textContent = 'SIMULASI';
-    } else {
-        btn.className = 'topbar-mode-btn mode-real';
-        label.textContent = 'REAL ROBOT';
-    }
-}
-
+// ====================== ACTIVE MAP & INITIAL POSE ======================
 async function fetchModeState() {
     const data = await apiGet('/api/mode');
     if (!data) return;
-    APP.mode = data.mode || 'real';
     APP.mapFile = data.map_file || 'peta_1b.yaml';
     APP.availableMaps = data.available_maps || [];
     APP.hasLiveMap = !!data.has_live_map;
     APP.savedPoints = data.points || APP.savedPoints;
     APP.homePosition = data.home || APP.homePosition;
     APP.settings = data.settings || APP.settings;
-    updateTopbarModeButton();
 }
 
-async function setOperationMode(newMode, customMapFile = null) {
-    const payload = { mode: newMode };
-    if (customMapFile) payload.map_file = customMapFile;
-    const res = await apiPost('/api/mode', payload);
+async function onChangeActiveMap(newMapFile) {
+    if (!newMapFile) return;
+    const res = await apiPost('/api/mode', { map_file: newMapFile });
     if (res && res.success) {
-        APP.mode = res.mode;
         APP.mapFile = res.map_file;
         if (Array.isArray(res.available_maps)) APP.availableMaps = res.available_maps;
         APP.savedPoints = res.points || [];
@@ -3846,42 +3804,14 @@ async function setOperationMode(newMode, customMapFile = null) {
         APP.taskQueue = [];
         APP.pendingPickup = null;
         APP.pendingDelivery = null;
-        updateTopbarModeButton();
-        showToast(res.message || `Mode diubah ke ${newMode.toUpperCase()}`, 'success');
+        showToast(res.message || `Peta aktif diubah ke ${APP.mapFile}`, 'success');
         if (typeof reloadMapData === 'function') {
             await reloadMapData();
         }
         navigateTo(APP.currentPage);
     } else {
-        showToast('Gagal mengubah mode operasi', 'error');
+        showToast('Gagal mengubah peta aktif', 'error');
     }
-}
-
-function toggleOperationMode() {
-    const targetMode = APP.mode === 'real' ? 'sim' : 'real';
-    const targetLabel = targetMode === 'sim' ? `${getIcon('gamepad', 14)} SIMULASI (Gazebo)` : `${getIcon('bot', 14)} REAL ROBOT (Nyata)`;
-    const targetDesc = targetMode === 'sim'
-        ? 'Dashboard akan memuat peta gudang simulasi (<code>peta_dc.yaml</code>) beserta daftar waypoint & batas kecepatan simulasi.'
-        : 'Dashboard akan memuat peta robot nyata (<code>peta_1b.yaml</code> / Live SLAM) beserta daftar waypoint & batas kecepatan fisik.';
-
-    showModal(
-        'Ganti Mode Operasi Dashboard?',
-        `<p>Beralih ke <strong>${targetLabel}</strong>?</p>
-         <p style="margin-top:8px; font-size:0.76rem; color:var(--text-muted);">${targetDesc}</p>`,
-        [
-            { label: 'Batal', class: 'btn-outline' },
-            {
-                label: `Aktifkan ${targetMode === 'sim' ? 'Mode Simulasi' : 'Mode Real Robot'}`,
-                class: targetMode === 'sim' ? 'btn-primary' : 'btn-success',
-                action: () => setOperationMode(targetMode)
-            }
-        ]
-    );
-}
-
-async function onChangeActiveMap(newMapFile) {
-    if (!newMapFile) return;
-    await setOperationMode(APP.mode, newMapFile);
 }
 
 async function refreshActiveMap() {
@@ -4522,8 +4452,6 @@ function confirmDeleteSavedMap(mapId, ptsCount = 0) {
     );
 }
 
-window.toggleOperationMode = toggleOperationMode;
-window.setOperationMode = setOperationMode;
 window.onChangeActiveMap = onChangeActiveMap;
 window.refreshActiveMap = refreshActiveMap;
 window.openInitialPoseModal = openInitialPoseModal;
@@ -4892,10 +4820,6 @@ async function globalStatusPoll() {
         APP.hasLiveMap = !!data.has_live_map;
         APP.navPath = data.nav_path || [];
 
-        if (data.mode && data.mode !== APP.mode) {
-            APP.mode = data.mode;
-            updateTopbarModeButton();
-        }
         if (data.map_file && data.map_file !== APP.mapFile) {
             APP.mapFile = data.map_file;
             if (typeof reloadMapData === 'function') reloadMapData();
@@ -5443,9 +5367,7 @@ async function init() {
         if (pointsData) {
             APP.savedPoints = pointsData.points || APP.savedPoints;
             APP.homePosition = pointsData.home || APP.homePosition;
-            if (pointsData.mode) APP.mode = pointsData.mode;
             if (pointsData.map_file) APP.mapFile = pointsData.map_file;
-            updateTopbarModeButton();
         }
     } catch (e) {
         console.warn('saved_points error:', e);

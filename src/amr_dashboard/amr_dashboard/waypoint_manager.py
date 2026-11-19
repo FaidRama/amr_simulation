@@ -188,8 +188,7 @@ class WaypointManager(Node):
                 try:
                     with open(path, 'r') as f:
                         cfg = yaml.safe_load(f) or {}
-                    mode = cfg.get('operation_mode', 'sim')
-                    profile = cfg.get('profiles', {}).get(mode, {})
+                    profile = cfg.get('profiles', {}).get('real', {})
                     active_map = profile.get('map_file', '') if isinstance(profile, dict) else ''
                     map_cfg = cfg.get('map_configs', {}).get(active_map, {}) if active_map else {}
                     if isinstance(map_cfg, dict) and isinstance(map_cfg.get('home_position'), dict):
@@ -200,7 +199,7 @@ class WaypointManager(Node):
                         self.home_position = cfg['home_position']
                     if 'settings' in cfg and 'auto_return_home' in cfg['settings']:
                         self.auto_return_home = cfg['settings']['auto_return_home']
-                    self.get_logger().info(f'Loaded config [{mode.upper()}] dari {path} | Home: ({self.home_position.get("x", 0.0):.2f}, {self.home_position.get("y", 0.0):.2f})')
+                    self.get_logger().info(f'Loaded config dari {path} | Home: ({self.home_position.get("x", 0.0):.2f}, {self.home_position.get("y", 0.0):.2f})')
                     return
                 except Exception as e:
                     self.get_logger().warn(f'Gagal membaca config {path}: {e}')
