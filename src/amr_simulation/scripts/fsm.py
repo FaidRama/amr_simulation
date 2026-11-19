@@ -253,6 +253,12 @@ class HumanAwareFSM:
                     berlawanan arah di MEDIUM -> REDUCED_SPEED; berlawanan arah di NEAR -> SAFE_STOP.
         3. SITTING: luar lintasan / FAR -> NORMAL; MEDIUM -> REDUCED_SPEED; NEAR -> SAFE_STOP.
         """
+        # 1. Khusus orang duduk di kursi (SITTING): dianggap rintangan statis/pasif,
+        # robot tetap dalam mode NORMAL (kecepatan normal) agar langsung bermanuver
+        # menghindar via Local Costmap & DWB tanpa intervensi REDUCED_SPEED maupun SAFE_STOP.
+        if activity == Activity.SITTING:
+            return State.NORMAL
+
         if zone == Zone.NEAR:
             # Jika berjalan searah (menjauhi robot), cukup REDUCED_SPEED kecuali sangat mepet
             if activity == Activity.WALKING and direction == Direction.SAME_DIRECTION:
