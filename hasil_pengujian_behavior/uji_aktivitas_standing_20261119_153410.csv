@@ -1,0 +1,1 @@
+timestamp,elapsed_s,gt_activity,gt_direction,pred_activity,pred_direction,speed_m_s,distance_m,in_corridor,fsm_state,infer_ms,fps
