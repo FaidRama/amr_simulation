@@ -2917,9 +2917,9 @@ DEFAULT_VOICE_CONFIG = {
     "obstacle_voice_delay_s": 5,
     "obstacle_voice_repeat_s": 20,
     "obstacle_phrase": "Permisi, saya mau lewat. Mohon beri jalan.",
-    "arrival_phrase": "Deliver tiba. Robot sudah sampai di titik tujuan, silakan ambil barang.",
-    "pickup_phrase": "Pickup tiba. Robot sudah sampai di titik pickup, silakan muat barang.",
-    "home_phrase": "Misi selesai. Robot kembali ke stasiun pangkalan."
+    "arrival_phrase": "Deliver tiba. silakan ambil barang.",
+    "pickup_phrase": "Pickup tiba. silakan muat barang.",
+    "home_phrase": "Misi selesai. Robot telah di titik awal."
 }
 
 

@@ -603,7 +603,7 @@ class WaypointManager(Node):
                 self.confirm_received = False
                 self.publish_status()
                 self.log('info', f'📍 SAMPAI di titik pickup [{pickup["name"]}]. Menunggu konfirmasi: "Barang Sudah Dimuat"...')
-                self.notify_voice('pickup', f"Pickup tiba. Robot sudah sampai di titik {pickup['name']}. Silakan muat barang.")
+                self.notify_voice('pickup', f"Pickup tiba di titik {pickup['name']}. Silakan muat barang.")
                 
                 # Tunggu operator tekan tombol "Barang Sudah Dimuat"
                 while not self.confirm_received and not self.is_cancelled:
@@ -645,10 +645,10 @@ class WaypointManager(Node):
             self.publish_status()
             if is_direct:
                 self.log('info', f'📍 SAMPAI di titik tujuan [{delivery["name"]}]. Menunggu konfirmasi: "Selesai / Konfirmasi Sampai"...')
-                self.notify_voice('arrival', f"Tiba di tujuan. Robot sudah sampai di titik {delivery['name']}.")
+                self.notify_voice('arrival', f"Robot sudah sampai di titik {delivery['name']}.")
             else:
                 self.log('info', f'📍 SAMPAI di titik delivery [{delivery["name"]}]. Menunggu konfirmasi: "Barang Sudah Diambil"...')
-                self.notify_voice('arrival', f"Deliver tiba. Robot sudah sampai di titik {delivery['name']}. Silakan ambil barang.")
+                self.notify_voice('arrival', f"Deliver tiba di titik {delivery['name']}. Silakan ambil barang.")
             
             # Tunggu operator tekan tombol konfirmasi
             while not self.confirm_received and not self.is_cancelled:
@@ -714,7 +714,7 @@ class WaypointManager(Node):
                 
                 if home_success:
                     self.log('info', '🎉 AMR telah kembali ke Home. Misi selesai dengan sukses!')
-                    self.notify_voice('home', "Misi selesai. Robot kembali ke stasiun pangkalan.")
+                    self.notify_voice('home', "Misi selesai. Robot telah di titik awal.")
                 else:
                     self.log('warn', '⚠️ AMR tidak dapat mencapai koordinat Home (mungkin terhalang). Misi diselesaikan di posisi saat ini.')
             else:
