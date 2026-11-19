@@ -968,33 +968,16 @@ def main():
                 target["dist"] = dist_smooth
 
             # 5. PROXIMITY CLASSIFICATION, ACTIVITY RECOGNITION & FSM
-            # Evaluasi zona jarak:
-            # - Jika ada target di dalam koridor: evaluasi zona target secara mandiri.
-            #   Cek bahaya darurat samping hanya jika ada orang BERDIRI/BERJALAN sangat dekat (orang DUDUK diabaikan).
-            near_danger = False
-            for person in persons:
-                is_sitting = activity_classifier.detect_sitting(
-                    person.get("keypoints"), person["w"], person["h"]
-                )
-                if not is_sitting and person["r"] >= args.t_near_enter:
-                    near_danger = True
-                    break
-
+            # Evaluasi zona jarak murni berdasarkan target di koridor lintasan robot:
+            # Orang di luar koridor (seperti teman duduk di kursi samping) tidak boleh mengotori zona target koridor.
             if target is not None:
-                # Target di koridor diprioritaskan berdasarkan jarak riilnya sendiri
                 zone = classifier.update(
                     active_ratio,
-                    force_near=force_near or near_danger
-                )
-            elif near_danger or force_near:
-                # Tidak ada target di koridor, tetapi ada orang berdiri/jalan sangat dekat
-                zone = classifier.update(
-                    active_ratio,
-                    force_near=True
+                    force_near=force_near
                 )
             else:
-                # Tidak ada target di koridor dan tidak ada bahaya dekat
-                zone = Zone.FAR
+                classifier.reset()
+                zone = Zone.NONE
 
             activity = Activity.NONE
             direction = Direction.UNKNOWN
