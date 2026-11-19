@@ -178,10 +178,9 @@ class HumanActivityClassifier:
                 if leg_h / torso_h < 1.35:
                     return True
 
-        # Fallback rasio aspek: orang duduk di kursi (termasuk dilihat dari belakang)
-        # memiliki rasio H/W < 2.30 (sedangkan orang dewasa berdiri tegak biasanya H/W > 2.80)
+        # Fallback rasio aspek: hanya postur duduk jelas yang rasio H/W < 1.40
         aspect_ratio = bbox_h / max(bbox_w, 1.0)
-        return aspect_ratio < 2.30
+        return aspect_ratio < 1.40
 
     def classify(
         self,
@@ -271,41 +270,36 @@ class HumanAwareFSM:
                     berlawanan arah di MEDIUM -> REDUCED_SPEED; berlawanan arah di NEAR -> SAFE_STOP.
         3. SITTING: luar lintasan / FAR -> NORMAL; MEDIUM -> REDUCED_SPEED; NEAR -> SAFE_STOP.
         """
-        # 1. Khusus orang duduk di kursi (SITTING): dianggap rintangan statis/pasif,
-        # robot tetap dalam mode NORMAL (kecepatan normal) agar langsung bermanuver
-        # menghindar via Local Costmap & DWB tanpa intervensi REDUCED_SPEED maupun SAFE_STOP.
+        # 1. Permintaan Khusus Dosen:
+        # Jika orang SEDANG DUDUK di kursi (di tengah koridor sekalipun):
+        # Robot menganggapnya sebagai rintangan pasif, status tetap NORMAL,
+        # sehingga robot otomatis langsung bermanuver membelok menghindar via Costmap & DWB
+        # tanpa menjalankan perintah reduce maupun safe stop.
         if activity == Activity.SITTING:
             return State.NORMAL
 
-        # 2. Jika orang berada di luar koridor lintasan robot (di pinggir / samping):
-        # Orang tersebut tidak menghalangi jalur robot, sehingga FSM tetap NORMAL!
+        # 2. Jika orang di luar koridor lintasan robot atau zona FAR -> NORMAL
         if not in_corridor or activity == Activity.NONE or zone in (Zone.NONE, Zone.FAR):
             return State.NORMAL
 
-        # 3. Orang berada DI DALAM KORIDOR dan di jarak dekat (NEAR):
+        # 3. Target BERDIRI / BERJALAN di dalam koridor dan di jarak dekat (ZONA NEAR <= 1.8m):
         if zone == Zone.NEAR:
-            # Jika berjalan searah (menjauhi robot), cukup REDUCED_SPEED kecuali sangat mepet
+            # Jika orang berjalan searah menjauhi robot, cukup REDUCED_SPEED kecuali mepet <= 1.0m
             if activity == Activity.WALKING and direction == Direction.SAME_DIRECTION:
                 if distance is not None and distance <= 1.0:
                     return State.SAFE_STOP
                 return State.REDUCED_SPEED
             return State.SAFE_STOP
 
-        # Pada titik ini: target berada DI DALAM KORIDOR dan berada di ZONA MEDIUM
+        # 4. Target BERDIRI / BERJALAN di dalam koridor dan di jarak sedang (ZONA MEDIUM 1.8m - 2.7m):
         if activity == Activity.STANDING:
             return State.REDUCED_SPEED
 
         if activity == Activity.WALKING:
             if direction == Direction.SAME_DIRECTION:
-                # Berjalan searah di jarak sedang -> tidak ada potensi konflik -> NORMAL
-                # Jika mulai mendekat dari belakang (misal <= 2.0m), baru REDUCED_SPEED
                 if distance is not None and distance <= 2.0:
                     return State.REDUCED_SPEED
                 return State.NORMAL
-            # Berlawanan arah di jarak sedang -> REDUCED_SPEED
-            return State.REDUCED_SPEED
-
-        if activity == Activity.SITTING:
             return State.REDUCED_SPEED
 
         return State.NORMAL
