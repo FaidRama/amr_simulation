@@ -232,12 +232,12 @@ void processCommand(char *cmd) {
     return;
   }
 
-  // B. Pemicuan Uji Step Respon dari Python: "STEP,<METODE>,<RPM>"
+ // B. Pemicuan Uji Step Respon dari Python: "STEP,<METODE>,<RPM>"
   if (strncmp(cmd, "STEP", 4) == 0) {
-    char metodeStr[8];
-    float rpmIn = 60.0;
-    if (sscanf(cmd, "STEP,%[^,],%f", metodeStr, &rpmIn) >= 1) {
-      if (strncmp(metodeStr, "PSO", 3) == 0) {
+    char *token = strtok(cmd, ","); // Mengambil "STEP"
+    token = strtok(NULL, ",");       // Mengambil "PSO" atau "TE"
+    if (token != NULL) {
+      if (strncmp(token, "PSO", 3) == 0) {
         active_kp_l = PSO_KP_L; active_ki_l = PSO_KI_L;
         active_kp_r = PSO_KP_R; active_ki_r = PSO_KI_R;
         modeIsPSO = true;
@@ -246,19 +246,22 @@ void processCommand(char *cmd) {
         active_kp_r = TE_KP_R; active_ki_r = TE_KI_R;
         modeIsPSO = false;
       }
-
-      step_target_rpm = rpmIn;
-      modePengujian = 10;
-      stepAktif = false;
-      integral_L = 0; integral_R = 0;
-      setpoint_L = 0; setpoint_R = 0;
-      step_start_time = millis();
-
-      Serial.print(F("# PENGUJIAN : STEP RESPON "));
-      Serial.print(step_target_rpm, 0);
-      Serial.println(modeIsPSO ? F(" RPM (PI-PSO)") : F(" RPM (TRIAL-ERROR)"));
-      Serial.println(F("Time_s;Target_RPM_L;Actual_RPM_L;PWM_L;Error_L;Target_RPM_R;Actual_RPM_R;PWM_R;Error_R"));
     }
+    token = strtok(NULL, ",");       // Mengambil angka "60", "80", atau "100"
+    if (token != NULL) {
+      step_target_rpm = atof(token); // atof() 100% didukung Arduino Uno!
+    } else {
+      step_target_rpm = 60.0;
+    }
+    modePengujian = 10;
+    stepAktif = false;
+    integral_L = 0; integral_R = 0;
+    setpoint_L = 0; setpoint_R = 0;
+    step_start_time = millis();
+    Serial.print(F("# PENGUJIAN : STEP RESPON "));
+    Serial.print(step_target_rpm, 0);
+    Serial.println(modeIsPSO ? F(" RPM (PI-PSO)") : F(" RPM (TRIAL-ERROR)"));
+    Serial.println(F("Time_s;Target_RPM_L;Actual_RPM_L;PWM_L;Error_L;Target_RPM_R;Actual_RPM_R;PWM_R;Error_R"));
     return;
   }
 
