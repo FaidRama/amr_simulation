@@ -147,7 +147,7 @@ controller_server:
       Oscillation.oscillation_reset_time: -1.0
       Oscillation.x_only_threshold: 0.05
       BaseObstacle.scale: 0.05
-      PathAlign.scale: 16.0
+      PathAlign.scale: 10.0
       PathAlign.forward_point_distance: 0.20
       PathDist.scale: 24.0
       GoalDist.scale: 20.0
