@@ -148,11 +148,27 @@ class AMRBenchmark:
             print("[!] Data rekaman serial terlalu sedikit atau koneksi terputus.")
             return
 
-        # Simpan CSV dengan nama judul lengkap
+               # Simpan CSV lengkap dengan Data 9 Kolom + Tabel Rangkuman 5 Parameter
         filename_base = f"step_respon_{target_str}_{self.metode.lower()}_{self.kondisi}_{self.sesi}_{file_ts}"
         csv_path = os.path.join(self.output_dir, f"{filename_base}.csv")
         with open(csv_path, 'w', encoding='utf-8') as f:
             f.writelines(valid_csv_lines)
+            f.write("\n")
+            f.write("# ========================================================================\n")
+            f.write(f"# HASIL EVALUASI RESPON TRANSIEN MOTOR ({sp:.0f} RPM)\n")
+            f.write(f"# Metode  : {metode_nama}\n")
+            f.write(f"# Kondisi : {self.kondisi.upper().replace('_', ' ')} | {self.sesi.upper()}\n")
+            f.write(f"# Waktu   : {view_ts}\n")
+            f.write("# ========================================================================\n")
+            f.write("# Parameter Evaluasi;Motor Kiri;Motor Kanan;Satuan\n")
+            f.write(f"# 1. Nilai Puncak (Peak RPM);{res_L['peak']:.2f};{res_R['peak']:.2f};RPM\n")
+            f.write(f"# 2. Overshoot (Mp);{res_L['mp']:.2f}%;{res_R['mp']:.2f}%;%\n")
+            f.write(f"# 3. Rise Time (Tr 10%-90%);{res_L['tr']:.3f};{res_R['tr']:.3f};detik\n")
+            f.write(f"# 4. Settling Time (Ts +-5%);{res_L['ts']:.3f};{res_R['ts']:.3f};detik\n")
+            f.write(f"# 5. Steady-State Error (Ess);{res_L['ess']:.2f};{res_R['ess']:.2f};RPM\n")
+            f.write(f"#    - Persentase Galat Ess;{res_L['ess_pct']:.2f}%;{res_R['ess_pct']:.2f}%;%\n")
+            f.write(f"#    - RMSE Respon;{res_L['rmse']:.2f};{res_R['rmse']:.2f};RPM\n")
+            f.write("# ========================================================================\n")
 
         # Hitung 5 Metrik Evaluasi Transien
         t_arr = np.array(times)
