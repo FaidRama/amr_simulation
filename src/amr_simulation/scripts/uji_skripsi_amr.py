@@ -5,6 +5,15 @@
 PROGRAM PENGUJIAN SKRIPSI AMR-01 (INTERAKTIF & ALL-IN-ONE)
 Penyusun : Divala Zahra Oktavia (Teknik Komputer UNNES 2026)
 =============================================================================
+Fitur:
+  1. Pilih Metode Kontroler: PI-PSO atau PI Trial & Error
+  2. Pilih Target Kecepatan: 60, 80, 100 RPM
+  3. Merekam streaming 9 kolom data dari Arduino Uno
+  4. Menampilkan 5 Metrik Transien Tertulis: Peak RPM, Overshoot (Mp),
+     Rise Time (Tr), Settling Time (Ts), Steady-State Error (Ess), dan RMSE
+  5. Otomatis menyimpan file CSV (lengkap dengan data 9 kolom & tabel rangkuman 5 metrik)
+  6. Menghasilkan GAMBAR GRAFIK (.PNG) dengan judul RPM, metode, dan cap tanggal-jam.
+=============================================================================
 """
 
 import os
@@ -148,7 +157,16 @@ class AMRBenchmark:
             print("[!] Data rekaman serial terlalu sedikit atau koneksi terputus.")
             return
 
-               # Simpan CSV lengkap dengan Data 9 Kolom + Tabel Rangkuman 5 Parameter
+        # 1. Hitung 5 Metrik Evaluasi Transien DULU
+        t_arr = np.array(times)
+        al_arr = np.array(act_l)
+        ar_arr = np.array(act_r)
+
+        res_L = self.evaluasi_metrik(t_arr, al_arr, sp)
+        res_R = self.evaluasi_metrik(t_arr, ar_arr, sp)
+        metode_nama = "PI-PSO (Optimasi)" if self.metode == "PSO" else "PI Trial & Error"
+
+        # 2. Simpan CSV lengkap dengan Data 9 Kolom + Tabel Rangkuman 5 Parameter di Bawah
         filename_base = f"step_respon_{target_str}_{self.metode.lower()}_{self.kondisi}_{self.sesi}_{file_ts}"
         csv_path = os.path.join(self.output_dir, f"{filename_base}.csv")
         with open(csv_path, 'w', encoding='utf-8') as f:
@@ -170,16 +188,7 @@ class AMRBenchmark:
             f.write(f"#    - RMSE Respon;{res_L['rmse']:.2f};{res_R['rmse']:.2f};RPM\n")
             f.write("# ========================================================================\n")
 
-        # Hitung 5 Metrik Evaluasi Transien
-        t_arr = np.array(times)
-        al_arr = np.array(act_l)
-        ar_arr = np.array(act_r)
-
-        res_L = self.evaluasi_metrik(t_arr, al_arr, sp)
-        res_R = self.evaluasi_metrik(t_arr, ar_arr, sp)
-
-        # Cetak Hasil Tertulis di Layar Terminal
-        metode_nama = "PI-PSO (Optimasi)" if self.metode == "PSO" else "PI Trial & Error"
+        # 3. Cetak Hasil Tertulis di Layar Terminal
         print("\n" + "=" * 72)
         print(f"      HASIL EVALUASI RESPON TRANSIEN MOTOR ({sp:.0f} RPM)")
         print(f"  Metode  : {metode_nama}")
@@ -197,7 +206,7 @@ class AMRBenchmark:
         print(f"{'   - RMSE Respon':<32} | {res_L['rmse']:<14.2f} | {res_R['rmse']:<14.2f} | RPM")
         print("=" * 72)
 
-        # Buat Gambar Grafik PNG
+        # 4. Buat Gambar Grafik PNG
         png_path = os.path.join(self.output_dir, f"{filename_base}.png")
         self.simpan_grafik(t_arr, al_arr, ar_arr, sp, res_L, res_R, view_ts, png_path)
 
