@@ -28,7 +28,7 @@ Deskripsi:
      - Galat Orientasi Akhir (e_theta [deg] -> Toleransi kelulusan: <= 10.0° atau <= 3.0°)
      - Tingkat Keberhasilan Tiba di Titik Tujuan (Success Rate, SR [%])
   4. Penyimpanan Hasil:
-     - Tersimpan otomatis ke ~/hasil_pengujian_skripsi/skenario2_evaluasi_amcl_dinamis.csv
+     - Tersimpan otomatis ke <workspace>/hasil_data_pengujian_skripsi/pengujian_2_amcl/skenario2_evaluasi_amcl_dinamis.csv
 =============================================================================
 """
 
@@ -53,6 +53,7 @@ from nav_msgs.msg import Path, Odometry
 from action_msgs.msg import GoalStatus, GoalStatusArray
 from nav2_msgs.action import NavigateToPose
 from std_msgs.msg import String
+from tf2_ros import Buffer, TransformListener
 
 
 def euler_from_quaternion(q):
@@ -146,6 +147,27 @@ def timed_input(prompt: str, default_val: str = "", timeout_sec: float = 6.0, ca
     return default_val
 
 
+def resolve_thesis_output_dir(subfolder: str) -> str:
+    """Simpan hasil ke <workspace_root>/hasil_data_pengujian_skripsi/<subfolder>."""
+    for base in (os.path.dirname(os.path.abspath(__file__)), os.getcwd()):
+        cur = os.path.abspath(base)
+        while True:
+            if os.path.isdir(os.path.join(cur, '.git')) or (
+                os.path.basename(cur) != 'src'
+                and os.path.isdir(os.path.join(cur, 'src', 'amr_simulation'))
+                and os.path.isdir(os.path.join(cur, 'src', 'amr_dashboard'))
+            ):
+                return os.path.join(cur, 'hasil_data_pengujian_skripsi', subfolder)
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+    for ws in (os.path.expanduser('~/deliver_amr'), os.path.expanduser('~/Documents/amr_ws')):
+        if os.path.isdir(ws):
+            return os.path.join(ws, 'hasil_data_pengujian_skripsi', subfolder)
+    return os.path.join(os.getcwd(), 'hasil_data_pengujian_skripsi', subfolder)
+
+
 class EvaluasiAMCLDinamisNode(Node):
     def __init__(self):
         super().__init__('evaluasi_amcl_dinamis_node')
@@ -156,19 +178,30 @@ class EvaluasiAMCLDinamisNode(Node):
         self.pass_max_eyaw_deg = math.degrees(yaw_tol)
 
         # Direktori Output CSV
-        self.out_dir = os.path.expanduser('~/hasil_pengujian_skripsi')
+        self.out_dir = resolve_thesis_output_dir('pengujian_2_amcl')
         os.makedirs(self.out_dir, exist_ok=True)
         self.csv_path = os.path.join(self.out_dir, 'skenario2_evaluasi_amcl_dinamis.csv')
 
         # QoS
         reliable_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        tl_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE
+        )
         sensor_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
 
         # Action Client Nav2
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
 
+        # TF2 Listener (sinkron dengan pose real-time map->base_footprint yang dievaluasi Nav2)
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
         # Subscriptions
         self.amcl_sub = self.create_subscription(
+            PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, tl_qos)
+        self.amcl_sub_vol = self.create_subscription(
             PoseWithCovarianceStamped, '/amcl_pose', self.on_amcl_pose, reliable_qos)
         self.odom_sub = self.create_subscription(
             Odometry, '/odom', self.on_odom, reliable_qos)
@@ -246,6 +279,24 @@ class EvaluasiAMCLDinamisNode(Node):
             {'name': 'Titik Awal (0,0)', 'x': 0.0, 'y': 0.0, 'yaw': 0.0},
             {'name': 'Uji 1', 'x': 8.4, 'y': -2.55, 'yaw': 0.0}
         ]
+
+    def get_live_pose(self) -> dict:
+        """Membaca pose real-time dari TF map->base_footprint agar 100% sinkron dengan Nav2.
+        Fallback ke /amcl_pose jika TF belum tersedia.
+        """
+        try:
+            t = self.tf_buffer.lookup_transform('map', 'base_footprint', rclpy.time.Time())
+            tr = t.transform.translation
+            rot = t.transform.rotation
+            return {
+                'x': float(tr.x),
+                'y': float(tr.y),
+                'yaw': euler_from_quaternion(rot),
+            }
+        except Exception:
+            if self.current_pose:
+                return dict(self.current_pose)
+            return {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
 
     def on_amcl_pose(self, msg: PoseWithCovarianceStamped):
         p = msg.pose.pose.position
@@ -422,7 +473,7 @@ class EvaluasiAMCLDinamisNode(Node):
                     self.is_navigating = True
                     self.start_time = time.time()
                     self.actual_travel_dist = 0.0
-                    self.start_pose = dict(self.current_pose) if self.current_pose else {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+                    self.start_pose = self.get_live_pose()
                     if not self.active_goal:
                         if self.active_path and len(self.active_path.poses) > 0:
                             lp = self.active_path.poses[-1].pose
@@ -461,7 +512,7 @@ class EvaluasiAMCLDinamisNode(Node):
                     self.last_goal_id = None
                     end_time = time.time()
                     travel_time = end_time - (self.start_time or end_time)
-                    final_amcl = dict(self.current_pose) if self.current_pose else {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
+                    final_amcl = self.get_live_pose()
                     goal = dict(self.active_goal) if self.active_goal else {'name': 'Target', 'x': final_amcl['x'], 'y': final_amcl['y'], 'yaw': final_amcl['yaw']}
 
                     self.arrival_data = {
@@ -865,8 +916,9 @@ def main(args=None):
                             if now - node.last_terminal_log_time >= 0.5:
                                 node.last_terminal_log_time = now
                                 el = now - (node.start_time or now)
-                                cur_x = node.current_pose['x'] if node.current_pose else 0.0
-                                cur_y = node.current_pose['y'] if node.current_pose else 0.0
+                                live = node.get_live_pose()
+                                cur_x = live['x']
+                                cur_y = live['y']
                                 sig_xy = max(node.sigma_x, node.sigma_y) * 100.0
                                 sys.stdout.write(
                                     f"\r  ⏱️ [{el:4.1f}s] Speed: {node.current_speed:4.2f}m/s | "
@@ -921,8 +973,9 @@ def main(args=None):
                                 if now - node.last_terminal_log_time >= 0.5:
                                     node.last_terminal_log_time = now
                                     el = now - (node.start_time or now)
-                                    cur_x = node.current_pose['x'] if node.current_pose else 0.0
-                                    cur_y = node.current_pose['y'] if node.current_pose else 0.0
+                                    live = node.get_live_pose()
+                                    cur_x = live['x']
+                                    cur_y = live['y']
                                     sig_xy = max(node.sigma_x, node.sigma_y) * 100.0
                                     sys.stdout.write(
                                         f"\r  ⏱️ [{el:4.1f}s] Speed: {node.current_speed:4.2f}m/s | "

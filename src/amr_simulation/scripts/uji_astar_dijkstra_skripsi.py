@@ -528,7 +528,29 @@ class UjiAstarDijkstraNode(Node):
         self.costmap_received = False
 
         # Direktori Output CSV
-        self.output_dir = os.path.expanduser('~/hasil_pengujian_skripsi')
+        ws_root = None
+        for base in (os.path.dirname(os.path.abspath(__file__)), os.getcwd()):
+            cur = os.path.abspath(base)
+            while True:
+                if os.path.isdir(os.path.join(cur, '.git')) or (
+                    os.path.basename(cur) != 'src'
+                    and os.path.isdir(os.path.join(cur, 'src', 'amr_simulation'))
+                    and os.path.isdir(os.path.join(cur, 'src', 'amr_dashboard'))
+                ):
+                    ws_root = cur
+                    break
+                parent = os.path.dirname(cur)
+                if parent == cur:
+                    break
+                cur = parent
+            if ws_root:
+                break
+        if not ws_root:
+            for ws in (os.path.expanduser('~/deliver_amr'), os.path.expanduser('~/Documents/amr_ws')):
+                if os.path.isdir(ws):
+                    ws_root = ws
+                    break
+        self.output_dir = os.path.join(ws_root or os.getcwd(), 'hasil_data_pengujian_skripsi', 'pengujian_3_astar_dijkstra')
         os.makedirs(self.output_dir, exist_ok=True)
         self.csv_raw_path = os.path.join(self.output_dir, 'skenario3_evaluasi_astar_dijkstra.csv')
         self.csv_summary_path = os.path.join(self.output_dir, 'skenario3_summary_komparasi.csv')

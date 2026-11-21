@@ -28,20 +28,32 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-import rclpy
-from rclpy.node import Node
-from rclpy.executors import SingleThreadedExecutor
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from std_msgs.msg import String
-from sensor_msgs.msg import CompressedImage, Image
+try:
+    import rclpy
+    from rclpy.node import Node
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+    from std_msgs.msg import String
+    from sensor_msgs.msg import CompressedImage, Image
+    HAS_ROS2 = True
+except ImportError:
+    HAS_ROS2 = False
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-DEFAULT_MODEL = str(SCRIPT_DIR / "yolo11n.pt") if (SCRIPT_DIR / "yolo11n.pt").exists() else "yolo11n.pt"
+DEFAULT_MODEL = str(SCRIPT_DIR / "yolo11n-pose.pt") if (SCRIPT_DIR / "yolo11n-pose.pt").exists() else "yolo11n-pose.pt"
 
-from fsm import HumanAwareFSM, ProximityClassifier, Zone, State
+from fsm import (
+    HumanAwareFSM,
+    HumanActivityClassifier,
+    ProximityClassifier,
+    Activity,
+    Direction,
+    Zone,
+    State,
+)
 
 
 # ============================================================
@@ -166,8 +178,9 @@ class DistanceEstimator:
 
 def extract_persons(result, frame_w, frame_h, edge_margin=6):
     persons = []
+    has_kpts = result.keypoints is not None and len(result.keypoints.data) > 0
 
-    for box in result.boxes:
+    for i, box in enumerate(result.boxes):
         x1, y1, x2, y2 = box.xyxy[0].tolist()
 
         width = max(1.0, x2 - x1)
@@ -183,6 +196,10 @@ def extract_persons(result, frame_w, frame_h, edge_margin=6):
             or y2 >= frame_h - edge_margin
         )
 
+        kpts = None
+        if has_kpts and i < len(result.keypoints.data):
+            kpts = result.keypoints.data[i].cpu().numpy()
+
         persons.append({
             "x1": x1,
             "y1": y1,
@@ -196,6 +213,7 @@ def extract_persons(result, frame_w, frame_h, edge_margin=6):
             "cut_w": cut_w,
             "cut_h": cut_h,
             "at_edge": cut_w or cut_h,
+            "keypoints": kpts,
         })
 
     return persons
@@ -524,10 +542,10 @@ def main():
         default="height"
     )
 
-    parser.add_argument("--t-near-enter", type=float, default=0.95)
-    parser.add_argument("--t-near-exit", type=float, default=0.90)
-    parser.add_argument("--t-med-enter", type=float, default=0.85)
-    parser.add_argument("--t-med-exit", type=float, default=0.70)
+    parser.add_argument("--t-near-enter", type=float, default=0.85)
+    parser.add_argument("--t-near-exit", type=float, default=0.80)
+    parser.add_argument("--t-med-enter", type=float, default=0.60)
+    parser.add_argument("--t-med-exit", type=float, default=0.50)
     parser.add_argument("--debounce", type=int, default=8)
 
     parser.add_argument("--calib-h", default=DEFAULT_CALIB_H)
@@ -561,37 +579,46 @@ def main():
         parser.error("--corridor-width harus berada pada rentang 0.1 sampai 1.0")
 
     # --------------------------------------------------------
-    # ROS INITIALIZATION
+    # ROS INITIALIZATION (OPTIONAL ON STANDALONE LAPTOP)
     # --------------------------------------------------------
 
-    rclpy.init()
-    ros_node = Node("human_awareness_node")
+    use_ros_camera = args.source.lower() in ("ros", "topic")
+    if use_ros_camera and not HAS_ROS2:
+        raise RuntimeError(
+            "ROS 2 (rclpy) tidak tersedia di environment ini. "
+            "Gunakan '--source 0' untuk menguji langsung dengan kamera laptop!"
+        )
 
-    state_pub = ros_node.create_publisher(
-        String, "/human_state", 10
-    )
-    status_pub = ros_node.create_publisher(
-        String, "/human_status", 10
-    )
-
-    info_pub = ros_node.create_publisher(
-        String, args.info_topic, 10
-    )
-
+    ros_node = None
+    state_pub = None
+    status_pub = None
+    info_pub = None
     annotated_pub = None
     annotated_raw_pub = None
-    if args.publish_annotated:
-        annotated_pub = ros_node.create_publisher(
-            CompressedImage, args.annotated_topic, 1
+
+    if HAS_ROS2:
+        rclpy.init()
+        ros_node = Node("human_awareness_node")
+
+        state_pub = ros_node.create_publisher(
+            String, "/human_state", 10
         )
-        annotated_raw_pub = ros_node.create_publisher(
-            Image, "/camera/image_annotated", 1
+        status_pub = ros_node.create_publisher(
+            String, "/human_status", 10
         )
 
-    use_ros_camera = args.source.lower() in ("ros", "topic")
-    # Callback kamera hanya MENYIMPAN frame JPEG terbaru (murah).
-    # Decode + YOLO dilakukan di loop utama hanya untuk frame terbaru,
-    # jadi frame lama otomatis dilewati dan tidak menumpuk (anti-lag).
+        info_pub = ros_node.create_publisher(
+            String, args.info_topic, 10
+        )
+
+        if args.publish_annotated:
+            annotated_pub = ros_node.create_publisher(
+                CompressedImage, args.annotated_topic, 1
+            )
+            annotated_raw_pub = ros_node.create_publisher(
+                Image, "/camera/image_annotated", 1
+            )
+
     latest = {"data": None, "seq": 0}
     frame_lock = threading.Lock()
     executor = None
@@ -599,14 +626,13 @@ def main():
     camera_sub = None
     cap = None
 
-    # Latest-frame QoS: hindari antrean gambar lama
-    camera_qos = QoSProfile(
-        history=HistoryPolicy.KEEP_LAST,
-        depth=1,
-        reliability=ReliabilityPolicy.BEST_EFFORT
-    )
-
     if use_ros_camera:
+        # Latest-frame QoS: hindari antrean gambar lama
+        camera_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT
+        )
         def camera_callback(msg):
             if not msg.format.lower().startswith("jpeg"):
                 ros_node.get_logger().warning(
@@ -657,8 +683,10 @@ def main():
             cap = cv2.VideoCapture(source)
 
         if not cap.isOpened():
-            ros_node.destroy_node()
-            rclpy.shutdown()
+            if ros_node is not None:
+                ros_node.destroy_node()
+            if HAS_ROS2 and rclpy.ok():
+                rclpy.shutdown()
             raise RuntimeError(
                 f"Gagal membuka sumber gambar: {source}"
             )
@@ -692,6 +720,7 @@ def main():
         fsm = HumanAwareFSM(
             debounce_frames=args.debounce
         )
+        activity_classifier = HumanActivityClassifier()
 
         model = YOLO(args.model)
 
@@ -724,15 +753,17 @@ def main():
             "frame", "timestamp", "n_persons", "human_detected",
             "bbox_w_px", "bbox_h_px", "ratio_w", "ratio_h",
             "active_feature", "distance_est_m", "at_edge",
-            "confidence", "zone", "state", "infer_ms", "fps",
-            "true_distance_m"
+            "confidence", "zone", "activity", "direction", "speed_m_s",
+            "state", "infer_ms", "fps", "true_distance_m"
         ])
 
     except Exception:
         if cap is not None:
             cap.release()
-        ros_node.destroy_node()
-        rclpy.shutdown()
+        if ros_node is not None:
+            ros_node.destroy_node()
+        if HAS_ROS2 and rclpy.ok():
+            rclpy.shutdown()
         raise
 
     # --------------------------------------------------------
@@ -748,12 +779,15 @@ def main():
     t_start = time.time()
     last_no_frame_log = 0.0
 
-    ros_node.get_logger().info(
-        "Human-Aware berjalan. Output: /human_state"
-    )
+    if ros_node is not None:
+        ros_node.get_logger().info(
+            "Human-Aware berjalan. Output: /human_state"
+        )
+    else:
+        print("[INFO] Human-Aware Standalone (Kamera Lokal) berjalan. Tekan 'q' untuk berhenti.")
 
     try:
-        while rclpy.ok():
+        while (rclpy.ok() if HAS_ROS2 else True):
             t_frame = time.perf_counter()
 
             if use_ros_camera:
@@ -792,9 +826,12 @@ def main():
                 ret, frame = cap.read()
 
                 if not ret:
-                    ros_node.get_logger().warning(
-                        "Sumber gambar berhenti atau frame gagal dibaca."
-                    )
+                    if ros_node is not None:
+                        ros_node.get_logger().warning(
+                            "Sumber gambar berhenti atau frame gagal dibaca."
+                        )
+                    else:
+                        print("[INFO] Sumber gambar selesai / frame berhenti.")
                     break
 
             frame_count += 1
@@ -930,46 +967,87 @@ def main():
 
                 target["dist"] = dist_smooth
 
-            # 5. PROXIMITY CLASSIFICATION AND FSM
-            # SAFE_STOP berlaku di mana pun: cek semua manusia untuk zona NEAR.
-            # REDUCED_SPEED hanya boleh dipicu target yang masuk koridor.
-            near_person_outside_or_inside = any(
-                person["r"] >= args.t_near_enter
-                for person in persons
-            )
-
-            if near_person_outside_or_inside or force_near:
+            # 5. PROXIMITY CLASSIFICATION, ACTIVITY RECOGNITION & FSM
+            # Evaluasi zona jarak murni berdasarkan target di koridor lintasan robot:
+            # Orang di luar koridor (seperti teman duduk di kursi samping) tidak boleh mengotori zona target koridor.
+            if target is not None:
                 zone = classifier.update(
                     active_ratio,
-                    force_near=True
+                    force_near=force_near
                 )
-            elif target is None:
-                # Tidak ada manusia di koridor dan tidak ada manusia NEAR.
-                # Jangan biarkan MEDIUM lama bertahan hanya karena hysteresis.
-                zone = Zone.FAR
             else:
-                # Target ada di koridor: zona FAR/MEDIUM/NEAR normal dari classifier.
-                zone = classifier.update(
-                    active_ratio,
-                    force_near=False
-                )
+                classifier.reset()
+                zone = Zone.NONE
 
-            state = fsm.update(zone)
+            activity = Activity.NONE
+            direction = Direction.UNKNOWN
+            speed_m_s = 0.0
+
+            if target is not None:
+                person_cx = (target["x1"] + target["x2"]) / 2.0
+                activity, direction, speed_m_s = activity_classifier.classify(
+                    keypoints=target.get("keypoints"),
+                    bbox_w=target["w"],
+                    bbox_h=target["h"],
+                    center_x=person_cx,
+                    distance=dist_smooth,
+                    timestamp=time.time(),
+                    frame_w=float(width),
+                )
+                state = fsm.update(
+                    zone=zone,
+                    activity=activity,
+                    in_corridor=True,
+                    distance=dist_smooth,
+                    direction=direction,
+                )
+            elif persons:
+                # Ada orang di luar koridor: klasifikasikan postur orang terbesar untuk informasi,
+                # namun in_corridor=False sehingga FSM mempertahankan NORMAL (kecuali NEAR darurat).
+                outside_p = max(persons, key=lambda p: p["w"] * p["h"])
+                outside_cx = (outside_p["x1"] + outside_p["x2"]) / 2.0
+                activity, direction, speed_m_s = activity_classifier.classify(
+                    keypoints=outside_p.get("keypoints"),
+                    bbox_w=outside_p["w"],
+                    bbox_h=outside_p["h"],
+                    center_x=outside_cx,
+                    distance=outside_p["dist"],
+                    timestamp=time.time(),
+                    frame_w=float(width),
+                )
+                state = fsm.update(
+                    zone=zone,
+                    activity=activity,
+                    in_corridor=False,
+                    distance=outside_p["dist"],
+                    direction=direction,
+                )
+            else:
+                activity_classifier.reset()
+                state = fsm.update(
+                    zone=zone,
+                    activity=Activity.NONE,
+                    in_corridor=False,
+                    distance=None,
+                    direction=Direction.UNKNOWN,
+                )
 
             # 6. PUBLISH STATE ONCE PER FRAME
-            state_msg = String()
-            state_msg.data = state.value
-            state_pub.publish(state_msg)
+            if state_pub is not None:
+                state_msg = String()
+                state_msg.data = state.value
+                state_pub.publish(state_msg)
 
             # Publish juga ke /human_status untuk dashboard AMR
-            status_msg = String()
-            if target is not None:
-                status_msg.data = state.value
-            elif persons:
-                status_msg.data = "HUMAN_OUTSIDE_CORRIDOR"
-            else:
-                status_msg.data = "NO_HUMAN"
-            status_pub.publish(status_msg)
+            if status_pub is not None:
+                status_msg = String()
+                if target is not None:
+                    status_msg.data = state.value
+                elif persons:
+                    status_msg.data = "HUMAN_OUTSIDE_CORRIDOR"
+                else:
+                    status_msg.data = "NO_HUMAN"
+                status_pub.publish(status_msg)
 
             # 7. FPS
             inst_fps = 1.0 / max(
@@ -1006,6 +1084,9 @@ def main():
                 "boxes": boxes_data,
                 "state": state.value,
                 "zone": zone.value,
+                "activity": activity.value,
+                "direction": direction.value,
+                "speed_m_s": speed_m_s,
                 "response": STATE_RESPONSE.get(state, ""),
                 "persons": len(persons),
                 "corridor_persons": len(corridor_persons),
@@ -1046,9 +1127,10 @@ def main():
                     "at_edge": bool(target["at_edge"]),
                 })
 
-            info_msg = String()
-            info_msg.data = json.dumps(info)
-            info_pub.publish(info_msg)
+            if info_pub is not None:
+                info_msg = String()
+                info_msg.data = json.dumps(info)
+                info_pub.publish(info_msg)
 
             # 8. CSV LOGGING
             writer.writerow([
@@ -1066,6 +1148,9 @@ def main():
                 bool(target and target["at_edge"]),
                 round(target["conf"], 3) if target else 0.0,
                 zone.value,
+                activity.value,
+                direction.value,
+                speed_m_s,
                 state.value,
                 round(infer_ms, 1),
                 round(fps_ema, 1),
@@ -1190,6 +1275,12 @@ def main():
                         ("Confidence", "-", GRAY),
                     ]
 
+                act_color = YELLOW if activity == Activity.WALKING else (GREEN if activity != Activity.NONE else GRAY)
+                rows.append((
+                    "Aktivitas / Arah",
+                    f"{activity.value} ({direction.value})" if activity != Activity.NONE else "-",
+                    act_color
+                ))
                 rows.append((
                     "FPS / Inferensi",
                     f"{fps_ema:.1f} / {infer_ms:.0f} ms",
@@ -1283,9 +1374,10 @@ def main():
         if spin_thread is not None:
             spin_thread.join(timeout=1.0)
 
-        ros_node.destroy_node()
+        if ros_node is not None:
+            ros_node.destroy_node()
 
-        if rclpy.ok():
+        if HAS_ROS2 and rclpy.ok():
             rclpy.shutdown()
 
         elapsed = time.time() - t_start

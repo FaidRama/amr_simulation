@@ -6,23 +6,14 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     """
-    Launch file untuk AMR Dashboard (Mendukung Mode Simulasi & Mode Robot Nyata).
+    Launch file untuk AMR Dashboard (Robot Fisik).
     Contoh penggunaan:
-    - Mode Robot Nyata (Real):
-      ros2 launch amr_dashboard dashboard.launch.py mode:=real use_sim_time:=False
-    - Mode Simulasi (Gazebo):
-      ros2 launch amr_dashboard dashboard.launch.py mode:=sim use_sim_time:=True
+      ros2 launch amr_dashboard dashboard.launch.py
     """
-    mode_arg = DeclareLaunchArgument(
-        'mode',
-        default_value='real',
-        description='Mode operasi awal dashboard: "sim" (Gazebo) atau "real" (Robot Fisik)'
-    )
-
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time',
         default_value='False',
-        description='Gunakan waktu simulasi Gazebo (True untuk sim, False untuk real)'
+        description='Gunakan clock ROS2 eksternal (default False untuk robot fisik)'
     )
 
     # 1. Waypoint Manager Node
@@ -43,7 +34,6 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'use_sim_time': LaunchConfiguration('use_sim_time'),
-            'initial_mode': LaunchConfiguration('mode'),
         }]
     )
 
@@ -63,7 +53,6 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        mode_arg,
         use_sim_time_arg,
         waypoint_manager_node,
         robot_voice_node,
