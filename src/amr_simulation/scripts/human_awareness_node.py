@@ -49,6 +49,7 @@ from fsm import (
     HumanAwareFSM,
     HumanActivityClassifier,
     ProximityClassifier,
+    SimplePersonTracker,
     Activity,
     Direction,
     Zone,
@@ -270,6 +271,23 @@ def draw_panel(img, x, y, width, height, alpha=0.55):
     )
 
 
+def _format_behavior_tag(person) -> str:
+    act = person.get("activity")
+    dr = person.get("direction")
+    spd = person.get("speed_m_s", 0.0)
+    if act is None or act == Activity.NONE:
+        return ""
+    act_str = act.value if hasattr(act, "value") else str(act)
+    dr_str = dr.value if hasattr(dr, "value") else str(dr)
+    if act_str == "WALKING":
+        if dr_str == "OPPOSITE_DIRECTION":
+            return f"WALKING (MENDEKAT) {spd:.2f}m/s"
+        if dr_str == "SAME_DIRECTION":
+            return f"WALKING (MENJAUH) {spd:.2f}m/s"
+        return f"WALKING {spd:.2f}m/s"
+    return act_str
+
+
 def draw_person(
     frame, person, is_target, zone,
     distance, in_range, calibrated, scale
@@ -287,6 +305,7 @@ def draw_person(
         if distance is not None
         else "-"
     )
+    behavior_tag = _format_behavior_tag(person)
 
     feature_cut = (
         person["cut_h"]
@@ -306,8 +325,10 @@ def draw_person(
             f"TARGET [{person['feat'].upper()}] "
             f"{distance_text}"
         )
+        if behavior_tag:
+            label += f" | {behavior_tag}"
 
-        label_scale = 0.65 * scale
+        label_scale = 0.60 * scale
         tw, th, base = text_size(label, label_scale, 2)
 
         top = max(0, y1 - th - base - 8)
@@ -345,9 +366,10 @@ def draw_person(
             frame, (x1, y1), (x2, y2), GRAY, 1
         )
 
+        other_label = f"{distance_text} | {behavior_tag}" if behavior_tag else distance_text
         put_text(
             frame,
-            distance_text,
+            other_label,
             (x1 + 3, max(14, y1 - 6)),
             0.5 * scale,
             GRAY
@@ -721,6 +743,7 @@ def main():
             debounce_frames=args.debounce
         )
         activity_classifier = HumanActivityClassifier()
+        person_tracker = SimplePersonTracker()
 
         model = YOLO(args.model)
 
@@ -859,6 +882,8 @@ def main():
             persons = extract_persons(
                 result, width, height
             )
+            now_ts = time.time()
+            person_tracker.assign_ids(persons, now_ts)
 
             for person in persons:
                 person["feat"] = pick_feature(
@@ -991,21 +1016,44 @@ def main():
                     force_near=False
                 )
 
+            # Klasifikasikan aktivitas & arah gerak untuk SETIAP bounding box manusia
+            for person in persons:
+                person_cx = (person["x1"] + person["x2"]) / 2.0
+                p_act, p_dir, p_spd = activity_classifier.classify(
+                    keypoints=person.get("keypoints"),
+                    bbox_w=person["w"],
+                    bbox_h=person["h"],
+                    center_x=person_cx,
+                    distance=person["dist"],
+                    timestamp=now_ts,
+                    frame_w=float(width),
+                    track_id=person["track_id"],
+                )
+                person["activity"] = p_act
+                person["direction"] = p_dir
+                person["speed_m_s"] = p_spd
+                person["zone"] = (
+                    zone.value
+                    if (target is not None and person is target)
+                    else (
+                        Zone.NEAR.value if person["r"] >= args.t_near_enter
+                        else (Zone.MEDIUM.value if person["r"] >= args.t_med_enter else Zone.FAR.value)
+                    )
+                )
+
+            activity_classifier.prune_inactive(
+                [person["track_id"] for person in persons],
+                now_ts,
+            )
+
             activity = Activity.NONE
             direction = Direction.UNKNOWN
             speed_m_s = 0.0
 
             if target is not None:
-                person_cx = (target["x1"] + target["x2"]) / 2.0
-                activity, direction, speed_m_s = activity_classifier.classify(
-                    keypoints=target.get("keypoints"),
-                    bbox_w=target["w"],
-                    bbox_h=target["h"],
-                    center_x=person_cx,
-                    distance=dist_smooth,
-                    timestamp=time.time(),
-                    frame_w=float(width),
-                )
+                activity = target["activity"]
+                direction = target["direction"]
+                speed_m_s = target["speed_m_s"]
                 state = fsm.update(
                     zone=zone,
                     activity=activity,
@@ -1014,19 +1062,12 @@ def main():
                     direction=direction,
                 )
             elif persons:
-                # Ada orang di luar koridor: klasifikasikan postur orang terbesar untuk informasi,
+                # Ada orang di luar koridor: ambil postur orang terbesar untuk informasi,
                 # namun in_corridor=False sehingga FSM mempertahankan NORMAL (kecuali NEAR darurat).
                 outside_p = max(persons, key=lambda p: p["w"] * p["h"])
-                outside_cx = (outside_p["x1"] + outside_p["x2"]) / 2.0
-                activity, direction, speed_m_s = activity_classifier.classify(
-                    keypoints=outside_p.get("keypoints"),
-                    bbox_w=outside_p["w"],
-                    bbox_h=outside_p["h"],
-                    center_x=outside_cx,
-                    distance=outside_p["dist"],
-                    timestamp=time.time(),
-                    frame_w=float(width),
-                )
+                activity = outside_p["activity"]
+                direction = outside_p["direction"]
+                speed_m_s = outside_p["speed_m_s"]
                 state = fsm.update(
                     zone=zone,
                     activity=activity,
@@ -1078,14 +1119,19 @@ def main():
             for p in persons:
                 is_tgt = bool(target is not None and p is target)
                 boxes_data.append({
+                    "track_id": int(p["track_id"]),
                     "x1": round(float(p["x1"]), 1),
                     "y1": round(float(p["y1"]), 1),
                     "x2": round(float(p["x2"]), 1),
                     "y2": round(float(p["y2"]), 1),
                     "conf": round(float(p["conf"]), 2),
                     "is_target": is_tgt,
-                    "dist": round(float(dist_smooth), 2) if (is_tgt and dist_smooth is not None) else None,
-                    "zone": zone.value if is_tgt else "NONE"
+                    "in_corridor": bool(p["in_corridor"]),
+                    "dist": round(float(p["dist"]), 2) if p.get("dist") is not None else None,
+                    "zone": p.get("zone", "NONE"),
+                    "activity": p["activity"].value,
+                    "direction": p["direction"].value,
+                    "speed_m_s": p["speed_m_s"],
                 })
 
             info = {

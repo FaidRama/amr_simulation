@@ -110,10 +110,96 @@ class ProximityClassifier:
         return self.current_zone
 
 
+class SimplePersonTracker:
+    """
+    Pelacak ID orang ringan antar-frame (tanpa dependensi eksternal) berbasis IoU
+    dan jarak pusat bounding box agar setiap orang mempertahankan riwayat geraknya.
+    """
+    def __init__(self, max_age_s: float = 1.0, min_iou: float = 0.15, max_center_dist_ratio: float = 0.70):
+        self.max_age_s = max_age_s
+        self.min_iou = min_iou
+        self.max_center_dist_ratio = max_center_dist_ratio
+        self._next_id = 1
+        self._tracks = {}  # track_id -> {'x1','y1','x2','y2','cx','cy','w','h','t'}
+
+    def reset(self):
+        self._next_id = 1
+        self._tracks.clear()
+
+    @staticmethod
+    def _iou(a, b) -> float:
+        ix1 = max(a["x1"], b["x1"])
+        iy1 = max(a["y1"], b["y1"])
+        ix2 = min(a["x2"], b["x2"])
+        iy2 = min(a["y2"], b["y2"])
+        iw = max(0.0, ix2 - ix1)
+        ih = max(0.0, iy2 - iy1)
+        inter = iw * ih
+        if inter <= 0.0:
+            return 0.0
+        area_a = max(1.0, (a["x2"] - a["x1"]) * (a["y2"] - a["y1"]))
+        area_b = max(1.0, (b["x2"] - b["x1"]) * (b["y2"] - b["y1"]))
+        return inter / (area_a + area_b - inter)
+
+    def assign_ids(self, persons, timestamp: float):
+        """Tetapkan `track_id` pada tiap dict di `persons` secara in-place."""
+        expired = [tid for tid, tr in self._tracks.items() if (timestamp - tr["t"]) > self.max_age_s]
+        for tid in expired:
+            del self._tracks[tid]
+
+        if not persons:
+            return
+
+        candidates = []
+        for idx, p in enumerate(persons):
+            pcx = (p["x1"] + p["x2"]) / 2.0
+            pcy = (p["y1"] + p["y2"]) / 2.0
+            for tid, tr in self._tracks.items():
+                iou = self._iou(p, tr)
+                norm_dist = math.hypot(
+                    (pcx - tr["cx"]) / max(p["w"], tr["w"], 1.0),
+                    (pcy - tr["cy"]) / max(p["h"], tr["h"], 1.0),
+                )
+                if iou >= self.min_iou or norm_dist <= self.max_center_dist_ratio:
+                    score = iou - 0.35 * norm_dist
+                    candidates.append((score, idx, tid))
+
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        matched_persons = set()
+        matched_tracks = set()
+
+        for _, idx, tid in candidates:
+            if idx in matched_persons or tid in matched_tracks:
+                continue
+            matched_persons.add(idx)
+            matched_tracks.add(tid)
+            p = persons[idx]
+            p["track_id"] = tid
+            self._tracks[tid] = {
+                "x1": p["x1"], "y1": p["y1"], "x2": p["x2"], "y2": p["y2"],
+                "cx": (p["x1"] + p["x2"]) / 2.0,
+                "cy": (p["y1"] + p["y2"]) / 2.0,
+                "w": p["w"], "h": p["h"], "t": timestamp,
+            }
+
+        for idx, p in enumerate(persons):
+            if idx in matched_persons:
+                continue
+            tid = self._next_id
+            self._next_id += 1
+            p["track_id"] = tid
+            self._tracks[tid] = {
+                "x1": p["x1"], "y1": p["y1"], "x2": p["x2"], "y2": p["y2"],
+                "cx": (p["x1"] + p["x2"]) / 2.0,
+                "cy": (p["y1"] + p["y2"]) / 2.0,
+                "w": p["w"], "h": p["h"], "t": timestamp,
+            }
+
+
 class HumanActivityClassifier:
     """
     Klasifikasi 3 Aktivitas Manusia (STANDING, WALKING, SITTING) dan Arah Gerak
-    menggunakan 17 Keypoints YOLO11n-Pose + pelacakan kecepatan temporal.
+    menggunakan 17 Keypoints YOLO11n-Pose + pelacakan kecepatan temporal per individu.
     """
     def __init__(self, history_size: int = 10, standing_speed_thresh: float = 0.22,
                  sitting_knee_thresh: float = 135.0):
@@ -121,9 +207,28 @@ class HumanActivityClassifier:
         self.standing_speed_thresh = standing_speed_thresh
         self.sitting_knee_thresh = sitting_knee_thresh
         self.history = []
+        self.histories = {}
+        self.last_seen = {}
 
-    def reset(self):
-        self.history.clear()
+    def reset(self, track_id: Optional[int] = None):
+        if track_id is None:
+            self.history.clear()
+            self.histories.clear()
+            self.last_seen.clear()
+        else:
+            self.histories.pop(track_id, None)
+            self.last_seen.pop(track_id, None)
+
+    def prune_inactive(self, active_ids, now_ts: float, max_age: float = 1.5):
+        """Hapus riwayat track_id yang sudah tidak terlihat melebihi max_age detik."""
+        active_set = set(active_ids)
+        stale = [
+            tid for tid, ts in self.last_seen.items()
+            if tid not in active_set and (now_ts - ts) > max_age
+        ]
+        for tid in stale:
+            self.histories.pop(tid, None)
+            self.last_seen.pop(tid, None)
 
     @staticmethod
     def calculate_angle(p1, p2, p3) -> float:
@@ -190,30 +295,37 @@ class HumanActivityClassifier:
         center_x: float,
         distance: Optional[float],
         timestamp: float,
-        frame_w: float = 640.0
+        frame_w: float = 640.0,
+        track_id: Optional[int] = None,
     ):
-        """Mengembalikan (Activity, Direction, speed_m_s)."""
+        """Mengembalikan (Activity, Direction, speed_m_s) untuk target atau track_id tertentu."""
         if distance is None:
-            self.reset()
+            self.reset(track_id)
             return Activity.NONE, Direction.UNKNOWN, 0.0
 
-        self.history.append({'t': timestamp, 'dist': distance, 'cx': center_x})
-        if len(self.history) > self.history_size:
-            self.history.pop(0)
+        if track_id is None:
+            hist = self.history
+        else:
+            hist = self.histories.setdefault(track_id, [])
+            self.last_seen[track_id] = timestamp
+
+        hist.append({'t': timestamp, 'dist': distance, 'cx': center_x})
+        if len(hist) > self.history_size:
+            hist.pop(0)
 
         if self.detect_sitting(keypoints, bbox_w, bbox_h):
             return Activity.SITTING, Direction.STATIONARY, 0.0
 
-        if len(self.history) < 3:
+        if len(hist) < 3:
             return Activity.STANDING, Direction.STATIONARY, 0.0
 
-        dt = self.history[-1]['t'] - self.history[0]['t']
+        dt = hist[-1]['t'] - hist[0]['t']
         if dt < 0.10:
             return Activity.STANDING, Direction.STATIONARY, 0.0
 
-        dD = self.history[-1]['dist'] - self.history[0]['dist']
+        dD = hist[-1]['dist'] - hist[0]['dist']
         radial_speed = dD / dt
-        dcx_ratio = (self.history[-1]['cx'] - self.history[0]['cx']) / max(frame_w, 1.0)
+        dcx_ratio = (hist[-1]['cx'] - hist[0]['cx']) / max(frame_w, 1.0)
         lateral_speed = (dcx_ratio * distance) / dt
         total_speed = math.hypot(radial_speed, lateral_speed)
 
