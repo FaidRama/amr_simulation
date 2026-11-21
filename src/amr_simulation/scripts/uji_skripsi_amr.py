@@ -5,15 +5,6 @@
 PROGRAM PENGUJIAN SKRIPSI AMR-01 (INTERAKTIF & ALL-IN-ONE)
 Penyusun : Divala Zahra Oktavia (Teknik Komputer UNNES 2026)
 =============================================================================
-Fitur:
-  1. Pilih Metode Kontroler: PI-PSO atau PI Trial & Error
-  2. Pilih Target Kecepatan: 60, 80, 100 RPM
-  3. Merekam streaming 9 kolom data dari Arduino Uno
-  4. Menampilkan 5 Metrik Transien Tertulis: Peak RPM, Overshoot (Mp),
-     Rise Time (Tr), Settling Time (Ts), Steady-State Error (Ess), dan RMSE
-  5. Otomatis menyimpan file CSV dan menghasilkan GAMBAR GRAFIK (.PNG)
-     dengan judul RPM, metode, dan cap tanggal-jam.
-=============================================================================
 """
 
 import os
@@ -48,7 +39,7 @@ class AMRBenchmark:
             self.output_dir = "."
 
     def cari_port(self):
-        for p in ['/dev/ttyACM0', '/dev/arduino', '/dev/ttyACM1', '/dev/ttyUSB0', 'COM3', 'COM4']:
+        for p in ['/dev/arduino', '/dev/ttyACM0', '/dev/ttyACM1', '/dev/ttyUSB0', 'COM3', 'COM4']:
             if os.path.exists(p):
                 return p
         return None
@@ -101,7 +92,7 @@ class AMRBenchmark:
 
         port = self.cari_port()
         if not port:
-            print("[!] Port Arduino tidak ditemukan di /dev/ttyACM0 maupun /dev/arduino.")
+            print("[!] Port Arduino tidak ditemukan di /dev/arduino maupun /dev/ttyACM0.")
             return
 
         print(f"[*] Menghubungkan ke Arduino di {port}...")
@@ -114,7 +105,7 @@ class AMRBenchmark:
         time.sleep(2.0)
         ser.reset_input_buffer()
 
-        # Kirim perintah format: "STEP,<METODE>,<RPM>\n"
+        # Kirim perintah: "STEP,<METODE>,<RPM>\n"
         cmd = f"STEP,{self.metode},{int(sp)}\n"
         print(f"[*] Mengirim perintah ke Arduino: {cmd.strip()}")
         ser.write(cmd.encode())
