@@ -352,8 +352,8 @@ void loop() {
     static float rpm_ctrl_L = 0.0, rpm_ctrl_R = 0.0;
     float rpm_raw_L = ((float)dC_L / CPR_WHEEL) * (60.0 / DT);
     float rpm_raw_R = ((float)dC_R / CPR_WHEEL) * (60.0 / DT);
-    rpm_ctrl_L = (0.55 * rpm_raw_L) + (0.45 * rpm_ctrl_L);
-    rpm_ctrl_R = (0.55 * rpm_raw_R) + (0.45 * rpm_ctrl_R);
+    rpm_ctrl_L = (0.25 * rpm_raw_L) + (0.75 * rpm_ctrl_L);
+    rpm_ctrl_R = (0.25 * rpm_raw_R) + (0.75 * rpm_ctrl_R);
 
     rpm_L = rpm_ctrl_L;
     rpm_R = rpm_ctrl_R;
