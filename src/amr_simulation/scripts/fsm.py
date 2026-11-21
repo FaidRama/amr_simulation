@@ -253,17 +253,17 @@ class HumanActivityClassifier:
             r_hip, r_knee, r_ankle = keypoints[12], keypoints[14], keypoints[16]
 
             angles = []
-            if l_hip[2] >= 0.25 and l_knee[2] >= 0.25 and l_ankle[2] >= 0.25:
+            if l_hip[2] >= 0.20 and l_knee[2] >= 0.20 and l_ankle[2] >= 0.20:
                 angles.append(self.calculate_angle(l_hip[:2], l_knee[:2], l_ankle[:2]))
-            if r_hip[2] >= 0.25 and r_knee[2] >= 0.25 and r_ankle[2] >= 0.25:
+            if r_hip[2] >= 0.20 and r_knee[2] >= 0.20 and r_ankle[2] >= 0.20:
                 angles.append(self.calculate_angle(r_hip[:2], r_knee[:2], r_ankle[:2]))
 
             if angles and min(angles) < self.sitting_knee_thresh:
                 return True
 
-            if (l_hip[2] >= 0.3 and l_knee[2] >= 0.3) or (r_hip[2] >= 0.3 and r_knee[2] >= 0.3):
-                dy = abs(l_hip[1] - l_knee[1]) if l_hip[2] >= 0.3 and l_knee[2] >= 0.3 else abs(r_hip[1] - r_knee[1])
-                dx = abs(l_hip[0] - l_knee[0]) if l_hip[2] >= 0.3 and l_knee[2] >= 0.3 else abs(r_hip[0] - r_knee[0])
+            if (l_hip[2] >= 0.20 and l_knee[2] >= 0.20) or (r_hip[2] >= 0.20 and r_knee[2] >= 0.20):
+                dy = abs(l_hip[1] - l_knee[1]) if l_hip[2] >= 0.20 and l_knee[2] >= 0.20 else abs(r_hip[1] - r_knee[1])
+                dx = abs(l_hip[0] - l_knee[0]) if l_hip[2] >= 0.20 and l_knee[2] >= 0.20 else abs(r_hip[0] - r_knee[0])
                 if dx > 1.1 * dy:
                     return True
 
@@ -283,9 +283,10 @@ class HumanActivityClassifier:
                 if leg_h / torso_h < 1.35:
                     return True
 
-        # Fallback rasio aspek: hanya postur duduk jelas yang rasio H/W < 1.40
+        # Fallback rasio aspek: orang duduk di kursi memiliki rasio H/W < 1.50
+        # (orang dewasa berdiri tegak di koridor memiliki rasio H/W > 2.0)
         aspect_ratio = bbox_h / max(bbox_w, 1.0)
-        return aspect_ratio < 1.40
+        return aspect_ratio < 1.50
 
     def classify(
         self,

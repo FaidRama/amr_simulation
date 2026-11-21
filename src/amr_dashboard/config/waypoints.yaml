@@ -15,6 +15,18 @@ map_configs:
       y: 0.0
       yaw: 0.0
     predefined_points: []
+  digital_center_l1_2.yaml:
+    home_position:
+      x: 0.0
+      y: 0.0
+      yaw: 0.0
+    predefined_points: []
+  live:
+    home_position:
+      x: 0.0
+      y: 0.0
+      yaw: 0.0
+    predefined_points: []
   peta_dc.yaml:
     home_position:
       x: 0.0
@@ -39,7 +51,7 @@ profiles:
       x: 0.0
       y: 0.0
       yaw: 0.0
-    map_file: digital_center_l1.yaml
+    map_file: live
     max_angular_speed: 0.6
     max_linear_speed: 0.35
     predefined_points: []
