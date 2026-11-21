@@ -37,9 +37,9 @@ const byte PIN_ENCB_R = A1;
 
 // ====================== 2. OPSI INVERT ARAH ==============================
 const bool INVERT_MOTOR_L = false;
-const bool INVERT_MOTOR_R = true;
+const bool INVERT_MOTOR_R = false;
 const bool INVERT_ENC_L   = true;
-const bool INVERT_ENC_R   = true;
+const bool INVERT_ENC_R   = false;
 
 // ====================== 3. SPESIFIKASI FISIK ROBOT =======================
 const float WHEEL_DIAMETER = 0.127; // meter (5 inci = 0.127 m)
