@@ -5,11 +5,11 @@
 PROGRAM PENGUJIAN SKRIPSI AMR-01 (INTERAKTIF & ALL-IN-ONE)
 Penyusun : Divala Zahra Oktavia (Teknik Komputer UNNES 2026)
 =============================================================================
-Fitur:
-  [1] Uji Step Response Motor (60, 80, 100 RPM) + Buat Grafik PNG + CSV
-  [2] Uji Odometri: Gerak Lurus 2.0 Meter (Hitung Error Posisi cm & %)
-  [3] Uji Odometri: Rotasi di Tempat 90°, 180°, 360° (Hitung Error Sudut & %)
-  [4] Uji Odometri: Lintasan Persegi Tertutup (4 x 2m = 8m / UMBmark)
+Fitur Lengkap (Semua Menghasilkan File CSV Otomatis):
+  [1] Uji Step Response Motor (60, 80, 100 RPM) + Grafik PNG + CSV
+  [2] Uji Odometri: Gerak Lurus 2.0 Meter (Input Δx cm & Δy cm) + CSV
+  [3] Uji Odometri: Rotasi di Tempat 90°, 180°, 360° + CSV
+  [4] Uji Odometri: Lintasan Persegi Tertutup (4 x 2m = 8m / UMBmark) + CSV
 =============================================================================
 """
 
@@ -76,7 +76,7 @@ class AMRBenchmark:
         print("=" * 65)
 
     # =========================================================================
-    # MENU 1: STEP RESPONSE MOTOR
+    # MENU 1: STEP RESPONSE MOTOR (60, 80, 100 RPM)
     # =========================================================================
     def run_step_test(self):
         print("\n" + "=" * 65)
@@ -248,7 +248,7 @@ class AMRBenchmark:
         plt.close()
 
     # =========================================================================
-    # MENU 2: ODOMETRI GERAK LURUS 2.0 METER
+    # MENU 2: ODOMETRI GERAK LURUS 2.0 METER (INPUT PRAKTIS CM)
     # =========================================================================
     def run_odom_lurus(self):
         print("\n" + "=" * 65)
@@ -267,15 +267,13 @@ class AMRBenchmark:
         time.sleep(2.0)
         ser.reset_input_buffer()
 
-        input("[*] Posisikan robot tepat di garis start lantai, lalu tekan ENTER...")
-        
-        # Kirim perintah mode kontroler lalu perintah gerak lurus '1'
+        input("[*] Posisikan as roda robot tepat di garis start lantai, lalu tekan ENTER...")
         ser.write(f"MODE,{self.metode}\n".encode())
         time.sleep(0.1)
         ser.write(b"1\n")
         ser.flush()
 
-        print("[*] 🚀 Robot bergerak maju 2.0 meter (~6-8 detik)...")
+        print("[*] 🚀 Robot bergerak maju 2.0 meter...")
         lines = ["Time_s,RPM_L,RPM_R,PWM_L,PWM_R,X_odom,Y_odom,Theta_deg\n"]
         last_x, last_y, last_th = 0.0, 0.0, 0.0
         t0 = time.time()
@@ -290,7 +288,7 @@ class AMRBenchmark:
                     last_y = float(parts[6])
                     last_th = float(parts[7])
                     d_cur = math.hypot(last_x, last_y)
-                    sys.stdout.write(f"\r[*] Jarak Terukur Sensor: {d_cur:5.3f} m / {target_dist:.2f} m | Yaw={last_th:+5.1f}°")
+                    sys.stdout.write(f"\r[*] Jarak Sensor: {d_cur:5.4f} m / {target_dist:.2f} m | Yaw={last_th:+5.2f}°")
                     sys.stdout.flush()
                     if d_cur >= target_dist:
                         break
@@ -299,29 +297,29 @@ class AMRBenchmark:
         dist_sensor = math.hypot(last_x, last_y)
         print(f"\n\n[✓] Pembacaan Odometri Sensor:")
         print(f"    • X_odom : {last_x:+.4f} m | Y_odom : {last_y:+.4f} m | Yaw : {last_th:+.2f}°")
-        print(f"    • Jarak Sensor : {dist_sensor:.4f} meter")
+        print(f"    • Total Jarak Sensor : {dist_sensor:.4f} meter")
 
         print("-" * 65)
-        print("Silakan ukur posisi aktual robot di lantai menggunakan meteran:")
-        x_riil = float(input("  >> Masukkan X riil lantai (meter) [default 2.00]: ") or "2.00")
-        y_riil = float(input("  >> Masukkan Y riil / selip samping (meter) [default 0.00]: ") or "0.00")
+        print("Pengukuran Fisik di Lantai (Lihat Gambar Acuan Nat Keramik):")
+        delta_x_cm = float(input("  >> Masukkan Δx (Meleset Maju/Mundur dalam cm) [default 0.0]: ") or "0.0")
+        delta_y_cm = float(input("  >> Masukkan Δy (Meleset Samping dalam cm)       [default 0.0]: ") or "0.0")
 
-        error_posisi_m = math.hypot(last_x - x_riil, last_y - y_riil)
-        error_posisi_cm = error_posisi_m * 100.0
-        galat_jarak_pct = (abs(dist_sensor - target_dist) / target_dist) * 100.0
+        # Hitung E_pos (Total Penyimpangan Posisi Diagonal)
+        e_pos_cm = math.hypot(delta_x_cm, delta_y_cm)
+        galat_pct = (e_pos_cm / 200.0) * 100.0 # 200 cm = 2.0 meter
 
         print("\n" + "=" * 65)
         print("       LAPORAN EVALUASI ODOMETRI LURUS 2.0 M")
         print(f"  Metode: {self.metode} | Kondisi: {self.kondisi} | {self.sesi}")
         print("=" * 65)
-        print(f"• Target Jarak               : {target_dist:.2f} meter")
-        print(f"• Koordinat Sensor Odometri  : ({last_x:+.3f} m, {last_y:+.3f} m)")
-        print(f"• Koordinat Riil Fisik Lantai: ({x_riil:+.3f} m, {y_riil:+.3f} m)")
-        print(f"• Kesalahan Posisi (Euclid)  : {error_posisi_cm:.2f} cm")
-        print(f"• Persentase Galat Jarak     : {galat_jarak_pct:.2f} %")
+        print(f"• Pembacaan Sensor Odometri  : X={last_x:+.4f} m, Y={last_y:+.4f} m, Yaw={last_th:+.2f}°")
+        print(f"• Meleset Maju/Mundur (Δx)   : {delta_x_cm:+.2f} cm")
+        print(f"• Meleset Samping (Δy)       : {delta_y_cm:+.2f} cm")
+        print(f"• Total Error Posisi (E_pos) : {e_pos_cm:.2f} cm")
+        print(f"• Persentase Galat Odometri  : {galat_pct:.2f} %")
         print("=" * 65)
 
-        # Simpan CSV
+        # Simpan CSV Lengkap
         filename = f"odom_lurus_2m_{self.metode.lower()}_{self.kondisi}_{self.sesi}_{file_ts}.csv"
         csv_path = os.path.join(self.output_dir, filename)
         with open(csv_path, 'w', encoding='utf-8') as f:
@@ -329,17 +327,17 @@ class AMRBenchmark:
             f.write("\n")
             f.write("# ========================================================================\n")
             f.write("# RANGKUMAN EVALUASI ODOMETRI GERAK LURUS 2.0 METER\n")
-            f.write(f"# Metode  : {self.metode}\n")
-            f.write(f"# Kondisi : {self.kondisi} | {self.sesi}\n")
-            f.write(f"# Waktu   : {view_ts}\n")
+            f.write(f"# Metode               : {self.metode}\n")
+            f.write(f"# Kondisi              : {self.kondisi} | {self.sesi}\n")
+            f.write(f"# Waktu                : {view_ts}\n")
             f.write("# ========================================================================\n")
-            f.write(f"# X_sensor (m);{last_x:.4f}\n")
-            f.write(f"# Y_sensor (m);{last_y:.4f}\n")
-            f.write(f"# Jarak_sensor (m);{dist_sensor:.4f}\n")
-            f.write(f"# X_riil (m);{x_riil:.4f}\n")
-            f.write(f"# Y_riil (m);{y_riil:.4f}\n")
-            f.write(f"# Kesalahan_Posisi_cm;{error_posisi_cm:.2f}\n")
-            f.write(f"# Galat_Jarak_pct;{galat_jarak_pct:.2f}\n")
+            f.write(f"# X_odom_m;{last_x:.4f}\n")
+            f.write(f"# Y_odom_m;{last_y:.4f}\n")
+            f.write(f"# Yaw_odom_deg;{last_th:.2f}\n")
+            f.write(f"# Delta_X_cm;{delta_x_cm:.2f}\n")
+            f.write(f"# Delta_Y_cm;{delta_y_cm:.2f}\n")
+            f.write(f"# E_pos_cm;{e_pos_cm:.2f}\n")
+            f.write(f"# Galat_Relatif_pct;{galat_pct:.2f}\n")
             f.write("# ========================================================================\n")
 
         print(f"[✓] Data Telemetri & Evaluasi Tersimpan ke: {csv_path}\n")
@@ -421,9 +419,9 @@ class AMRBenchmark:
             f.write("\n")
             f.write("# ========================================================================\n")
             f.write(f"# RANGKUMAN EVALUASI ROTASI DI TEMPAT {target_deg:.0f} DERAJAT\n")
-            f.write(f"# Metode  : {self.metode}\n")
-            f.write(f"# Kondisi : {self.kondisi} | {self.sesi}\n")
-            f.write(f"# Waktu   : {view_ts}\n")
+            f.write(f"# Metode               : {self.metode}\n")
+            f.write(f"# Kondisi              : {self.kondisi} | {self.sesi}\n")
+            f.write(f"# Waktu                : {view_ts}\n")
             f.write("# ========================================================================\n")
             f.write(f"# Target_deg;{target_deg:.1f}\n")
             f.write(f"# Theta_sensor_deg;{last_th:.2f}\n")
@@ -454,7 +452,7 @@ class AMRBenchmark:
         time.sleep(2.0)
         ser.reset_input_buffer()
 
-        input("[*] Posisikan robot tepat di titik start (0,0). Tekan ENTER...")
+        input("[*] Posisikan as roda robot tepat di titik start (0,0). Tekan ENTER...")
         ser.write(f"MODE,{self.metode}\n".encode())
         time.sleep(0.1)
         ser.write(b"5\n")
@@ -483,27 +481,26 @@ class AMRBenchmark:
         print(f"    • Sudut Akhir Sensor : {last_th:+.2f}°")
 
         print("-" * 65)
-        print("Silakan ukur selisih posisi fisik robot sekarang terhadap titik awal start:")
-        x_riil = float(input("  >> Masukkan X riil lantai (meter) [default 0.00]: ") or "0.00")
-        y_riil = float(input("  >> Masukkan Y riil lantai (meter) [default 0.00]: ") or "0.00")
-        th_riil = float(input("  >> Masukkan sudut hadap fisik riil (derajat) [default 0.0]: ") or "0.0")
+        print("Pengukuran Fisik di Garis Finish (Lihat Gambar Segitiga A-B-C):")
+        delta_x_cm = float(input("  >> Masukkan Δx (Meleset Maju/Mundur dalam cm) [default 0.0]: ") or "0.0")
+        delta_y_cm = float(input("  >> Masukkan Δy (Meleset Samping dalam cm)       [default 0.0]: ") or "0.0")
+        th_riil_err = float(input("  >> Masukkan Meleset Sudut Hadap / Heading (derajat) [default 0.0]: ") or "0.0")
 
         total_lintasan = 8.0 # meter
-        err_penutupan_m = math.hypot(x_riil, y_riil)
-        err_penutupan_cm = err_penutupan_m * 100.0
-        err_orientasi_deg = abs(th_riil)
-        penyimpangan_per_meter = err_penutupan_cm / total_lintasan # cm/meter
+        e_return_cm = math.hypot(delta_x_cm, delta_y_cm)
+        drift_rate = e_return_cm / total_lintasan # cm per meter
 
         print("\n" + "=" * 65)
         print("   LAPORAN EVALUASI LINTASAN PERSEGI (4x2m = 8m)")
         print(f"  Metode: {self.metode} | Kondisi: {self.kondisi} | {self.sesi}")
         print("=" * 65)
-        print(f"• Total Jarak Lintasan           : {total_lintasan:.1f} meter")
-        print(f"• Posisi Akhir Odometri (Sensor) : ({last_x:+.3f} m, {last_y:+.3f} m, {last_th:+.1f}°)")
-        print(f"• Posisi Akhir Riil Fisik (Ukur) : ({x_riil:+.3f} m, {y_riil:+.3f} m, {th_riil:+.1f}°)")
-        print(f"• Kesalahan Penutupan Lintasan   : {err_penutupan_cm:.2f} cm")
-        print(f"• Kesalahan Orientasi Akhir      : {err_orientasi_deg:.2f}°")
-        print(f"• Tingkat Penyimpangan Per Meter : {penyimpangan_per_meter:.2f} cm/meter")
+        print(f"• Total Jarak Tempuh Lintasan    : {total_lintasan:.1f} meter")
+        print(f"• Posisi Akhir Sensor Odometri   : ({last_x:+.3f} m, {last_y:+.3f} m, {last_th:+.1f}°)")
+        print(f"• Meleset Maju/Mundur (Δx)       : {delta_x_cm:+.2f} cm")
+        print(f"• Meleset Samping (Δy)           : {delta_y_cm:+.2f} cm")
+        print(f"• Return-to-Origin Error (E_ret) : {e_return_cm:.2f} cm")
+        print(f"• Tingkat Penyimpangan (Drift)   : {drift_rate:.2f} cm/meter")
+        print(f"• Kesalahan Sudut Hadap Akhir    : {th_riil_err:.2f}°")
         print("=" * 65)
 
         filename = f"odom_persegi_8m_{self.metode.lower()}_{self.kondisi}_{self.sesi}_{file_ts}.csv"
@@ -513,20 +510,19 @@ class AMRBenchmark:
             f.write("\n")
             f.write("# ========================================================================\n")
             f.write("# RANGKUMAN EVALUASI ODOMETRI LINTASAN PERSEGI (4x2m = 8m)\n")
-            f.write(f"# Metode  : {self.metode}\n")
-            f.write(f"# Kondisi : {self.kondisi} | {self.sesi}\n")
-            f.write(f"# Waktu   : {view_ts}\n")
+            f.write(f"# Metode               : {self.metode}\n")
+            f.write(f"# Kondisi              : {self.kondisi} | {self.sesi}\n")
+            f.write(f"# Waktu                : {view_ts}\n")
             f.write("# ========================================================================\n")
             f.write(f"# Total_Lintasan_m;{total_lintasan:.1f}\n")
             f.write(f"# X_sensor_m;{last_x:.4f}\n")
             f.write(f"# Y_sensor_m;{last_y:.4f}\n")
             f.write(f"# Theta_sensor_deg;{last_th:.2f}\n")
-            f.write(f"# X_riil_m;{x_riil:.4f}\n")
-            f.write(f"# Y_riil_m;{y_riil:.4f}\n")
-            f.write(f"# Theta_riil_deg;{th_riil:.2f}\n")
-            f.write(f"# Return_To_Origin_Error_cm;{err_penutupan_cm:.2f}\n")
-            f.write(f"# Kesalahan_Orientasi_deg;{err_orientasi_deg:.2f}\n")
-            f.write(f"# Penyimpangan_Per_Meter_cm_per_m;{penyimpangan_per_meter:.2f}\n")
+            f.write(f"# Delta_X_cm;{delta_x_cm:.2f}\n")
+            f.write(f"# Delta_Y_cm;{delta_y_cm:.2f}\n")
+            f.write(f"# Return_To_Origin_Error_cm;{e_return_cm:.2f}\n")
+            f.write(f"# Drift_Rate_cm_per_m;{drift_rate:.2f}\n")
+            f.write(f"# Heading_Error_deg;{th_riil_err:.2f}\n")
             f.write("# ========================================================================\n")
 
         print(f"[✓] Data Telemetri & Evaluasi Tersimpan ke: {csv_path}\n")
