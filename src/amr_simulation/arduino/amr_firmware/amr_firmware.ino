@@ -1,5 +1,6 @@
 /* =========================================================================
  * FIRMWARE AMR DIFFERENTIAL DRIVE: DUAL MODE (PI-PSO & TRIAL-ERROR)
+ * LENGKAP: STEP RESPONSE MOTOR + AUTO-STOP ODOMETRI LURUS, ROTASI & PERSEGI
  * SKRIPSI : DIVALA ZAHRA OKTAVIA (UNNES 2026)
  * ========================================================================= */
 
@@ -66,7 +67,7 @@ const unsigned long SERIAL_WATCHDOG_TIMEOUT_MS = 600; // 0.6 detik
 unsigned long lastSerialCmdTime = 0;
 
 // State Mode Pengujian
-int modePengujian = 0; // 0=Standby, 1-5=Odometri Mandiri, 10=Uji Step Respon, 99=ROS 2
+int modePengujian = 0; // 0=Standby, 1=Lurus 2m, 2=Rot 90, 3=Rot 180, 4=Rot 360, 5=Persegi, 10=Step, 99=ROS 2
 int stepPersegi = 0;
 float targetJarak = 0.0, targetSudut = 0.0;
 
@@ -154,9 +155,9 @@ void isrR() {
   bool b = digitalRead(PIN_ENCB_R);
   if (INVERT_ENC_R) b = !b;
   if (b == HIGH) {
-    totalPulsa_R--; deltaPulsa_R--;  // Tetap MINUS sesuai kode lama
+    totalPulsa_R--; deltaPulsa_R--;
   } else {
-    totalPulsa_R++; deltaPulsa_R++;  // Tetap PLUS sesuai kode lama
+    totalPulsa_R++; deltaPulsa_R++;
   }
 }
 
@@ -217,7 +218,7 @@ void cetakRangkumanStep() {
 
 // ====================== 11. PARSER SERIAL NON-BLOCKING ====================
 void processCommand(char *cmd) {
-  // A. Perintah Kecepatan dari ROS 2: "V,<linear_v>,<angular_w>"
+  // A. Kecepatan dari ROS 2: "V,<linear_v>,<angular_w>"
   if (cmd[0] == 'V' || cmd[0] == 'v') {
     lastSerialCmdTime = millis();
     char *comma1 = strchr(cmd, ',');
@@ -232,10 +233,24 @@ void processCommand(char *cmd) {
     return;
   }
 
- // B. Pemicuan Uji Step Respon dari Python: "STEP,<METODE>,<RPM>"
+  // B. Ganti Mode: "MODE,PSO" atau "MODE,TE"
+  if (strncmp(cmd, "MODE,PSO", 8) == 0) {
+    active_kp_l = PSO_KP_L; active_ki_l = PSO_KI_L;
+    active_kp_r = PSO_KP_R; active_ki_r = PSO_KI_R;
+    modeIsPSO = true;
+    return;
+  }
+  if (strncmp(cmd, "MODE,TE", 7) == 0) {
+    active_kp_l = TE_KP_L; active_ki_l = TE_KI_L;
+    active_kp_r = TE_KP_R; active_ki_r = TE_KI_R;
+    modeIsPSO = false;
+    return;
+  }
+
+  // C. Pemicuan Uji Step Respon dari Python: "STEP,<METODE>,<RPM>"
   if (strncmp(cmd, "STEP", 4) == 0) {
-    char *token = strtok(cmd, ","); // Mengambil "STEP"
-    token = strtok(NULL, ",");       // Mengambil "PSO" atau "TE"
+    char *token = strtok(cmd, ","); // "STEP"
+    token = strtok(NULL, ",");       // "PSO" atau "TE"
     if (token != NULL) {
       if (strncmp(token, "PSO", 3) == 0) {
         active_kp_l = PSO_KP_L; active_ki_l = PSO_KI_L;
@@ -247,17 +262,20 @@ void processCommand(char *cmd) {
         modeIsPSO = false;
       }
     }
-    token = strtok(NULL, ",");       // Mengambil angka "60", "80", atau "100"
+
+    token = strtok(NULL, ",");       // RPM
     if (token != NULL) {
-      step_target_rpm = atof(token); // atof() 100% didukung Arduino Uno!
+      step_target_rpm = atof(token);
     } else {
       step_target_rpm = 60.0;
     }
+
     modePengujian = 10;
     stepAktif = false;
     integral_L = 0; integral_R = 0;
     setpoint_L = 0; setpoint_R = 0;
     step_start_time = millis();
+
     Serial.print(F("# PENGUJIAN : STEP RESPON "));
     Serial.print(step_target_rpm, 0);
     Serial.println(modeIsPSO ? F(" RPM (PI-PSO)") : F(" RPM (TRIAL-ERROR)"));
@@ -265,34 +283,53 @@ void processCommand(char *cmd) {
     return;
   }
 
-  // C. Perintah Reset Odometri
+  // D. Reset Odometri: "RST"
   if (strncmp(cmd, "RST", 3) == 0) {
     noInterrupts(); totalPulsa_L = 0; totalPulsa_R = 0; deltaPulsa_L = 0; deltaPulsa_R = 0; interrupts();
     odom_x = 0; odom_y = 0; odom_theta = 0;
     hitungInverseKinematics(0, 0);
+    driveMotors(0, 0);
     return;
   }
 
-  // D. Menu Uji Mandiri Skripsi ('0' s/d '5')
+  // E. Menu Uji Mandiri Odometri ('0' s/d '5')
   if (strlen(cmd) == 1) {
     char m = cmd[0];
     if (m == '1') {
-      odom_x = 0; odom_y = 0; odom_theta = 0; targetJarak = 2.0;
-      hitungInverseKinematics(0.33, 0.0); modePengujian = 1;
+      noInterrupts(); deltaPulsa_L = 0; deltaPulsa_R = 0; interrupts();
+      odom_x = 0; odom_y = 0; odom_theta = 0;
+      targetJarak = 2.0;
+      hitungInverseKinematics(0.33, 0.0);
+      modePengujian = 1;
     } else if (m == '2') {
-      odom_x = 0; odom_y = 0; odom_theta = 0; targetSudut = 90.0 * (PI / 180.0);
-      hitungInverseKinematics(0.0, 0.8); modePengujian = 2;
+      noInterrupts(); deltaPulsa_L = 0; deltaPulsa_R = 0; interrupts();
+      odom_x = 0; odom_y = 0; odom_theta = 0;
+      targetSudut = 90.0 * (PI / 180.0);
+      hitungInverseKinematics(0.0, 0.35);
+      modePengujian = 2;
     } else if (m == '3') {
-      odom_x = 0; odom_y = 0; odom_theta = 0; targetSudut = 180.0 * (PI / 180.0);
-      hitungInverseKinematics(0.0, 0.8); modePengujian = 3;
+      noInterrupts(); deltaPulsa_L = 0; deltaPulsa_R = 0; interrupts();
+      odom_x = 0; odom_y = 0; odom_theta = 0;
+      targetSudut = 180.0 * (PI / 180.0);
+      hitungInverseKinematics(0.0, 0.35);
+      modePengujian = 3;
     } else if (m == '4') {
-      odom_x = 0; odom_y = 0; odom_theta = 0; targetSudut = 360.0 * (PI / 180.0);
-      hitungInverseKinematics(0.0, 0.8); modePengujian = 4;
+      noInterrupts(); deltaPulsa_L = 0; deltaPulsa_R = 0; interrupts();
+      odom_x = 0; odom_y = 0; odom_theta = 0;
+      targetSudut = 360.0 * (PI / 180.0);
+      hitungInverseKinematics(0.0, 0.35);
+      modePengujian = 4;
     } else if (m == '5') {
-      odom_x = 0; odom_y = 0; odom_theta = 0; stepPersegi = 1; targetJarak = 2.0;
-      hitungInverseKinematics(0.33, 0.0); modePengujian = 5;
+      noInterrupts(); deltaPulsa_L = 0; deltaPulsa_R = 0; interrupts();
+      odom_x = 0; odom_y = 0; odom_theta = 0;
+      stepPersegi = 1; targetJarak = 2.0;
+      hitungInverseKinematics(0.33, 0.0);
+      modePengujian = 5;
     } else if (m == '0') {
-      modePengujian = 0; hitungInverseKinematics(0.0, 0.0); driveMotors(0, 0);
+      modePengujian = 0;
+      hitungInverseKinematics(0.0, 0.0);
+      driveMotors(0, 0);
+      setpoint_L = 0; setpoint_R = 0;
     }
   }
 }
@@ -348,7 +385,7 @@ void loop() {
     long tot_L = totalPulsa_L; long tot_R = totalPulsa_R;
     interrupts();
 
-    // Filter EMA persis kode lama (alpha = 0.55)
+    // Filter EMA Alpha = 0.25 (Mulus Skripsi)
     static float rpm_ctrl_L = 0.0, rpm_ctrl_R = 0.0;
     float rpm_raw_L = ((float)dC_L / CPR_WHEEL) * (60.0 / DT);
     float rpm_raw_R = ((float)dC_R / CPR_WHEEL) * (60.0 / DT);
@@ -358,7 +395,7 @@ void loop() {
     rpm_L = rpm_ctrl_L;
     rpm_R = rpm_ctrl_R;
 
-    // Hitung Odometri Lokal
+    // Hitung Odometri Lokal Real-Time
     float ds_L = ((float)dC_L / CPR_WHEEL) * (PI * WHEEL_DIAMETER);
     float ds_R = ((float)dC_R / CPR_WHEEL) * (PI * WHEEL_DIAMETER);
     float dx_robot = (ds_R + ds_L) / 2.0;
@@ -368,6 +405,52 @@ void loop() {
     odom_theta += dtheta;
     odom_x += dx_robot * cos(theta_mid);
     odom_y += dx_robot * sin(theta_mid);
+
+    // =====================================================================
+    // PENGHENTIAN OTOMATIS MODE UJI ODOMETRI (AUTO-STOP)
+    // =====================================================================
+    if (modePengujian == 1) {
+      // 1. Gerak Lurus 2.0 Meter
+      float dist = sqrt(odom_x * odom_x + odom_y * odom_y);
+      if (dist >= targetJarak) {
+        hitungInverseKinematics(0, 0);
+        driveMotors(0, 0);
+        setpoint_L = 0; setpoint_R = 0;
+        modePengujian = 0; // Berhenti otomatis!
+      }
+    } else if (modePengujian >= 2 && modePengujian <= 4) {
+      // 2. Rotasi 90, 180, 360 Derajat
+      if (abs(odom_theta) >= targetSudut) {
+        hitungInverseKinematics(0, 0);
+        driveMotors(0, 0);
+        setpoint_L = 0; setpoint_R = 0;
+        modePengujian = 0; // Berhenti otomatis!
+      }
+    } else if (modePengujian == 5) {
+      // 3. Persegi Tertutup (4x2m = 8m)
+      static float markX = 0, markY = 0, markTheta = 0;
+      if (stepPersegi % 2 == 1) {
+        float dSegmen = sqrt(pow(odom_x - markX, 2) + pow(odom_y - markY, 2));
+        if (dSegmen >= targetJarak) {
+          markTheta = odom_theta;
+          hitungInverseKinematics(0.0, 0.35); // Belok 90 deg
+          stepPersegi++;
+        }
+      } else {
+        if (abs(odom_theta - markTheta) >= (90.0 * PI / 180.0)) {
+          markX = odom_x; markY = odom_y;
+          if (stepPersegi >= 8) {
+            hitungInverseKinematics(0, 0);
+            driveMotors(0, 0);
+            setpoint_L = 0; setpoint_R = 0;
+            modePengujian = 0; // Selesai 8 meter!
+          } else {
+            hitungInverseKinematics(0.33, 0.0); // Maju 2m lagi
+            stepPersegi++;
+          }
+        }
+      }
+    }
 
     // KONDISI UJI STEP SKRIPSI
     if (modePengujian == 10) {
@@ -399,7 +482,7 @@ void loop() {
       driveMotors(0, 0);
     }
 
-    // Algoritma PI Roda Kiri (Persis kode lama)
+    // Algoritma PI Roda Kiri
     if (fabs(setpoint_L) < 0.05) {
       rpm_ctrl_L = 0.0; rpm_L = 0.0; pwm_L = 0.0;
       integral_L = 0.0; prev_error_L = 0.0;
@@ -410,7 +493,7 @@ void loop() {
       prev_error_L = error_L;
     }
 
-    // Algoritma PI Roda Kanan (Persis kode lama)
+    // Algoritma PI Roda Kanan
     if (fabs(setpoint_R) < 0.05) {
       rpm_ctrl_R = 0.0; rpm_R = 0.0; pwm_R = 0.0;
       integral_R = 0.0; prev_error_R = 0.0;
@@ -423,8 +506,11 @@ void loop() {
 
     driveMotors(pwm_L, pwm_R);
 
-    // Output Streaming Serial (Khusus Mode Uji Step)
+    // =====================================================================
+    // OUTPUT STREAMING SERIAL
+    // =====================================================================
     if (modePengujian == 10) {
+      // Streaming Khusus Step Test
       float t_cur = (waktuSekarang - step_start_time) / 1000.0;
       Serial.print(t_cur, 3); Serial.print(';');
       Serial.print(setpoint_L, 1); Serial.print(';');
@@ -443,8 +529,19 @@ void loop() {
         cetakRangkumanStep();
       }
     } else {
-      // Output Serial Normal untuk ROS 2
+      // Streaming Telemetri Odometri & ROS 2
       Serial.print(F("ENC:")); Serial.print(tot_L); Serial.print(','); Serial.println(tot_R);
+
+      // Data LOG Koordinat Real-Time untuk Python
+      Serial.print(F("LOG:"));
+      Serial.print((float)waktuSekarang / 1000.0, 2); Serial.print(',');
+      Serial.print(rpm_L, 1); Serial.print(',');
+      Serial.print(rpm_R, 1); Serial.print(',');
+      Serial.print(pwm_L, 0); Serial.print(',');
+      Serial.print(pwm_R, 0); Serial.print(',');
+      Serial.print(odom_x, 4); Serial.print(',');
+      Serial.print(odom_y, 4); Serial.print(',');
+      Serial.println(odom_theta * 180.0 / PI, 2);
     }
   }
 }
