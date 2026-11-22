@@ -555,4 +555,5 @@ class AMRBenchmark:
 
 
 if __name__ == '__main__':
+    
     AMRBenchmark().main_menu()
