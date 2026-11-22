@@ -1,0 +1,16 @@
+Skenario,Percobaan,File,Success,Path_Length_m,Travel_Time_s,Smoothness_rad,Sampling_Cycle_ms,Min_Clearance_m,Median_Clearance_m,Avg_Velocity_mps
+Baseline Statis,Uji 1,eval_baseline_statis_uji_1_20261116_200504.csv,100.0,52.17,199.92,23.444,20.01,0.224,0.622,0.2630608365019011
+Baseline Statis,Uji 2,eval_baseline_statis_uji_3_20261116_201807.csv,100.0,51.505,186.74,18.533,20.0,0.262,0.666,0.27819676520994
+Baseline Statis,Uji 3,eval_baseline_statis_uji_4_20261116_202402.csv,100.0,52.216,163.33,19.909,20.0,0.244,0.692,0.32270763956904996
+Baseline Statis,Uji 4,eval_baseline_statis_uji_5_20261116_203047.csv,100.0,51.955,157.46,17.671,20.0,0.211,0.634,0.33269084211863326
+Baseline Statis,Uji 5,eval_baseline_statis_uji_7_20261116_203943.csv,100.0,51.761,156.3,18.195,20.01,0.296,0.626,0.3339496927803379
+Baseline Dinamis,Uji 1,eval_baseline_dinamis_uji_1_20261116_214059.csv,100.0,52.088,198.25,21.839,20.01,0.182,0.562,0.2658767911200807
+Baseline Dinamis,Uji 2,eval_baseline_dinamis_uji_2_20261116_214539.csv,100.0,53.294,166.06,25.963,20.01,0.174,0.54,0.32354903614457836
+Baseline Dinamis,Uji 3,eval_baseline_dinamis_uji_3_20261116_215042.csv,100.0,53.174,163.9,24.905,20.01,0.178,0.594,0.32760224636796487
+Baseline Dinamis,Uji 4,eval_baseline_dinamis_uji_4_20261116_215603.csv,100.0,53.251,150.86,21.643,20.01,0.174,0.576,0.35692773800053035
+Baseline Dinamis,Uji 5,eval_baseline_dinamis_uji_5_20261116_220016.csv,100.0,52.748,163.26,20.441,20.0,0.31,0.558,0.32588985542759136
+Adaptif Manusia,Uji 1,eval_adaptif_manusia_uji_1_20261120_173554.csv,100.0,52.255,196.7,23.61,20.0,0.278,0.756,0.2672654057352044
+Adaptif Manusia,Uji 3,eval_adaptif_manusia_uji_3_20261120_174913.csv,100.0,52.379,211.6,20.93,20.01,0.276,0.652,0.24960712934947052
+Adaptif Manusia,Uji 4,eval_adaptif_manusia_uji_4_20261120_175414.csv,100.0,51.729,195.9,20.923,20.0,0.226,0.766,0.26606800081682663
+Adaptif Manusia,Uji 5,eval_adaptif_manusia_uji_5_20261120_180126.csv,100.0,52.308,205.3,33.137,20.0,0.248,0.794,0.25661759547934526
+Adaptif Manusia,Uji 7,eval_adaptif_manusia_uji_7_20261120_181414.csv,100.0,52.479,211.48,21.457,20.01,0.236,0.604,0.2501058656575213
