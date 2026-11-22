@@ -1,39 +1,23 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-=============================================================================
-PROGRAM PENGUJIAN SKRIPSI AMR-01 (INTERAKTIF & ALL-IN-ONE)
-Penyusun : Divala Zahra Oktavia (Teknik Komputer UNNES 2026)
-=============================================================================
-Fitur Lengkap (Semua Menghasilkan File CSV Otomatis):
-  [1] Uji Step Response Motor (60, 80, 100 RPM) + Grafik PNG + CSV
-  [2] Uji Odometri: Gerak Lurus 2.0 Meter (Input Δx cm & Δy cm) + CSV
-  [3] Uji Odometri: Rotasi di Tempat 90°, 180°, 360° + CSV
-  [4] Uji Odometri: Lintasan Persegi Tertutup (4 x 2m = 8m / UMBmark) + CSV
-=============================================================================
-"""
+# =========================================================================
+# SISTEM BENCHMARK PENGUJIAN SKRIPSI AMR DIFFERENTIAL DRIVE
+# LENGKAP: STEP RESPONSE (60, 80, 100 RPM) + ODOMETRI (LURUS, ROTASI, PERSEGI)
+# PENULIS: DIVALA ZAHRA OKTAVIA (UNNES 2026)
+# =========================================================================
 
-import os
 import sys
+import os
 import time
-import math
 import datetime
+import math
+import serial
+import serial.tools.list_ports
 import numpy as np
 import matplotlib.pyplot as plt
 
-try:
-    import serial
-except ImportError:
-    print("[!] Modul pyserial belum terinstall. Jalankan: pip3 install pyserial")
-    sys.exit(1)
-
-
 def get_timestamp():
     now = datetime.datetime.now()
-    file_ts = now.strftime("%Y%m%d_%H%M%S")
-    view_ts = now.strftime("%d/%m/%Y Jam %H:%M:%S WIB")
-    return file_ts, view_ts
-
+    return now.strftime("%Y%m%d_%H%M%S"), now.strftime("%Y-%m-%d %H:%M:%S")
 
 class AMRBenchmark:
     def __init__(self):
@@ -44,11 +28,26 @@ class AMRBenchmark:
         if not os.path.exists(self.output_dir):
             self.output_dir = "."
 
+        # Kamus Informasi Parameter Gain PI
+        self.gain_info = {
+            "PSO": {
+                "nama": "PI-PSO (Optimasi Particle Swarm)",
+                "kp_l": 2.7247, "ki_l": 23.5472,
+                "kp_r": 2.5428, "ki_r": 24.1789
+            },
+            "TE": {
+                "nama": "PI Trial & Error (Manual)",
+                "kp_l": 2.5000, "ki_l": 18.0000,
+                "kp_r": 2.8000, "ki_r": 18.0000
+            }
+        }
+
     def cari_port(self):
         for p in ['/dev/arduino', '/dev/ttyACM0', '/dev/ttyACM1', '/dev/ttyUSB0', 'COM3', 'COM4']:
             if os.path.exists(p):
                 return p
-        return None
+        ports = list(serial.tools.list_ports.comports())
+        return ports[0].device if ports else None
 
     def menu_skenario(self):
         print("\n" + "=" * 65)
@@ -72,7 +71,11 @@ class AMRBenchmark:
         p3 = input("   Pilihan (1/2): ").strip()
         self.sesi = "uji_1" if p3 == '1' else "uji_2"
 
-        print(f"\n[✓] Skenario Aktif: [{self.metode}] - [{self.kondisi}] - [{self.sesi}]")
+        g = self.gain_info[self.metode]
+        print(f"\n[✓] Skenario Aktif : [{g['nama']}]")
+        print(f"    • Motor Kiri   : Kp = {g['kp_l']:.4f}, Ki = {g['ki_l']:.4f}")
+        print(f"    • Motor Kanan  : Kp = {g['kp_r']:.4f}, Ki = {g['ki_r']:.4f}")
+        print(f"    • Kondisi Beban: [{self.kondisi.upper().replace('_', ' ')}] | Sesi: [{self.sesi.upper()}]")
         print("=" * 65)
 
     # =========================================================================
@@ -87,81 +90,68 @@ class AMRBenchmark:
         print("  [1] 60 RPM")
         print("  [2] 80 RPM")
         print("  [3] 100 RPM")
-        print("  [4] Input Manual")
-        p = input("Pilihan (1-4): ").strip()
-        
-        if p == '1': sp = 60.0
-        elif p == '2': sp = 80.0
-        elif p == '3': sp = 100.0
-        elif p == '4': sp = float(input("Masukkan Target RPM: ").strip())
-        else: sp = 60.0
+        p_rpm = input("Pilihan (1-3): ").strip()
+        target_rpm_map = {'1': (60.0, "60rpm"), '2': (80.0, "80rpm"), '3': (100.0, "100rpm")}
+        if p_rpm not in target_rpm_map:
+            print("[!] Pilihan tidak valid.")
+            return
+        sp, target_str = target_rpm_map[p_rpm]
 
-        target_str = f"rpm{int(sp)}"
         file_ts, view_ts = get_timestamp()
-
         port = self.cari_port()
         if not port:
-            print("[!] Port Arduino tidak ditemukan di /dev/arduino maupun /dev/ttyACM0.")
+            print("[!] Port Arduino tidak ditemukan.")
             return
 
-        print(f"[*] Menghubungkan ke Arduino di {port}...")
-        try:
-            ser = serial.Serial(port, 115200, timeout=1)
-        except Exception as e:
-            print(f"[!] Gagal membuka port: {e}")
-            return
-
+        ser = serial.Serial(port, 115200, timeout=1)
         time.sleep(2.0)
         ser.reset_input_buffer()
 
-        cmd = f"STEP,{self.metode},{int(sp)}\n"
-        print(f"[*] Mengirim perintah ke Arduino: {cmd.strip()}")
-        ser.write(cmd.encode())
+        input("[*] Posisikan robot aman terangkat (atau di lantai bebas), lalu tekan ENTER...")
+        cmd_kirim = f"STEP,{self.metode},{sp:.1f}\n"
+        ser.write(cmd_kirim.encode())
         ser.flush()
 
-        raw_lines = []
-        t0 = time.time()
-        print("[*] Merekam streaming data dari Arduino (~7 detik)...")
-        while time.time() - t0 < 8.0:
-            l = ser.readline().decode('utf-8', errors='ignore')
-            if l:
-                raw_lines.append(l)
-        ser.close()
+        print(f"[*] Perintah terkirim: {cmd_kirim.strip()}. Merekam data 6.5 detik...")
 
-        times, act_l, act_r, pwm_l, pwm_r = [], [], [], [], []
-        valid_csv_lines = ["Time_s,Target_RPM_L,Actual_RPM_L,PWM_L,Error_L,Target_RPM_R,Actual_RPM_R,PWM_R,Error_R\n"]
+        t_arr, al_arr, ar_arr = [], [], []
+        valid_csv_lines = ["Time_s;Target_RPM_L;Actual_RPM_L;PWM_L;Error_L;Target_RPM_R;Actual_RPM_R;PWM_R;Error_R\n"]
 
-        for l in raw_lines:
-            if l.startswith('#') or 'Time' in l or 'Target' in l:
+        t_end = time.time() + 8.5
+        while time.time() < t_end:
+            line = ser.readline().decode('utf-8', errors='ignore').strip()
+            if not line:
                 continue
-            parts = l.strip().replace(';', ',').split(',')
-            if len(parts) >= 9:
+            parts = line.split(';')
+            if len(parts) == 9:
                 try:
-                    t = float(parts[0])
-                    al = float(parts[2])
-                    pl = float(parts[3])
-                    ar = float(parts[6])
-                    pr = float(parts[7])
-                    times.append(t)
-                    act_l.append(al)
-                    act_r.append(ar)
-                    pwm_l.append(pl)
-                    pwm_r.append(pr)
-                    valid_csv_lines.append(','.join(parts) + '\n')
+                    t_val = float(parts[0])
+                    act_l = float(parts[2])
+                    act_r = float(parts[6])
+                    t_arr.append(t_val)
+                    al_arr.append(act_l)
+                    ar_arr.append(act_r)
+                    valid_csv_lines.append(line + "\n")
+                    sys.stdout.write(f"\r[*] Waktu: {t_val:4.2f}s | RPM Kiri: {act_l:5.1f} | RPM Kanan: {act_r:5.1f}")
+                    sys.stdout.flush()
                 except ValueError:
-                    continue
+                    pass
+            elif "# HASIL EVALUASI" in line:
+                break
+        ser.close()
+        print("\n\n[✓] Perekaman Selesai. Menghitung 5 Parameter Transien & Grafik...")
 
-        if len(times) < 20:
-            print("[!] Data rekaman serial terlalu sedikit atau koneksi terputus.")
+        if len(t_arr) < 20:
+            print("[!] Data tidak mencukupi untuk evaluasi.")
             return
 
-        t_arr = np.array(times)
-        al_arr = np.array(act_l)
-        ar_arr = np.array(act_r)
+        t_arr = np.array(t_arr)
+        al_arr = np.array(al_arr)
+        ar_arr = np.array(ar_arr)
 
         res_L = self.evaluasi_metrik(t_arr, al_arr, sp)
         res_R = self.evaluasi_metrik(t_arr, ar_arr, sp)
-        metode_nama = "PI-PSO (Optimasi)" if self.metode == "PSO" else "PI Trial & Error"
+        g = self.gain_info[self.metode]
 
         filename_base = f"step_respon_{target_str}_{self.metode.lower()}_{self.kondisi}_{self.sesi}_{file_ts}"
         csv_path = os.path.join(self.output_dir, f"{filename_base}.csv")
@@ -170,9 +160,11 @@ class AMRBenchmark:
             f.write("\n")
             f.write("# ========================================================================\n")
             f.write(f"# HASIL EVALUASI RESPON TRANSIEN MOTOR ({sp:.0f} RPM)\n")
-            f.write(f"# Metode  : {metode_nama}\n")
-            f.write(f"# Kondisi : {self.kondisi.upper().replace('_', ' ')} | {self.sesi.upper()}\n")
-            f.write(f"# Waktu   : {view_ts}\n")
+            f.write(f"# Metode               : {g['nama']}\n")
+            f.write(f"# Parameter PI Kiri    : Kp = {g['kp_l']:.4f}, Ki = {g['ki_l']:.4f}\n")
+            f.write(f"# Parameter PI Kanan   : Kp = {g['kp_r']:.4f}, Ki = {g['ki_r']:.4f}\n")
+            f.write(f"# Kondisi              : {self.kondisi.upper().replace('_', ' ')} | {self.sesi.upper()}\n")
+            f.write(f"# Waktu                : {view_ts}\n")
             f.write("# ========================================================================\n")
             f.write("# Parameter Evaluasi;Motor Kiri;Motor Kanan;Satuan\n")
             f.write(f"# 1. Nilai Puncak (Peak RPM);{res_L['peak']:.2f};{res_R['peak']:.2f};RPM\n")
@@ -186,7 +178,7 @@ class AMRBenchmark:
 
         print("\n" + "=" * 72)
         print(f"      HASIL EVALUASI RESPON TRANSIEN MOTOR ({sp:.0f} RPM)")
-        print(f"  Metode  : {metode_nama}")
+        print(f"  Metode  : {g['nama']}")
         print(f"  Kondisi : {self.kondisi.upper().replace('_', ' ')} | {self.sesi.upper()}")
         print(f"  Waktu   : {view_ts}")
         print("=" * 72)
@@ -237,8 +229,8 @@ class AMRBenchmark:
         plt.axhline(y=sp - band, color='gray', linestyle=':', alpha=0.7)
         plt.plot(t, act_l, 'b-', linewidth=1.8, label=f"Motor Kiri (Mp={res_l['mp']:.1f}%, Ess={res_l['ess']:.2f})")
         plt.plot(t, act_r, 'r-', linewidth=1.8, label=f"Motor Kanan (Mp={res_r['mp']:.1f}%, Ess={res_r['ess']:.2f})")
-        metode_nama = "PI-PSO" if self.metode == "PSO" else "Trial & Error"
-        plt.title(f"Grafik Respon Kecepatan {sp:.0f} RPM [{metode_nama}] - {self.kondisi.upper()}\nWaktu: {view_ts}", fontsize=11, fontweight='bold')
+        g = self.gain_info[self.metode]
+        plt.title(f"Grafik Respon Kecepatan {sp:.0f} RPM [{g['nama']}] - {self.kondisi.upper()}\nWaktu: {view_ts}", fontsize=11, fontweight='bold')
         plt.xlabel("Waktu (detik)", fontsize=10)
         plt.ylabel("Kecepatan Putar (RPM)", fontsize=10)
         plt.grid(True, linestyle='--', alpha=0.6)
@@ -248,7 +240,7 @@ class AMRBenchmark:
         plt.close()
 
     # =========================================================================
-    # MENU 2: ODOMETRI GERAK LURUS 2.0 METER (INPUT PRAKTIS CM)
+    # MENU 2: ODOMETRI GERAK LURUS 2.0 METER
     # =========================================================================
     def run_odom_lurus(self):
         print("\n" + "=" * 65)
@@ -269,7 +261,15 @@ class AMRBenchmark:
 
         input("[*] Posisikan as roda robot tepat di garis start lantai, lalu tekan ENTER...")
         ser.write(f"MODE,{self.metode}\n".encode())
-        time.sleep(0.1)
+        ser.flush()
+        time.sleep(0.2)
+
+        # Tampilkan feedback resmi dari Arduino
+        while ser.in_waiting > 0:
+            resp = ser.readline().decode('utf-8', errors='ignore').strip()
+            if "[ARDUINO CONFIRM]" in resp:
+                print(f"[✓] {resp}")
+
         ser.write(b"1\n")
         ser.flush()
 
@@ -283,15 +283,18 @@ class AMRBenchmark:
             if l.startswith("LOG:"):
                 parts = l.replace("LOG:", "").split(",")
                 if len(parts) >= 8:
-                    lines.append(",".join(parts) + "\n")
-                    last_x = float(parts[5])
-                    last_y = float(parts[6])
-                    last_th = float(parts[7])
-                    d_cur = math.hypot(last_x, last_y)
-                    sys.stdout.write(f"\r[*] Jarak Sensor: {d_cur:5.4f} m / {target_dist:.2f} m | Yaw={last_th:+5.2f}°")
-                    sys.stdout.flush()
-                    if d_cur >= target_dist:
-                        break
+                    try:
+                        lines.append(",".join(parts) + "\n")
+                        last_x = float(parts[5])
+                        last_y = float(parts[6])
+                        last_th = float(parts[7])
+                        d_cur = math.hypot(last_x, last_y)
+                        sys.stdout.write(f"\r[*] Jarak Sensor: {d_cur:5.4f} m / {target_dist:.2f} m | Yaw={last_th:+5.2f}°")
+                        sys.stdout.flush()
+                        if d_cur >= target_dist:
+                            break
+                    except ValueError:
+                        pass
         ser.close()
 
         dist_sensor = math.hypot(last_x, last_y)
@@ -300,17 +303,18 @@ class AMRBenchmark:
         print(f"    • Total Jarak Sensor : {dist_sensor:.4f} meter")
 
         print("-" * 65)
-        print("Pengukuran Fisik di Lantai (Lihat Gambar Acuan Nat Keramik):")
+        print("Pengukuran Fisik di Lantai (Tarik meteran dari garis start ke posisi akhir):")
         delta_x_cm = float(input("  >> Masukkan Δx (Meleset Maju/Mundur dalam cm) [default 0.0]: ") or "0.0")
         delta_y_cm = float(input("  >> Masukkan Δy (Meleset Samping dalam cm)       [default 0.0]: ") or "0.0")
 
-        # Hitung E_pos (Total Penyimpangan Posisi Diagonal)
         e_pos_cm = math.hypot(delta_x_cm, delta_y_cm)
-        galat_pct = (e_pos_cm / 200.0) * 100.0 # 200 cm = 2.0 meter
+        galat_pct = (e_pos_cm / 200.0) * 100.0
 
+        g = self.gain_info[self.metode]
         print("\n" + "=" * 65)
         print("       LAPORAN EVALUASI ODOMETRI LURUS 2.0 M")
-        print(f"  Metode: {self.metode} | Kondisi: {self.kondisi} | {self.sesi}")
+        print(f"  Metode: {g['nama']}")
+        print(f"  Kondisi: {self.kondisi} | {self.sesi}")
         print("=" * 65)
         print(f"• Pembacaan Sensor Odometri  : X={last_x:+.4f} m, Y={last_y:+.4f} m, Yaw={last_th:+.2f}°")
         print(f"• Meleset Maju/Mundur (Δx)   : {delta_x_cm:+.2f} cm")
@@ -319,7 +323,6 @@ class AMRBenchmark:
         print(f"• Persentase Galat Odometri  : {galat_pct:.2f} %")
         print("=" * 65)
 
-        # Simpan CSV Lengkap
         filename = f"odom_lurus_2m_{self.metode.lower()}_{self.kondisi}_{self.sesi}_{file_ts}.csv"
         csv_path = os.path.join(self.output_dir, filename)
         with open(csv_path, 'w', encoding='utf-8') as f:
@@ -327,7 +330,9 @@ class AMRBenchmark:
             f.write("\n")
             f.write("# ========================================================================\n")
             f.write("# RANGKUMAN EVALUASI ODOMETRI GERAK LURUS 2.0 METER\n")
-            f.write(f"# Metode               : {self.metode}\n")
+            f.write(f"# Metode               : {g['nama']}\n")
+            f.write(f"# Parameter PI Kiri    : Kp = {g['kp_l']:.4f}, Ki = {g['ki_l']:.4f}\n")
+            f.write(f"# Parameter PI Kanan   : Kp = {g['kp_r']:.4f}, Ki = {g['ki_r']:.4f}\n")
             f.write(f"# Kondisi              : {self.kondisi} | {self.sesi}\n")
             f.write(f"# Waktu                : {view_ts}\n")
             f.write("# ========================================================================\n")
@@ -358,7 +363,10 @@ class AMRBenchmark:
 
         if opt == '1': cmd_char, target_deg = b"2\n", 90.0
         elif opt == '2': cmd_char, target_deg = b"3\n", 180.0
-        else: cmd_char, target_deg = b"4\n", 360.0
+        elif opt == '3': cmd_char, target_deg = b"4\n", 360.0
+        else:
+            print("[!] Pilihan tidak valid.")
+            return
 
         file_ts, view_ts = get_timestamp()
         port = self.cari_port()
@@ -370,13 +378,20 @@ class AMRBenchmark:
         time.sleep(2.0)
         ser.reset_input_buffer()
 
-        input(f"[*] Tekan ENTER untuk memulai rotasi robot {target_deg:.0f}°...")
+        input(f"[*] Tempatkan busur derajat atau acuan sudut 0° pada robot, lalu tekan ENTER...")
         ser.write(f"MODE,{self.metode}\n".encode())
-        time.sleep(0.1)
+        ser.flush()
+        time.sleep(0.2)
+
+        while ser.in_waiting > 0:
+            resp = ser.readline().decode('utf-8', errors='ignore').strip()
+            if "[ARDUINO CONFIRM]" in resp:
+                print(f"[✓] {resp}")
+
         ser.write(cmd_char)
         ser.flush()
 
-        print(f"[*] 🔄 Robot berputar di tempat sebesar {target_deg:.0f}°...")
+        print(f"[*] 🔄 Robot berputar di tempat (Target: {target_deg}°)...")
         lines = ["Time_s,RPM_L,RPM_R,PWM_L,PWM_R,X_odom,Y_odom,Theta_deg\n"]
         last_th = 0.0
         t0 = time.time()
@@ -386,30 +401,33 @@ class AMRBenchmark:
             if l.startswith("LOG:"):
                 parts = l.replace("LOG:", "").split(",")
                 if len(parts) >= 8:
-                    lines.append(",".join(parts) + "\n")
-                    last_th = abs(float(parts[7]))
-                    sys.stdout.write(f"\r[*] Sudut Sensor: {last_th:5.1f}° / {target_deg:.1f}°")
-                    sys.stdout.flush()
-                    if last_th >= (target_deg - 0.5):
-                        break
+                    try:
+                        lines.append(",".join(parts) + "\n")
+                        last_th = float(parts[7])
+                        sys.stdout.write(f"\r[*] Sudut Hadap Sensor: {abs(last_th):5.2f}° / {target_deg:.1f}°")
+                        sys.stdout.flush()
+                        if abs(last_th) >= (target_deg - 0.5):
+                            break
+                    except ValueError:
+                        pass
         ser.close()
 
-        print(f"\n\n[✓] Pembacaan Sudut Sensor: {last_th:.2f}°")
+        print(f"\n\n[✓] Pembacaan Sudut Sensor: {abs(last_th):.2f}°")
         print("-" * 65)
-        th_riil = float(input(f"  >> Masukkan sudut aktual dari busur derajat (derajat) [default {target_deg:.0f}]: ") or str(target_deg))
+        print(f"Pengukuran Fisik Sudut Akhir Robot (Pakai Busur Derajat / Smartphone Compass):")
+        sudut_riil = float(input(f"  >> Masukkan Sudut Fisik Aktual (derajat) [target {target_deg}°]: ") or str(target_deg))
 
-        err_deg = abs(last_th - th_riil)
-        err_pct = (err_deg / target_deg) * 100.0
+        error_sudut = abs(sudut_riil - target_deg)
+        error_sudut_pct = (error_sudut / target_deg) * 100.0
 
+        g = self.gain_info[self.metode]
         print("\n" + "=" * 65)
-        print(f"       LAPORAN EVALUASI ROTASI {target_deg:.0f}°")
-        print(f"  Metode: {self.metode} | Kondisi: {self.kondisi} | {self.sesi}")
+        print(f"     LAPORAN EVALUASI ROTASI {target_deg:.0f}°")
+        print(f"  Metode: {g['nama']} | Kondisi: {self.kondisi} | {self.sesi}")
         print("=" * 65)
-        print(f"• Target Rotasi            : {target_deg:.1f}°")
-        print(f"• Sudut Sensor Odometri    : {last_th:.2f}°")
-        print(f"• Sudut Riil Busur Derajat : {th_riil:.2f}°")
-        print(f"• Kesalahan Orientasi (Δθ) : {err_deg:.2f}°")
-        print(f"• Persentase Galat Sudut   : {err_pct:.2f} %")
+        print(f"• Sudut Pembacaan Sensor : {abs(last_th):.2f}°")
+        print(f"• Sudut Aktual Lapangan  : {sudut_riil:.2f}°")
+        print(f"• Selisih Galat Sudut    : {error_sudut:.2f}° ({error_sudut_pct:.2f}%)")
         print("=" * 65)
 
         filename = f"odom_rotasi_{int(target_deg)}deg_{self.metode.lower()}_{self.kondisi}_{self.sesi}_{file_ts}.csv"
@@ -418,29 +436,32 @@ class AMRBenchmark:
             f.writelines(lines)
             f.write("\n")
             f.write("# ========================================================================\n")
-            f.write(f"# RANGKUMAN EVALUASI ROTASI DI TEMPAT {target_deg:.0f} DERAJAT\n")
-            f.write(f"# Metode               : {self.metode}\n")
+            f.write(f"# RANGKUMAN EVALUASI ODOMETRI ROTASI DI TEMPAT ({target_deg:.0f} DERAJAT)\n")
+            f.write(f"# Metode               : {g['nama']}\n")
+            f.write(f"# Parameter PI Kiri    : Kp = {g['kp_l']:.4f}, Ki = {g['ki_l']:.4f}\n")
+            f.write(f"# Parameter PI Kanan   : Kp = {g['kp_r']:.4f}, Ki = {g['ki_r']:.4f}\n")
             f.write(f"# Kondisi              : {self.kondisi} | {self.sesi}\n")
             f.write(f"# Waktu                : {view_ts}\n")
             f.write("# ========================================================================\n")
-            f.write(f"# Target_deg;{target_deg:.1f}\n")
-            f.write(f"# Theta_sensor_deg;{last_th:.2f}\n")
-            f.write(f"# Theta_riil_deg;{th_riil:.2f}\n")
-            f.write(f"# Kesalahan_Sudut_deg;{err_deg:.2f}\n")
-            f.write(f"# Galat_Sudut_pct;{err_pct:.2f}\n")
+            f.write(f"# Target_Sudut_deg;{target_deg:.1f}\n")
+            f.write(f"# Sensor_Sudut_deg;{abs(last_th):.2f}\n")
+            f.write(f"# Riil_Sudut_deg;{sudut_riil:.2f}\n")
+            f.write(f"# Galat_Sudut_deg;{error_sudut:.2f}\n")
+            f.write(f"# Persentase_Galat_pct;{error_sudut_pct:.2f}\n")
             f.write("# ========================================================================\n")
 
-        print(f"[✓] Data Telemetri & Evaluasi Tersimpan ke: {csv_path}\n")
+        print(f"[✓] Data Tersimpan ke: {csv_path}\n")
 
     # =========================================================================
-    # MENU 4: ODOMETRI PERSEGI TERTUTUP (4 x 2m = 8m / UMBmark)
+    # MENU 4: ODOMETRI PERSEGI TERTUTUP UMBMARK (4 x 2m = 8m)
     # =========================================================================
     def run_odom_persegi(self):
         print("\n" + "=" * 65)
-        print("   PENGUJIAN ODOMETRI PERSEGI TERTUTUP (4 x 2.0 M = 8.0 M)")
+        print("   PENGUJIAN ODOMETRI: LINTASAN PERSEGI TERTUTUP (8 METER)")
+        print("   Metode Standar Robotika UMBmark (4 x 2.0 Meter)")
         print("=" * 65)
         print(f"Skenario: [{self.metode}] | [{self.kondisi}] | [{self.sesi}]")
-        print("Robot akan menempuh 4 sisi: Maju 2m -> Belok 90° (diulang 4 kali).")
+        total_lintasan = 8.0 # 4 sisi x 2.0 meter
         file_ts, view_ts = get_timestamp()
 
         port = self.cari_port()
@@ -452,55 +473,68 @@ class AMRBenchmark:
         time.sleep(2.0)
         ser.reset_input_buffer()
 
-        input("[*] Posisikan as roda robot tepat di titik start (0,0). Tekan ENTER...")
+        input("[*] Tempelkan lakban silang tanda START di lantai, tempatkan robot, lalu tekan ENTER...")
         ser.write(f"MODE,{self.metode}\n".encode())
-        time.sleep(0.1)
+        ser.flush()
+        time.sleep(0.2)
+
+        while ser.in_waiting > 0:
+            resp = ser.readline().decode('utf-8', errors='ignore').strip()
+            if "[ARDUINO CONFIRM]" in resp:
+                print(f"[✓] {resp}")
+
         ser.write(b"5\n")
         ser.flush()
 
-        print("[*] 🔄 Robot menjalankan lintasan persegi (durasi ~35-45 detik)...")
+        print("[*] 🔄 Robot memulai navigasi persegi 4 sisi x 2 meter...")
         lines = ["Time_s,RPM_L,RPM_R,PWM_L,PWM_R,X_odom,Y_odom,Theta_deg\n"]
         last_x, last_y, last_th = 0.0, 0.0, 0.0
         t0 = time.time()
 
-        while time.time() - t0 < 60.0:
+        while time.time() - t0 < 65.0:
             l = ser.readline().decode('utf-8', errors='ignore').strip()
             if l.startswith("LOG:"):
                 parts = l.replace("LOG:", "").split(",")
                 if len(parts) >= 8:
-                    lines.append(",".join(parts) + "\n")
-                    last_x = float(parts[5])
-                    last_y = float(parts[6])
-                    last_th = float(parts[7])
-                    sys.stdout.write(f"\r[*] X={last_x:+5.2f}m | Y={last_y:+5.2f}m | Yaw={last_th:+5.1f}°")
-                    sys.stdout.flush()
+                    try:
+                        lines.append(",".join(parts) + "\n")
+                        last_x = float(parts[5])
+                        last_y = float(parts[6])
+                        last_th = float(parts[7])
+                        sys.stdout.write(f"\r[*] Koordinat Odometri: X={last_x:+5.2f}m | Y={last_y:+5.2f}m | Yaw={last_th:+5.1f}°")
+                        sys.stdout.flush()
+                    except ValueError:
+                        pass
         ser.close()
 
-        print(f"\n\n[✓] Posisi Akhir Odometri Sensor:")
-        print(f"    • Koordinat Sensor : ({last_x:+.4f} m, {last_y:+.4f} m)")
-        print(f"    • Sudut Akhir Sensor : {last_th:+.2f}°")
+        print("\n\n" + "=" * 65)
+        print("[✓] Robot telah menyelesaikan 4 sisi lintasan (Total 8 Meter)!")
+        print("    Pembacaan Sensor:")
+        print(f"    • Koordinat Akhir Sensor : X={last_x:+.4f} m, Y={last_y:+.4f} m")
+        print(f"    • Sudut Orientasi Sensor : Yaw={last_th:+.2f}°")
+        print("=" * 65)
 
-        print("-" * 65)
-        print("Pengukuran Fisik di Garis Finish (Lihat Gambar Segitiga A-B-C):")
+        print("\nPENGUKURAN DI TITIK FINISH (1 Kali Saja dari Tanda Lakban START):")
         delta_x_cm = float(input("  >> Masukkan Δx (Meleset Maju/Mundur dalam cm) [default 0.0]: ") or "0.0")
         delta_y_cm = float(input("  >> Masukkan Δy (Meleset Samping dalam cm)       [default 0.0]: ") or "0.0")
-        th_riil_err = float(input("  >> Masukkan Meleset Sudut Hadap / Heading (derajat) [default 0.0]: ") or "0.0")
+        th_riil_err = float(input("  >> Masukkan Kesalahan Sudut Hadap Akhir (derajat) [default 0.0]: ") or "0.0")
 
-        total_lintasan = 8.0 # meter
+        # Rumus Return-to-Origin Error UMBmark
         e_return_cm = math.hypot(delta_x_cm, delta_y_cm)
-        drift_rate = e_return_cm / total_lintasan # cm per meter
+        drift_rate = e_return_cm / total_lintasan # cm/meter
 
+        g = self.gain_info[self.metode]
         print("\n" + "=" * 65)
-        print("   LAPORAN EVALUASI LINTASAN PERSEGI (4x2m = 8m)")
-        print(f"  Metode: {self.metode} | Kondisi: {self.kondisi} | {self.sesi}")
+        print("       LAPORAN EVALUASI UMBMARK LINTASAN PERSEGI (8 M)")
+        print(f"  Metode: {g['nama']} | Kondisi: {self.kondisi} | {self.sesi}")
         print("=" * 65)
-        print(f"• Total Jarak Tempuh Lintasan    : {total_lintasan:.1f} meter")
-        print(f"• Posisi Akhir Sensor Odometri   : ({last_x:+.3f} m, {last_y:+.3f} m, {last_th:+.1f}°)")
-        print(f"• Meleset Maju/Mundur (Δx)       : {delta_x_cm:+.2f} cm")
-        print(f"• Meleset Samping (Δy)           : {delta_y_cm:+.2f} cm")
-        print(f"• Return-to-Origin Error (E_ret) : {e_return_cm:.2f} cm")
-        print(f"• Tingkat Penyimpangan (Drift)   : {drift_rate:.2f} cm/meter")
-        print(f"• Kesalahan Sudut Hadap Akhir    : {th_riil_err:.2f}°")
+        print(f"  Total Jarak Tempuh Lintasan    : {total_lintasan:.1f} meter")
+        print(f"  Posisi Sensor Akhir            : X={last_x:+.4f} m, Y={last_y:+.4f} m, Yaw={last_th:+.2f}°")
+        print(f"  Meleset Sumbu X (Δx)           : {delta_x_cm:+.2f} cm")
+        print(f"  Meleset Sumbu Y (Δy)           : {delta_y_cm:+.2f} cm")
+        print(f"  Return-to-Origin Error (E_ret) : {e_return_cm:.2f} cm")
+        print(f"  Tingkat Penyimpangan (Drift)   : {drift_rate:.2f} cm/meter")
+        print(f"  Kesalahan Sudut Hadap Akhir    : {th_riil_err:.2f}°")
         print("=" * 65)
 
         filename = f"odom_persegi_8m_{self.metode.lower()}_{self.kondisi}_{self.sesi}_{file_ts}.csv"
@@ -510,7 +544,9 @@ class AMRBenchmark:
             f.write("\n")
             f.write("# ========================================================================\n")
             f.write("# RANGKUMAN EVALUASI ODOMETRI LINTASAN PERSEGI (4x2m = 8m)\n")
-            f.write(f"# Metode               : {self.metode}\n")
+            f.write(f"# Metode               : {g['nama']}\n")
+            f.write(f"# Parameter PI Kiri    : Kp = {g['kp_l']:.4f}, Ki = {g['ki_l']:.4f}\n")
+            f.write(f"# Parameter PI Kanan   : Kp = {g['kp_r']:.4f}, Ki = {g['ki_r']:.4f}\n")
             f.write(f"# Kondisi              : {self.kondisi} | {self.sesi}\n")
             f.write(f"# Waktu                : {view_ts}\n")
             f.write("# ========================================================================\n")
@@ -521,21 +557,23 @@ class AMRBenchmark:
             f.write(f"# Delta_X_cm;{delta_x_cm:.2f}\n")
             f.write(f"# Delta_Y_cm;{delta_y_cm:.2f}\n")
             f.write(f"# Return_To_Origin_Error_cm;{e_return_cm:.2f}\n")
-            f.write(f"# Drift_Rate_cm_per_m;{drift_rate:.2f}\n")
-            f.write(f"# Heading_Error_deg;{th_riil_err:.2f}\n")
+            f.write(f"# Drift_Rate_cm_per_meter;{drift_rate:.2f}\n")
+            f.write(f"# Final_Heading_Error_deg;{th_riil_err:.2f}\n")
             f.write("# ========================================================================\n")
 
-        print(f"[✓] Data Telemetri & Evaluasi Tersimpan ke: {csv_path}\n")
+        print(f"[✓] Data Berhasil Disimpan ke: {csv_path}\n")
 
     # =========================================================================
     # MENU UTAMA
     # =========================================================================
     def main_menu(self):
         while True:
+            g = self.gain_info[self.metode]
             print("\n" + "=" * 65)
             print("       SISTEM BENCHMARK PENGUJIAN SKRIPSI AMR-01")
             print("=" * 65)
-            print(f"Status Aktif: [{self.metode}] | [{self.kondisi}] | [{self.sesi}]")
+            print(f"Status Aktif: [{g['nama']}]")
+            print(f"              [{self.kondisi.upper().replace('_', ' ')}] | [{self.sesi.upper()}]")
             print("-" * 65)
             print(" [K] Ganti Skenario (Metode PI, Beban, Pengulangan)")
             print(" [1] Uji Step Response Motor (60, 80, 100 RPM) + Buat Grafik")
@@ -551,9 +589,12 @@ class AMRBenchmark:
             elif p == '2': self.run_odom_lurus()
             elif p == '3': self.run_odom_rotasi()
             elif p == '4': self.run_odom_persegi()
-            elif p == '0': break
+            elif p == '0':
+                print("[*] Selesai. Semangat Skripsinya, Divala!\n")
+                break
+            else:
+                print("[!] Pilihan tidak valid.")
 
-
-if __name__ == '__main__':
-    
-    AMRBenchmark().main_menu()
+if __name__ == "__main__":
+    app = AMRBenchmark()
+    app.main_menu()
