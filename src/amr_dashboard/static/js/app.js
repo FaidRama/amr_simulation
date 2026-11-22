@@ -1824,9 +1824,10 @@ function renderMonitoring() {
 
                         <!-- View 3: Dual Split (Kamera + Map side by side) -->
                         <div class="viewport-split" id="view-split">
-                            <div class="viewport-split-pane">
+                            <div class="viewport-split-pane" style="position:relative;">
                                 <img id="split-cam-img" class="cockpit-cam-img" src="/api/camera/stream" alt="Live Kamera">
-                                <div class="viewport-hud">
+                                <canvas id="split-cam-canvas" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:2;"></canvas>
+                                <div class="viewport-hud" style="z-index:3;">
                                     <span class="hud-badge hud-badge-rec"><span class="rec-dot"></span>CAM_01</span>
                                 </div>
                             </div>
@@ -2097,6 +2098,14 @@ function renderCamera() {
                                 <div class="mon-value" style="font-size:1.05rem;" id="cam-response">—</div>
                             </div>
                             <div class="monitor-card">
+                                <div class="mon-label">Aktivitas</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-activity">—</div>
+                            </div>
+                            <div class="monitor-card">
+                                <div class="mon-label">Arah / Gerak</div>
+                                <div class="mon-value" style="font-size:1.05rem;" id="cam-direction">—</div>
+                            </div>
+                            <div class="monitor-card">
                                 <div class="mon-label">Fitur Aktif</div>
                                 <div class="mon-value" style="font-size:1.05rem;" id="cam-feature">—</div>
                             </div>
@@ -2181,8 +2190,8 @@ function updateCameraReadout(data) {
     }
 
     if (!info) {
-        ['cam-persons', 'cam-dist', 'cam-zone', 'cam-response', 'cam-feature',
-         'cam-bbox', 'cam-conf', 'cam-fps'].forEach(id => setText(id, '—'));
+        ['cam-persons', 'cam-dist', 'cam-zone', 'cam-response', 'cam-activity',
+         'cam-direction', 'cam-feature', 'cam-bbox', 'cam-conf', 'cam-fps'].forEach(id => setText(id, '—'));
         return;
     }
 
@@ -2191,6 +2200,8 @@ function updateCameraReadout(data) {
     setText('cam-persons', String(info.persons ?? 0));
     setText('cam-zone', info.zone || '—');
     setText('cam-response', info.response || '—');
+    setText('cam-activity', (info.activity && info.activity !== 'NONE') ? info.activity : '—');
+    setText('cam-direction', formatHumanDirection(info.activity, info.direction, info.speed_m_s) || '—');
 
     if (has(info.distance_m)) {
         let d = `~${info.distance_m.toFixed(2)} m`;
@@ -3241,6 +3252,35 @@ function updateBboxUI() {
     }
 }
 
+function formatHumanDirection(activity, direction, speedMs) {
+    if (!activity || activity === 'NONE') return '';
+    if (activity === 'SITTING') return 'DUDUK (PASIF)';
+    if (activity === 'STANDING') return 'DIAM';
+    if (activity === 'WALKING') {
+        const spd = (speedMs !== null && speedMs !== undefined) ? ` ${Number(speedMs).toFixed(2)}m/s` : '';
+        if (direction === 'OPPOSITE_DIRECTION') return `MENDEKAT${spd}`;
+        if (direction === 'SAME_DIRECTION') return `MENJAUH${spd}`;
+        return `BERJALAN${spd}`;
+    }
+    return direction || '';
+}
+
+function formatBoxBehaviorLabel(box) {
+    const act = box.activity;
+    if (!act || act === 'NONE') return '';
+    if (act === 'SITTING') return 'SITTING · PASIF';
+    if (act === 'STANDING') return 'STANDING';
+    if (act === 'WALKING') {
+        const spd = (box.speed_m_s !== null && box.speed_m_s !== undefined)
+            ? ` ${Number(box.speed_m_s).toFixed(2)}m/s`
+            : '';
+        if (box.direction === 'OPPOSITE_DIRECTION') return `WALKING · MENDEKAT${spd}`;
+        if (box.direction === 'SAME_DIRECTION') return `WALKING · MENJAUH${spd}`;
+        return `WALKING${spd}`;
+    }
+    return act;
+}
+
 function drawBboxHUD(canvasId, imgId, humanInfo) {
     const canvas = document.getElementById(canvasId);
     const img = document.getElementById(imgId);
@@ -3318,7 +3358,11 @@ function drawBboxHUD(canvasId, imgId, humanInfo) {
         let fillColor = 'rgba(59, 130, 246, 0.15)';
         let tagColor = '#3b82f6';
 
-        if (box.is_target) {
+        if (box.activity === 'SITTING') {
+            strokeColor = '#06b6d4';
+            fillColor = 'rgba(6, 182, 212, 0.16)';
+            tagColor = '#0891b2';
+        } else if (box.is_target || box.zone === 'NEAR') {
             if (box.zone === 'NEAR') {
                 strokeColor = '#ef4444';
                 fillColor = 'rgba(239, 68, 68, 0.22)';
@@ -3326,11 +3370,11 @@ function drawBboxHUD(canvasId, imgId, humanInfo) {
             } else if (box.zone === 'MEDIUM') {
                 strokeColor = '#f59e0b';
                 fillColor = 'rgba(245, 158, 11, 0.20)';
-                tagColor = '#f59e0b';
+                tagColor = '#d97706';
             } else {
                 strokeColor = '#10b981';
                 fillColor = 'rgba(16, 185, 129, 0.16)';
-                tagColor = '#10b981';
+                tagColor = '#059669';
             }
         }
 
@@ -3372,27 +3416,47 @@ function drawBboxHUD(canvasId, imgId, humanInfo) {
         ctx.fillStyle = fillColor;
         ctx.fillRect(bx, by, bw, bh);
 
-        // HUD Text Label
-        let label = `HUMAN ${(box.conf * 100).toFixed(0)}%`;
+        // HUD Text Label (Baris 1: ID/Target, Confidence, Jarak, Zona)
+        const idPrefix = (box.track_id !== null && box.track_id !== undefined) ? `#${box.track_id} ` : '';
+        const rolePrefix = box.is_target ? 'TARGET' : 'HUMAN';
+        let label = `${idPrefix}${rolePrefix} ${(box.conf * 100).toFixed(0)}%`;
         if (box.dist !== null && box.dist !== undefined) {
-            label += ` · ${box.dist.toFixed(2)}m`;
+            label += ` · ${Number(box.dist).toFixed(2)}m`;
         }
         if (box.zone && box.zone !== 'NONE') {
             label += ` [${box.zone}]`;
         }
 
-        ctx.font = 'bold 11px Inter, system-ui, sans-serif';
-        const textWidth = ctx.measureText(label).width;
-        const tagH = 18;
-        const tagW = textWidth + 10;
-        const tagY = Math.max(0, by - tagH);
+        // Baris 2: Behavior (Aktivitas & Arah Gerak per individu)
+        const behaviorLabel = formatBoxBehaviorLabel(box);
 
+        ctx.font = 'bold 11px Inter, system-ui, sans-serif';
+        const tagH = 18;
+        const primaryW = ctx.measureText(label).width + 10;
+        const behaviorW = behaviorLabel ? (ctx.measureText(behaviorLabel).width + 10) : 0;
+        const totalTagH = behaviorLabel ? (tagH * 2 + 2) : tagH;
+        const startY = by >= totalTagH ? (by - totalTagH) : Math.max(0, by + 2);
+
+        const primaryX = Math.max(0, Math.min(w - primaryW, bx));
         ctx.fillStyle = tagColor;
-        ctx.fillRect(bx, tagY, tagW, tagH);
+        ctx.fillRect(primaryX, startY, primaryW, tagH);
 
         ctx.fillStyle = '#ffffff';
         ctx.textBaseline = 'middle';
-        ctx.fillText(label, bx + 5, tagY + tagH / 2);
+        ctx.fillText(label, primaryX + 5, startY + tagH / 2);
+
+        if (behaviorLabel) {
+            const behY = startY + tagH + 1;
+            const behX = Math.max(0, Math.min(w - behaviorW, bx));
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.86)';
+            ctx.fillRect(behX, behY, behaviorW, tagH);
+            ctx.strokeStyle = strokeColor;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(behX, behY, behaviorW, tagH);
+
+            ctx.fillStyle = '#f8fafc';
+            ctx.fillText(behaviorLabel, behX + 5, behY + tagH / 2);
+        }
     });
 }
 
@@ -3403,6 +3467,7 @@ function renderActiveBboxHUD() {
         drawBboxHUD('teleop-cam-canvas', 'teleop-cam-img', APP.humanInfo);
     } else if (APP.currentPage === 'delivery') {
         drawBboxHUD('cockpit-cam-canvas', 'cockpit-cam-img', APP.humanInfo);
+        drawBboxHUD('split-cam-canvas', 'split-cam-img', APP.humanInfo);
     }
 }
 

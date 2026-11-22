@@ -9,6 +9,8 @@ Cukup jalankan: python3 trial_error_step_test.py
 import os
 import sys
 import time
+import shutil
+import datetime
 
 try:
     import serial
@@ -71,16 +73,29 @@ def main():
     ser.close()
     print("-" * 75)
 
-    # 5. Simpan ke File CSV
+        # 5. Format Tanggal & Jam Pengujian
+    now = datetime.datetime.now()
+    timestamp_str = now.strftime("%Y%m%d_%H%M%S") # Format: TahunBulanTanggal_JamMenitDetik
+    jam_readable  = now.strftime("%d/%m/%Y Jam %H:%M:%S")
+
+    # Direktori penyimpanan di Jetson
     output_dir = os.path.expanduser("~/deliver_amr")
     if not os.path.exists(output_dir):
         output_dir = "."
-    output_csv = os.path.join(output_dir, f"step_respon_{target_str}_trial_error.csv")
 
-    with open(output_csv, "w", encoding="utf-8") as f:
+    # Simpan dengan TIMESTAMP (Lengkap dengan Tanggal & Jam)
+    csv_timestamped = os.path.join(output_dir, f"step_respon_{target_str}_trial_error_{timestamp_str}.csv")
+    csv_latest      = os.path.join(output_dir, f"step_respon_{target_str}_trial_error.csv")
+
+    with open(csv_timestamped, "w", encoding="utf-8") as f:
         f.writelines(lines)
 
-    print(f"\n[OK] Data berhasil disimpan ke: {output_csv}")
+    # Buat juga salinan file latest agar mudah diakses
+    shutil.copyfile(csv_timestamped, csv_latest)
+
+    print(f"\n[OK] Data CSV dengan Jam berhasil disimpan ke:")
+    print(f"     >> {csv_timestamped}")
+    print(f"     (Waktu Pengujian: {jam_readable})")
 
     # 6. Buat Gambar Grafik Otomatis jika script plot tersedia
     script_dirs = [
@@ -89,9 +104,21 @@ def main():
         os.path.join(os.path.dirname(__file__), "plot_step_response_trial_error.py")
     ]
     plot_script = next((s for s in script_dirs if os.path.exists(s)), None)
+    
     if plot_script:
-        print(f"[*] Membuat grafik otomatis menggunakan {plot_script}...")
-        os.system(f"python3 {plot_script} {output_csv}")
-
-if __name__ == "__main__":
-    main()
+        print(f"\n[*] Membuat grafik otomatis menggunakan {plot_script}...")
+        png_timestamped = os.path.join(output_dir, f"grafik_step_respon_{target_str}_trial_error_{timestamp_str}.png")
+        os.system(f"python3 \"{plot_script}\" \"{csv_timestamped}\" --save \"{png_timestamped}\"")
+        
+        # Buat juga salinan grafik latest
+        png_latest = os.path.join(output_dir, f"grafik_step_respon_{target_str}_trial_error.png")
+        if os.path.exists(png_timestamped):
+            shutil.copyfile(png_timestamped, png_latest)
+            
+        print("\n" + "=" * 75)
+        print(f"[SELESAI] File pengujian {target_str.upper()} Trial-Error tersimpan rapi:")
+        print(f"1. CSV : {os.path.basename(csv_timestamped)}")
+        print(f"2. PNG : {os.path.basename(png_timestamped)}")
+        print(f"Download ke Laptop dengan PowerShell:")
+        print(f"scp jetson@100.84.182.79:/home/jetson/deliver_amr/*{target_str}*trial_error* .")
+        print("=" * 75)
