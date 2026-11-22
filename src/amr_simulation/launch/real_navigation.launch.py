@@ -188,7 +188,7 @@ def generate_launch_description():
         parameters=[{
             'serial_port': '/dev/arduino',
             'baudrate': 115200,
-            'wheel_diameter': 0.127,
+            'wheel_diameter': 0.125,
             'wheel_separation': 0.458,
             'ticks_per_rev': 350.7,
             'cmd_vel_topic': '/cmd_vel_safe',

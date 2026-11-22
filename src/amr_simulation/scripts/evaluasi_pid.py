@@ -40,7 +40,7 @@ class PIDEvaluationNode(Node):
     def __init__(self, target_v: float, target_rpm: float, duration: float, label: str, show_plot: bool):
         super().__init__('pid_evaluation_node')
 
-        self.wheel_diameter = 0.127       # D = 0.127 m (5 inci)
+        self.wheel_diameter = 0.125       # D = 0.127 m (5 inci)
         self.wheel_separation = 0.458     # Jarak antar roda = 0.458 m
 
         self.target_v = target_v
