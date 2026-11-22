@@ -231,6 +231,60 @@ Visualization Manager:
         Reliability Policy: Best Effort
         Value: /global_costmap/published_footprint
       Value: false
+    - Alpha: 0.85
+      Arrow Length: 0.15000000596046448
+      Axes Length: 0.30000001192092896
+      Axes Radius: 0.009999999776482582
+      Class: rviz_default_plugins/PoseArray
+      Color: 255; 85; 0
+      Enabled: true
+      Head Length: 0.05000000074505806
+      Head Radius: 0.02500000037252903
+      Name: AMCL Particle Cloud
+      Shaft Length: 0.10000000149011612
+      Shaft Radius: 0.009999999776482582
+      Shape: Arrow (Flat)
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /particlecloud
+      Value: true
+    - Alpha: 1
+      Axes Length: 0.5
+      Axes Radius: 0.05000000074505806
+      Class: rviz_default_plugins/PoseWithCovariance
+      Color: 0; 255; 128
+      Covariance:
+        Orientation:
+          Alpha: 0.5
+          Color: 255; 255; 127
+          Color Style: Unique
+          Frame: Local
+          Offset: 1
+          Scale: 1
+          Value: true
+        Position:
+          Alpha: 0.35
+          Color: 204; 51; 204
+          Scale: 1
+          Value: true
+        Value: true
+      Enabled: true
+      Head Length: 0.15000000596046448
+      Head Radius: 0.07000000029802322
+      Name: AMCL Pose & Covariance
+      Shaft Length: 0.3499999940395355
+      Shaft Radius: 0.029999999329447746
+      Shape: Arrow
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /amcl_pose
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
