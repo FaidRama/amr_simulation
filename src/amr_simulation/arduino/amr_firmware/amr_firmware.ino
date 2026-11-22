@@ -30,7 +30,7 @@ const bool INVERT_ENC_L   = true;
 const bool INVERT_ENC_R   = true;
 
 // ====================== 3. PARAMETER FISIK ROBOT =========================
-const float WHEEL_DIAMETER = 0.127; // meter (5 inci = 0.127 meter)
+const float WHEEL_DIAMETER = 0.125; // meter (5 inci = 0.125 meter)
 const float WHEEL_BASE_B   = 0.458; // meter (45.8 cm)
 const float CPR_WHEEL      = 350.7; // Ticks per revolusi PG36 (7 PPR * 50.1 gearbox)
 
