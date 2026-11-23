@@ -451,7 +451,7 @@ class AMRBenchmark:
         print(f"Pengukuran Fisik Sudut Akhir Robot (Pakai Busur Derajat / Smartphone Compass):")
         sudut_riil = float(input(f"  >> Masukkan Sudut Fisik Aktual (derajat) [target {target_deg}°]: ") or str(target_deg))
 
-        error_sudut = abs(sudut_riil - target_deg)
+        error_sudut = abs(sudut_riil - abs(last_th))
         error_sudut_pct = (error_sudut / target_deg) * 100.0
 
         g = self.gain_info[self.metode]
