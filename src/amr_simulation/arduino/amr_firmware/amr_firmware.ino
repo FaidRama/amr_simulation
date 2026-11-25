@@ -254,10 +254,16 @@ void cetakRangkumanStep() {
 
 // ====================== 10. PROTOKOL PARSER SERIAL =======================
 void prosesPerintahSerial(char *cmd) {
-  // A. Perintah Kecepatan Linier & Anguler: "CMD,v_lin,v_ang"
-  if (strncmp(cmd, "CMD,", 4) == 0) {
-    float v_lin = 0.0, v_ang = 0.0;
-    if (sscanf(cmd + 4, "%f,%f", &v_lin, &v_ang) == 2) {
+  // A. Perintah Kecepatan Linier & Anguler:
+  //    - "V,v_lin,v_ang"   (ROS 2 arduino_bridge.py / Teleop / Nav2)
+  //    - "CMD,v_lin,v_ang" (skrip uji mandiri)
+  //    Menggunakan strchr + atof karena sscanf("%f") nonaktif secara default di AVR Arduino Uno.
+  if (cmd[0] == 'V' || cmd[0] == 'v' || strncmp(cmd, "CMD,", 4) == 0) {
+    char *comma1 = strchr(cmd, ',');
+    if (comma1 != NULL) {
+      float v_lin = atof(comma1 + 1);
+      char *comma2 = strchr(comma1 + 1, ',');
+      float v_ang = (comma2 != NULL) ? atof(comma2 + 1) : 0.0;
       lastSerialCmdTime = millis();
       modePengujian = 99;
       hitungInverseKinematics(v_lin, v_ang);
