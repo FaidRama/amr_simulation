@@ -32,7 +32,7 @@ const bool INVERT_ENC_R   = true;
 // ====================== 3. PARAMETER FISIK ROBOT =========================
 const float WHEEL_DIAMETER = 0.125; // meter (5 inci = 0.125 meter)
 const float WHEEL_BASE_B   = 0.458; // meter (45.8 cm)
-const float CPR_WHEEL      = 350.7; // Ticks per revolusi PG36 (7 PPR * 50.1 gearbox)
+const float CPR_WHEEL      = 356.3; // Ticks per revolusi PG36 (7 PPR * 50.1 gearbox)
 
 // ====================== 4. GAIN KENDALI PI ===============================
 // Parameter PI-PSO
