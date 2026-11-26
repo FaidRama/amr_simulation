@@ -217,15 +217,14 @@ void cetakRangkumanStep() {
 
 // ====================== 11. PARSER SERIAL NON-BLOCKING ====================
 void processCommand(char *cmd) {
-  // A. Perintah Kecepatan dari ROS 2: "V,<linear_v>,<angular_w>"
-  if (cmd[0] == 'V' || cmd[0] == 'v') {
+  // A. Perintah Kecepatan dari ROS 2: "V,<linear_v>,<angular_w>" atau "CMD,v_lin,v_ang"
+  if (cmd[0] == 'V' || cmd[0] == 'v' || strncmp(cmd, "CMD,", 4) == 0) {
     lastSerialCmdTime = millis();
     char *comma1 = strchr(cmd, ',');
     if (comma1 != NULL) {
       float v_lin = atof(comma1 + 1);
       char *comma2 = strchr(comma1 + 1, ',');
-      float v_ang = 0.0;
-      if (comma2 != NULL) v_ang = atof(comma2 + 1);
+      float v_ang = (comma2 != NULL) ? atof(comma2 + 1) : 0.0;
       modePengujian = 99;
       hitungInverseKinematics(v_lin, v_ang);
     }

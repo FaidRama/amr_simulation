@@ -1,0 +1,3 @@
+No,Nama_Titik_Target,Goal_X_m,Goal_Y_m,Goal_Yaw_deg,AMCL_X_m,AMCL_Y_m,AMCL_Yaw_deg,Waktu_Tempuh_s,Panjang_Lintasan_m,Kecepatan_Rata2_mps,AMCL_Sigma_X_cm,AMCL_Sigma_Y_cm,AMCL_Sigma_Yaw_deg,Galat_Posisi_AMCL_cm,Galat_Orientasi_AMCL_deg,Galat_Posisi_Fisik_cm,Galat_Orientasi_Fisik_deg,Sumber_Ground_Truth,Status_Kedatangan,Status_Kelulusan,Waktu_Pengujian
+1,"[SEKALI ANTAR] Manual (-5.00, -1.00)",-5.000,-1.000,0.0,-4.914,-0.961,31.6,23.86,5.52,0.23,14.4,11.8,5.7,9.5,31.6,9.5,31.6,ESTIMASI AMCL SENSOR,SUCCEEDED,LULUS,2026-11-25 21:21:21
+2,[HOME] Stasiun Pangkalan,0.000,0.000,0.0,-0.045,-0.107,31.0,13.60,5.26,0.39,16.0,8.1,5.2,11.6,31.0,11.6,31.0,ESTIMASI AMCL SENSOR,SUCCEEDED,LULUS,2026-11-25 21:21:55
