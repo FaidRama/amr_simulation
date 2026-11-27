@@ -1,0 +1,16 @@
+Time_s,RPM_L,RPM_R,PWM_L,PWM_R,X_odom,Y_odom,Theta_deg
+
+# ========================================================================
+# RANGKUMAN EVALUASI ODOMETRI ROTASI DI TEMPAT (90 DERAJAT)
+# Metode               : PI-PSO (Optimasi Particle Swarm)
+# Parameter PI Kiri    : Kp = 2.7247, Ki = 23.5472
+# Parameter PI Kanan   : Kp = 2.5428, Ki = 24.1789
+# Kondisi              : tanpa_beban | uji_1
+# Waktu                : 2026-11-23 17:03:21
+# ========================================================================
+# Target_Sudut_deg;90.0
+# Sensor_Sudut_deg;0.00
+# Riil_Sudut_deg;90.00
+# Galat_Sudut_deg;0.00
+# Persentase_Galat_pct;0.00
+# ========================================================================
