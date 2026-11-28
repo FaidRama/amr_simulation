@@ -350,6 +350,9 @@ class AMRBenchmark:
     # =========================================================================
     # MENU 3: ODOMETRI ROTASI DI TEMPAT (90°, 180°, 360°)
     # =========================================================================
+    # =========================================================================
+    # MENU 3: ODOMETRI ROTASI DI TEMPAT (90°, 180°, 360°) - VERSI FIX ROBUST
+    # =========================================================================
     def run_odom_rotasi(self):
         print("\n" + "=" * 65)
         print("        PENGUJIAN ODOMETRI: ROTASI DI TEMPAT")
@@ -374,55 +377,86 @@ class AMRBenchmark:
             print("[!] Port Arduino tidak ditemukan.")
             return
 
-        ser = serial.Serial(port, 115200, timeout=1)
+        ser = serial.Serial(port, 115200, timeout=0.2)
         time.sleep(2.0)
         ser.reset_input_buffer()
 
         input(f"[*] Tempatkan busur derajat atau acuan sudut 0° pada robot, lalu tekan ENTER...")
+        
+        # Kirim mode dan verifikasi
         ser.write(f"MODE,{self.metode}\n".encode())
         ser.flush()
         time.sleep(0.2)
 
-        while ser.in_waiting > 0:
-            resp = ser.readline().decode('utf-8', errors='ignore').strip()
-            if "[ARDUINO CONFIRM]" in resp:
-                print(f"[✓] {resp}")
+        t_conf = time.time()
+        while time.time() - t_conf < 1.0:
+            if ser.in_waiting > 0:
+                resp = ser.readline().decode('utf-8', errors='ignore').strip()
+                if "[ARDUINO CONFIRM]" in resp:
+                    print(f"[✓] {resp}")
+                    break
 
+        # Bersihkan buffer serial sebelum trigger putar
+        ser.reset_input_buffer()
         ser.write(cmd_char)
         ser.flush()
 
-        print(f"[*] 🔄 Robot berputar di tempat (Target: {target_deg}°)...")
+        print(f"[*] 🔄 Robot mulai berputar di tempat (Target: {target_deg}°)...")
         lines = ["Time_s,RPM_L,RPM_R,PWM_L,PWM_R,X_odom,Y_odom,Theta_deg\n"]
         last_th = 0.0
         t0 = time.time()
+        sudah_mulai_putar = False
+        waktu_berhenti = 0
 
-        while time.time() - t0 < 15.0:
-            l = ser.readline().decode('utf-8', errors='ignore').strip()
-            if l.startswith("LOG:"):
-                parts = l.replace("LOG:", "").split(",")
+        while time.time() - t0 < 20.0:
+            line_bytes = ser.readline()
+            if not line_bytes:
+                continue
+            l = line_bytes.decode('utf-8', errors='ignore').strip()
+            
+            if "LOG:" in l:
+                # Ambil bagian setelah LOG:
+                idx = l.find("LOG:")
+                log_data = l[idx + 4:].strip()
+                parts = log_data.split(",")
                 if len(parts) >= 8:
                     try:
-                        lines.append(",".join(parts) + "\n")
+                        lines.append(log_data + "\n")
+                        rpm_l_val = abs(float(parts[1]))
+                        rpm_r_val = abs(float(parts[2]))
                         last_th = float(parts[7])
-                        sys.stdout.write(f"\r[*] Sudut Hadap Sensor: {abs(last_th):5.2f}° / {target_deg:.1f}°")
+                        
+                        sys.stdout.write(f"\r[*] Sudut Sensor: {abs(last_th):6.2f}° / {target_deg:.1f}° | RPM: {rpm_l_val:.1f}")
                         sys.stdout.flush()
+
+                        if rpm_l_val > 5.0 or rpm_r_val > 5.0:
+                            sudah_mulai_putar = True
+
+                        # Hentikan jika target sudut tercapai atau robot sudah selesai berhenti
                         if abs(last_th) >= (target_deg - 0.5):
+                            time.sleep(0.3) # Rekam sedikit data akhir saat berhenti
                             break
+
+                        if sudah_mulai_putar and rpm_l_val < 1.0 and rpm_r_val < 1.0:
+                            if waktu_berhenti == 0:
+                                waktu_berhenti = time.time()
+                            elif time.time() - waktu_berhenti > 0.5:
+                                break
                     except ValueError:
                         pass
         ser.close()
 
-        print(f"\n\n[✓] Pembacaan Sudut Sensor: {abs(last_th):.2f}°")
+        print(f"\n\n[✓] Robot Berhenti! Sudut Akhir Sensor: {abs(last_th):.2f}°")
         print("-" * 65)
         print(f"Pengukuran Fisik Sudut Akhir Robot (Pakai Busur Derajat / Smartphone Compass):")
         sudut_riil = float(input(f"  >> Masukkan Sudut Fisik Aktual (derajat) [target {target_deg}°]: ") or str(target_deg))
 
-        error_sudut = abs(sudut_riil - target_deg)
+        error_sudut = abs(sudut_riil - abs(last_th))
         error_sudut_pct = (error_sudut / target_deg) * 100.0
 
         g = self.gain_info[self.metode]
         print("\n" + "=" * 65)
-        print(f"     LAPORAN EVALUASI ROTASI {target_deg:.0f}°")
+        print(f"     LAPORAN EVALUASI ROTASI {target_deg:.0f} DERAJAT")
         print(f"  Metode: {g['nama']} | Kondisi: {self.kondisi} | {self.sesi}")
         print("=" * 65)
         print(f"• Sudut Pembacaan Sensor : {abs(last_th):.2f}°")
@@ -450,8 +484,7 @@ class AMRBenchmark:
             f.write(f"# Persentase_Galat_pct;{error_sudut_pct:.2f}\n")
             f.write("# ========================================================================\n")
 
-        print(f"[✓] Data Tersimpan ke: {csv_path}\n")
-
+        print(f"[✓] Data Berhasil Disimpan ke: {csv_path}\n")
     # =========================================================================
     # MENU 4: ODOMETRI PERSEGI TERTUTUP UMBMARK (4 x 2m = 8m)
     # =========================================================================

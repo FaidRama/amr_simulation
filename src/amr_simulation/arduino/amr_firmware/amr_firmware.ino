@@ -30,9 +30,9 @@ const bool INVERT_ENC_L   = true;
 const bool INVERT_ENC_R   = true;
 
 // ====================== 3. PARAMETER FISIK ROBOT =========================
-const float WHEEL_DIAMETER = 0.125; // meter (5 inci = 0.125 meter)
+const float WHEEL_DIAMETER = 0.125; // meter (12.5 cm)
 const float WHEEL_BASE_B   = 0.458; // meter (45.8 cm)
-const float CPR_WHEEL      = 356.3; // Ticks per revolusi PG36 (7 PPR * 50.1 gearbox)
+const float CPR_WHEEL      = 356.3; // Ticks per revolusi PG36 (7 PPR * 50.9 gearbox)
 
 // ====================== 4. GAIN KENDALI PI ===============================
 // Parameter PI-PSO
@@ -148,7 +148,8 @@ PerformaTracker tracker_L, tracker_R;
 
 // ====================== 7. INTERRUPT SERVICE ROUTINES ====================
 void isrL() {
-  byte b = digitalRead(PIN_ENCB_L);
+  bool b = digitalRead(PIN_ENCB_L);
+  if (INVERT_ENC_L) b = !b;
   if (b == HIGH) {
     totalPulsa_L++;
     deltaPulsa_L++;
@@ -159,7 +160,8 @@ void isrL() {
 }
 
 void isrR() {
-  byte b = digitalRead(PIN_ENCB_R);
+  bool b = digitalRead(PIN_ENCB_R);
+  if (INVERT_ENC_R) b = !b;
   if (b == HIGH) {
     totalPulsa_R--;
     deltaPulsa_R--;
@@ -392,8 +394,9 @@ void setup() {
   pinMode(PIN_ENCA_R, INPUT_PULLUP);
   pinMode(PIN_ENCB_R, INPUT_PULLUP);
 
-  attachInterrupt(digitalPinToInterrupt(PIN_ENCA_L), isrL, RISING);
-  attachInterrupt(digitalPinToInterrupt(PIN_ENCA_R), isrR, RISING);
+  // Menggunakan FALLING dan memanggil pembalik arah di ISR (Aman 100%)
+  attachInterrupt(digitalPinToInterrupt(PIN_ENCA_L), isrL, FALLING);
+  attachInterrupt(digitalPinToInterrupt(PIN_ENCA_R), isrR, FALLING);
 
   driveMotors(0, 0);
 

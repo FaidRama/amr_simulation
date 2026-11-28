@@ -1,0 +1,1 @@
+timestamp,elapsed_s,subject,height_cm,true_distance_m,ratio_h,ratio_active,est_distance_m,abs_error_m,rel_error_pct,expected_zone,pred_zone,in_corridor,confidence

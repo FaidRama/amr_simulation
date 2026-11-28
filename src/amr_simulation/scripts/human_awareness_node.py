@@ -35,6 +35,7 @@ try:
     from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
     from std_msgs.msg import String
     from sensor_msgs.msg import CompressedImage, Image
+    from nav_msgs.msg import Odometry
     HAS_ROS2 = True
 except ImportError:
     HAS_ROS2 = False
@@ -54,6 +55,7 @@ from fsm import (
     Direction,
     Zone,
     State,
+    _SEVERITY,
 )
 
 
@@ -594,6 +596,15 @@ def main():
         default="/camera/image_annotated/compressed",
         help="Topik output frame ter-anotasi (CompressedImage)"
     )
+    parser.add_argument(
+        "--odom-topic",
+        default="/odom",
+        help="Topik Odometry robot untuk kompensasi ego-motion saat klasifikasi kecepatan manusia"
+    )
+    parser.add_argument(
+        "--no-ego-comp", action="store_true", default=False,
+        help="Nonaktifkan kompensasi ego-motion dari /odom (mis. untuk uji pembanding)"
+    )
 
     args, _ = parser.parse_known_args()
 
@@ -643,10 +654,34 @@ def main():
 
     latest = {"data": None, "seq": 0}
     frame_lock = threading.Lock()
+    odom_state = {"v": 0.0, "ts": 0.0}
+    odom_lock = threading.Lock()
     executor = None
     spin_thread = None
     camera_sub = None
+    odom_sub = None
     cap = None
+
+    if ros_node is not None and not args.no_ego_comp:
+        def odom_callback(msg):
+            v_raw = float(msg.twist.twist.linear.x)
+            # Tolak spike jitter timestamp encoder (> 1.0 m/s tidak realistis untuk AMR ini)
+            if not np.isfinite(v_raw) or abs(v_raw) > 1.0:
+                return
+            now_o = time.time()
+            with odom_lock:
+                if odom_state["ts"] > 0.0 and (now_o - odom_state["ts"]) < 0.5:
+                    odom_state["v"] = 0.3 * v_raw + 0.7 * odom_state["v"]
+                else:
+                    odom_state["v"] = v_raw
+                odom_state["ts"] = now_o
+
+        odom_sub = ros_node.create_subscription(
+            Odometry,
+            args.odom_topic,
+            odom_callback,
+            10
+        )
 
     if use_ros_camera:
         # Latest-frame QoS: hindari antrean gambar lama
@@ -677,7 +712,8 @@ def main():
             f"Menunggu kamera pada topik: {args.image_topic}"
         )
 
-        # Spin ROS di thread sendiri supaya callback kamera tidak
+    if ros_node is not None and (use_ros_camera or odom_sub is not None):
+        # Spin ROS di thread sendiri supaya callback kamera & /odom tidak
         # tertahan oleh inferensi YOLO di loop utama.
         executor = SingleThreadedExecutor()
         executor.add_node(ros_node)
@@ -686,7 +722,7 @@ def main():
         )
         spin_thread.start()
 
-    else:
+    if not use_ros_camera:
         source = (
             int(args.source)
             if args.source.isdigit()
@@ -798,6 +834,8 @@ def main():
     miss_count = 0
     fps_ema = None
     last_feat = None
+    last_target_tid = None
+    track_dist_ema = {}  # track_id -> {'ema': float, 'ts': float}
     last_seq = -1
     t_start = time.time()
     last_no_frame_log = 0.0
@@ -878,13 +916,29 @@ def main():
                 time.perf_counter() - t0
             ) * 1000.0
 
-            # 2. BOUNDING BOX FEATURES
+            # 2. BOUNDING BOX FEATURES, PER-TRACK SMOOTHING & ACTIVITY CLASSIFICATION
             persons = extract_persons(
                 result, width, height
             )
             now_ts = time.time()
             person_tracker.assign_ids(persons, now_ts)
 
+            # Baca kecepatan linier robot (/odom) untuk kompensasi ego-motion
+            with odom_lock:
+                if (
+                    not args.no_ego_comp
+                    and odom_state["ts"] > 0.0
+                    and (now_ts - odom_state["ts"]) <= 0.5
+                ):
+                    robot_v = odom_state["v"]
+                else:
+                    robot_v = 0.0
+
+            corridor_half = (width * args.corridor_width) / 2.0
+            corridor_x1 = int((width / 2.0) - corridor_half)
+            corridor_x2 = int((width / 2.0) + corridor_half)
+
+            corridor_persons = []
             for person in persons:
                 person["feat"] = pick_feature(
                     person, args.feature
@@ -896,24 +950,26 @@ def main():
                     else person["ratio_w"]
                 )
 
-                person["dist"], person["in_range"] = (
+                raw_dist, person["in_range"] = (
                     estimators[person["feat"]].estimate(
                         person["r"]
                     )
                 )
 
-            # 3. CENTRAL CORRIDOR + TARGET SELECTION
-            # Koridor tengah menjadi proxy area lintasan AMR.
-            # Manusia dianggap berada di koridor jika minimal 60%
-            # lebar bounding box-nya berada di dalam koridor.
+                # EMA smoothing jarak per-individu (track_id) agar riwayat kecepatan tiap orang halus
+                tid = person["track_id"]
+                prev_tr = track_dist_ema.get(tid)
+                if prev_tr is None:
+                    smoothed_d = raw_dist
+                else:
+                    smoothed_d = (
+                        args.smooth * raw_dist
+                        + (1.0 - args.smooth) * prev_tr["ema"]
+                    )
+                track_dist_ema[tid] = {"ema": smoothed_d, "ts": now_ts}
+                person["dist"] = smoothed_d
 
-            corridor_half = (width * args.corridor_width) / 2.0
-            corridor_x1 = int((width / 2.0) - corridor_half)
-            corridor_x2 = int((width / 2.0) + corridor_half)
-
-            corridor_persons = []
-            for person in persons:
-                # Hitung titik tengah horizontal tubuh manusia
+                # Hitung titik tengah horizontal tubuh manusia untuk filter koridor
                 person_center_x = (person["x1"] + person["x2"]) / 2.0
 
                 # Orang dianggap di koridor jika TITIK TENGAHNYA berada di dalam rentang koridor
@@ -923,42 +979,94 @@ def main():
                     (person["x1"] <= corridor_x1 and person["x2"] >= corridor_x2)
                 )
 
+                # Klasifikasikan aktivitas & arah gerak untuk SETIAP bounding box manusia
+                # dengan proteksi cut_h (anti false-positive SITTING saat sangat dekat)
+                # serta kompensasi ego-motion robot (/odom).
+                p_act, p_dir, p_spd = activity_classifier.classify(
+                    keypoints=person.get("keypoints"),
+                    bbox_w=person["w"],
+                    bbox_h=person["h"],
+                    center_x=person_center_x,
+                    distance=person["dist"],
+                    timestamp=now_ts,
+                    frame_w=float(width),
+                    track_id=tid,
+                    cut_h=person["cut_h"],
+                    robot_linear_v=robot_v,
+                )
+                person["activity"] = p_act
+                person["direction"] = p_dir
+                person["speed_m_s"] = p_spd
+
                 if person["in_corridor"]:
                     corridor_persons.append(person)
 
-            # Pilih target terdekat hanya dari manusia yang
-            # memenuhi syarat koridor.
-            target = None
+            # Bersihkan riwayat track yang sudah tidak terlihat > 1.5s
+            active_tids = [person["track_id"] for person in persons]
+            active_tid_set = set(active_tids)
+            activity_classifier.prune_inactive(active_tids, now_ts)
+            for stale_tid in [
+                tid for tid, rec in track_dist_ema.items()
+                if tid not in active_tid_set and (now_ts - rec["ts"]) > 1.5
+            ]:
+                del track_dist_ema[stale_tid]
 
-            if corridor_persons:
+            # 3. CENTRAL CORRIDOR + RISK-PRIORITIZED TARGET SELECTION
+            # Evaluasi tingkat risiko FSM tiap manusia di koridor agar manusia yang DUDUK
+            # di depan tidak menutupi manusia BERDIRI/BERJALAN di belakangnya dalam koridor.
+            def _bbox_size_metric(p):
                 if args.feature == "height":
-                    target = max(
-                        corridor_persons,
-                        key=lambda p: p["h"]
-                    )
+                    return p["h"]
+                if args.feature == "width":
+                    return p["w"]
+                return p["w"] * p["h"]
 
-                elif args.feature == "width":
-                    target = max(
-                        corridor_persons,
-                        key=lambda p: p["w"]
-                    )
+            def _candidate_zone(p):
+                if args.feature == "auto" and p["cut_w"] and p["cut_h"]:
+                    return Zone.NEAR
+                r_val = p["r"]
+                if last_target_tid is not None and p["track_id"] == last_target_tid:
+                    if classifier.current_zone == Zone.NEAR and r_val >= args.t_near_exit:
+                        return Zone.NEAR
+                    if classifier.current_zone == Zone.MEDIUM and r_val >= args.t_med_exit and r_val < args.t_near_enter:
+                        return Zone.MEDIUM
+                if r_val >= args.t_near_enter:
+                    return Zone.NEAR
+                if r_val >= args.t_med_enter:
+                    return Zone.MEDIUM
+                return Zone.FAR
 
-                else:
-                    target = max(
-                        corridor_persons,
-                        key=lambda p: p["w"] * p["h"]
+            target = None
+            if corridor_persons:
+                def _risk_sort_key(p):
+                    c_zone = _candidate_zone(p)
+                    c_state = fsm.evaluate_activity_state(
+                        zone=c_zone,
+                        activity=p["activity"],
+                        in_corridor=True,
+                        distance=p["dist"],
+                        direction=p["direction"],
                     )
+                    return (_SEVERITY[c_state], _bbox_size_metric(p))
 
-            # 4. PROXIMITY AND DISTANCE SMOOTHING
+                target = max(corridor_persons, key=_risk_sort_key)
+
+            # 4. PROXIMITY CLASSIFICATION (WITH HYSTERESIS & MISS TOLERANCE) & FSM
             force_near = False
 
             if target is None:
                 miss_count += 1
+                # Gunakan classifier.update(None) agar miss_tolerance=3 & hysteresis tidak langsung
+                # ter-reset pada 1 frame flicker deteksi YOLO.
+                zone = classifier.update(None, force_near=False)
 
                 if miss_count >= 15:
                     est_h.reset()
                     est_w.reset()
+                    track_dist_ema.clear()
+                    activity_classifier.reset()
                     last_feat = None
+                    last_target_tid = None
 
                 active_ratio = None
                 dist_smooth = None
@@ -967,6 +1075,7 @@ def main():
                 miss_count = 0
                 feature = target["feat"]
                 active_ratio = target["r"]
+                dist_smooth = target["dist"]
 
                 if (
                     args.feature == "auto"
@@ -975,51 +1084,20 @@ def main():
                 ):
                     force_near = True
 
-                if (
-                    last_feat is not None
-                    and feature != last_feat
-                    and estimators[last_feat]._ema is not None
-                ):
-                    estimators[feature]._ema = (
-                        estimators[last_feat]._ema
-                    )
+                # Jika target berganti individu lain, reset hysteresis zona agar individu baru
+                # tidak mewarisi zona lama dari individu sebelumnya.
+                if last_target_tid is not None and target["track_id"] != last_target_tid:
+                    classifier.reset()
 
                 last_feat = feature
+                last_target_tid = target["track_id"]
 
-                dist_smooth = estimators[feature].smooth(
-                    target["dist"]
-                )
-
-                target["dist"] = dist_smooth
-
-            # 5. PROXIMITY CLASSIFICATION, ACTIVITY RECOGNITION & FSM
-            # Evaluasi zona jarak murni berdasarkan target di koridor lintasan robot:
-            # Orang di luar koridor (seperti teman duduk di kursi samping) tidak boleh mengotori zona target koridor.
-            if target is not None:
                 zone = classifier.update(
                     active_ratio,
                     force_near=force_near
                 )
-            else:
-                classifier.reset()
-                zone = Zone.NONE
 
-            # Klasifikasikan aktivitas & arah gerak untuk SETIAP bounding box manusia
             for person in persons:
-                person_cx = (person["x1"] + person["x2"]) / 2.0
-                p_act, p_dir, p_spd = activity_classifier.classify(
-                    keypoints=person.get("keypoints"),
-                    bbox_w=person["w"],
-                    bbox_h=person["h"],
-                    center_x=person_cx,
-                    distance=person["dist"],
-                    timestamp=now_ts,
-                    frame_w=float(width),
-                    track_id=person["track_id"],
-                )
-                person["activity"] = p_act
-                person["direction"] = p_dir
-                person["speed_m_s"] = p_spd
                 person["zone"] = (
                     zone.value
                     if (target is not None and person is target)
@@ -1028,11 +1106,6 @@ def main():
                         else (Zone.MEDIUM.value if person["r"] >= args.t_med_enter else Zone.FAR.value)
                     )
                 )
-
-            activity_classifier.prune_inactive(
-                [person["track_id"] for person in persons],
-                now_ts,
-            )
 
             activity = Activity.NONE
             direction = Direction.UNKNOWN
@@ -1051,7 +1124,7 @@ def main():
                 )
             elif persons:
                 # Ada orang di luar koridor: ambil postur orang terbesar untuk informasi,
-                # namun in_corridor=False sehingga FSM mempertahankan NORMAL (kecuali NEAR darurat).
+                # namun in_corridor=False sehingga FSM bertransisi menuju NORMAL (dengan debounce).
                 outside_p = max(persons, key=lambda p: p["w"] * p["h"])
                 activity = outside_p["activity"]
                 direction = outside_p["direction"]
@@ -1064,7 +1137,8 @@ def main():
                     direction=direction,
                 )
             else:
-                activity_classifier.reset()
+                # Tidak langsung mereset activity_classifier pada 1 frame hilang;
+                # pembersihan dilakukan bertahap via prune_inactive (>1.5s) / miss_count >= 15.
                 state = fsm.update(
                     zone=zone,
                     activity=Activity.NONE,
@@ -1133,6 +1207,7 @@ def main():
                 "activity": activity.value,
                 "direction": direction.value,
                 "speed_m_s": speed_m_s,
+                "robot_v_odom": round(robot_v, 3),
                 "response": STATE_RESPONSE.get(state, ""),
                 "persons": len(persons),
                 "corridor_persons": len(corridor_persons),
