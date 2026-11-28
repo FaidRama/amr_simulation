@@ -30,9 +30,9 @@ const bool INVERT_ENC_L   = true;
 const bool INVERT_ENC_R   = true;
 
 // ====================== 3. PARAMETER FISIK ROBOT =========================
-const float WHEEL_DIAMETER = 0.125; // meter (12.5 cm)
+const float WHEEL_DIAMETER = 0.125; // meter (5 inci = 0.125 meter)
 const float WHEEL_BASE_B   = 0.458; // meter (45.8 cm)
-const float CPR_WHEEL      = 356.3; // Ticks per revolusi PG36 (7 PPR * 50.9 gearbox)
+const float CPR_WHEEL      = 356.3; // Ticks per revolusi PG36 (7 PPR * 50.1 gearbox)
 
 // ====================== 4. GAIN KENDALI PI ===============================
 // Parameter PI-PSO
@@ -148,8 +148,7 @@ PerformaTracker tracker_L, tracker_R;
 
 // ====================== 7. INTERRUPT SERVICE ROUTINES ====================
 void isrL() {
-  bool b = digitalRead(PIN_ENCB_L);
-  if (INVERT_ENC_L) b = !b;
+  byte b = digitalRead(PIN_ENCB_L);
   if (b == HIGH) {
     totalPulsa_L++;
     deltaPulsa_L++;
@@ -160,8 +159,7 @@ void isrL() {
 }
 
 void isrR() {
-  bool b = digitalRead(PIN_ENCB_R);
-  if (INVERT_ENC_R) b = !b;
+  byte b = digitalRead(PIN_ENCB_R);
   if (b == HIGH) {
     totalPulsa_R--;
     deltaPulsa_R--;
@@ -256,10 +254,16 @@ void cetakRangkumanStep() {
 
 // ====================== 10. PROTOKOL PARSER SERIAL =======================
 void prosesPerintahSerial(char *cmd) {
-  // A. Perintah Kecepatan Linier & Anguler: "CMD,v_lin,v_ang"
-  if (strncmp(cmd, "CMD,", 4) == 0) {
-    float v_lin = 0.0, v_ang = 0.0;
-    if (sscanf(cmd + 4, "%f,%f", &v_lin, &v_ang) == 2) {
+  // A. Perintah Kecepatan Linier & Anguler:
+  //    - "V,v_lin,v_ang"   (ROS 2 arduino_bridge.py / Teleop / Nav2)
+  //    - "CMD,v_lin,v_ang" (skrip uji mandiri)
+  //    Menggunakan strchr + atof karena sscanf("%f") nonaktif secara default di AVR Arduino Uno.
+  if (cmd[0] == 'V' || cmd[0] == 'v' || strncmp(cmd, "CMD,", 4) == 0) {
+    char *comma1 = strchr(cmd, ',');
+    if (comma1 != NULL) {
+      float v_lin = atof(comma1 + 1);
+      char *comma2 = strchr(comma1 + 1, ',');
+      float v_ang = (comma2 != NULL) ? atof(comma2 + 1) : 0.0;
       lastSerialCmdTime = millis();
       modePengujian = 99;
       hitungInverseKinematics(v_lin, v_ang);
@@ -394,9 +398,8 @@ void setup() {
   pinMode(PIN_ENCA_R, INPUT_PULLUP);
   pinMode(PIN_ENCB_R, INPUT_PULLUP);
 
-  // Menggunakan FALLING dan memanggil pembalik arah di ISR (Aman 100%)
-  attachInterrupt(digitalPinToInterrupt(PIN_ENCA_L), isrL, FALLING);
-  attachInterrupt(digitalPinToInterrupt(PIN_ENCA_R), isrR, FALLING);
+  attachInterrupt(digitalPinToInterrupt(PIN_ENCA_L), isrL, RISING);
+  attachInterrupt(digitalPinToInterrupt(PIN_ENCA_R), isrR, RISING);
 
   driveMotors(0, 0);
 
