@@ -243,10 +243,17 @@ class HumanActivityClassifier:
         dot = max(-1.0, min(1.0, dot))
         return math.degrees(math.acos(dot))
 
-    def detect_sitting(self, keypoints, bbox_w: float, bbox_h: float) -> bool:
+    def detect_sitting(
+        self,
+        keypoints,
+        bbox_w: float,
+        bbox_h: float,
+        cut_h: bool = False,
+    ) -> bool:
         """
         Deteksi postur duduk dari sudut sendi lutut (hip-knee-ankle),
-        orientasi paha (hip_y vs knee_y), atau fallback rasio aspek H/W.
+        orientasi paha (hip_y vs knee_y), rasio torso-kaki (tampak belakang),
+        atau fallback rasio aspek H/W (hanya bila bbox tidak terpotong vertikal).
         """
         if keypoints is not None and len(keypoints) >= 17:
             l_hip, l_knee, l_ankle = keypoints[11], keypoints[13], keypoints[15]
@@ -283,6 +290,12 @@ class HumanActivityClassifier:
                 if leg_h / torso_h < 1.35:
                     return True
 
+        # Fail-safe keselamatan: bila bounding box terpotong tepi atas/bawah frame (cut_h=True),
+        # misal manusia BERDIRI sangat dekat ke kamera sehingga kakinya tidak masuk frame,
+        # JANGAN gunakan fallback rasio aspek H/W agar tidak salah terklasifikasi sebagai SITTING -> NORMAL.
+        if cut_h:
+            return False
+
         # Fallback rasio aspek: orang duduk di kursi memiliki rasio H/W < 1.50
         # (orang dewasa berdiri tegak di koridor memiliki rasio H/W > 2.0)
         aspect_ratio = bbox_h / max(bbox_w, 1.0)
@@ -298,8 +311,14 @@ class HumanActivityClassifier:
         timestamp: float,
         frame_w: float = 640.0,
         track_id: Optional[int] = None,
+        cut_h: bool = False,
+        robot_linear_v: float = 0.0,
     ):
-        """Mengembalikan (Activity, Direction, speed_m_s) untuk target atau track_id tertentu."""
+        """
+        Mengembalikan (Activity, Direction, speed_m_s) untuk target atau track_id tertentu.
+        `robot_linear_v` (m/s, positif = robot maju mendekati target di depan kamera) dipakai
+        untuk mengompensasi ego-motion robot: v_human_radial = dD/dt + v_robot_avg.
+        """
         if distance is None:
             self.reset(track_id)
             return Activity.NONE, Direction.UNKNOWN, 0.0
@@ -310,11 +329,16 @@ class HumanActivityClassifier:
             hist = self.histories.setdefault(track_id, [])
             self.last_seen[track_id] = timestamp
 
-        hist.append({'t': timestamp, 'dist': distance, 'cx': center_x})
+        hist.append({
+            't': timestamp,
+            'dist': distance,
+            'cx': center_x,
+            'robot_v': float(robot_linear_v),
+        })
         if len(hist) > self.history_size:
             hist.pop(0)
 
-        if self.detect_sitting(keypoints, bbox_w, bbox_h):
+        if self.detect_sitting(keypoints, bbox_w, bbox_h, cut_h=cut_h):
             return Activity.SITTING, Direction.STATIONARY, 0.0
 
         if len(hist) < 3:
@@ -325,7 +349,10 @@ class HumanActivityClassifier:
             return Activity.STANDING, Direction.STATIONARY, 0.0
 
         dD = hist[-1]['dist'] - hist[0]['dist']
-        radial_speed = dD / dt
+        rel_radial_speed = dD / dt
+        avg_robot_v = sum(item.get('robot_v', 0.0) for item in hist) / len(hist)
+        radial_speed = rel_radial_speed + avg_robot_v
+
         dcx_ratio = (hist[-1]['cx'] - hist[0]['cx']) / max(frame_w, 1.0)
         lateral_speed = (dcx_ratio * distance) / dt
         total_speed = math.hypot(radial_speed, lateral_speed)

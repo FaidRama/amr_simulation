@@ -1,0 +1,4 @@
+timestamp,mode,label,status_misi,near_miss,d_min_m,travel_time_s,path_length_m,path_smoothness_rad,max_decel_m_s2,csv_file
+20261127_184416,ADAPTIF,uji_1,SUKSES,0,0.426,31.4,7.152,2.117,3.908,eval_adaptif_manusia_uji_1_20261127_184416.csv
+20261127_184629,ADAPTIF,uji_2,SUKSES,0,0.252,43.92,7.386,4.535,4.852,eval_adaptif_manusia_uji_2_20261127_184629.csv
+20261127_184738,ADAPTIF,uji_3,SUKSES,0,0.308,46.34,6.753,7.325,4.534,eval_adaptif_manusia_uji_3_20261127_184738.csv
