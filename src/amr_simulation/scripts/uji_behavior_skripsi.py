@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 =============================================================================
-SUITE PENGUJIAN TERPADU HUMAN-AWARE BEHAVIOR AMR (SKRIPSI — UJI 1 s/d UJI 8)
+=SUITE PENGUJIAN TERPADU HUMAN-AWARE BEHAVIOR AMR (SKRIPSI — UJI 1 s/d UJI 8)
 =============================================================================
 Selaras dengan TEMPLATE_RANGKUMAN_PENGUJIAN_HUMAN_AWARE.md:
   [1] Uji 1 : Kalibrasi & Akurasi Estimasi Jarak Monokuler (+ Variasi Tinggi)
