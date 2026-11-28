@@ -1,0 +1,3 @@
+timestamp,elapsed_s,scenario,expected_in_corridor,expected_state,persons_total,corridor_persons,target_in_corridor,distance_m,fsm_state,human_status
+1795848201.893,0.0,luar_kiri_medium,False,NORMAL,0,0,False,,NORMAL,NO_HUMAN
+1795848201.994,0.101,luar_kiri_medium,False,NORMAL,0,0,False,,NORMAL,NO_HUMAN
